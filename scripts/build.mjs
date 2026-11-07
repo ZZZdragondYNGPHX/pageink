@@ -14,6 +14,7 @@ const common = { bundle: true, target: ['es2022'], logLevel: 'info', define: { '
 await esbuild.build({ ...common, plugins: [kernelPatch], entryPoints: ['src/main.tsx'], outfile: 'dist/main.js', format: 'cjs', external: ['obsidian', 'electron'], minify: true, sourcemap: 'external' });
 await esbuild.build({ ...common, entryPoints: ['src/export-worker.ts'], outfile: 'dist/assets/pdf-export.worker.mjs', format: 'esm', minify: true });
 await cp('manifest.json', 'dist/manifest.json');
+await cp('LICENSE', 'dist/LICENSE');
 let engineCss = await readFile('node_modules/@excalidraw/excalidraw/dist/prod/index.css', 'utf8');
 // Host inserts CSS into a style element, so relative font URLs resolve against app://obsidian.md.
 for (const match of [...engineCss.matchAll(/url\("\.\/fonts\/([^\"]+)"\)/g)]) {
