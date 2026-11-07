@@ -124,15 +124,16 @@ function releaseInkElementCanvas(element) {
   elementWithCanvasCache.delete(element);
 }
 `);
-      if (contents.split('window.EXCALIDRAW_ASSET_PATH').length !== 5) throw Error('Upstream isolated asset path patch mismatch');
-      contents = contents.replaceAll('window.EXCALIDRAW_ASSET_PATH', 'inkAssetBase');
-      const remoteFontFallback = '    urls.push(new URL(assetUrl, _ExcalidrawFontFace.ASSETS_FALLBACK_URL));';
-      if (contents.split(remoteFontFallback).length !== 2) throw Error('Upstream offline font fallback patch mismatch');
-      contents = contents.replace(remoteFontFallback, '    if (!urls.length) throw new Error("Offline font asset base is not configured");');
+      const fontAssetStart = '    const assetUrl = uri.replace(/^\\/+/, "");';
+      const fontAssetEnd = '    return urls;';
+      if (contents.split(fontAssetStart).length !== 2 || contents.split('window.EXCALIDRAW_ASSET_PATH').length !== 5) throw Error('Upstream bundled font path patch mismatch');
+      const assetStart = contents.indexOf(fontAssetStart), assetEnd = contents.indexOf(fontAssetEnd, assetStart);
+      if (assetEnd < assetStart) throw Error('Upstream bundled font return patch mismatch');
+      contents = contents.slice(0, assetStart) + '    return [inkAssetUrl(uri)];' + contents.slice(assetEnd + fontAssetEnd.length);
       const fontFaceCreation = 'this.fontFace = new FontFace(family, sources, {\n      display: "swap",\n      style: "normal",\n      weight: "400",\n      ...descriptors\n    });';
       if (contents.split(fontFaceCreation).length !== 2) throw Error('Upstream owned font lifecycle patch mismatch');
       contents = contents.replace(fontFaceCreation, fontFaceCreation + '\n    trackInkFontFace(this.fontFace);');
-      contents = `import { inkAssetBase, trackInkFontFace } from ${JSON.stringify(resolve('src/kernel-assets.ts'))};\n` + contents;
+      contents = `import { inkAssetUrl, trackInkFontFace } from ${JSON.stringify(resolve('src/kernel-assets.ts'))};\n` + contents;
       contents = `import { resetInkScene, updateInkElement } from ${JSON.stringify(resolve('src/spatial.ts'))};\n` + contents;
       contents = `import { resetInkJournal, recordInkMutation, inkSnapshotChanges } from ${JSON.stringify(resolve('src/kernel-journal.ts'))};\n` + contents;
       const from = 'var getFontFamilyString = ({\n  fontFamily\n}) => {';

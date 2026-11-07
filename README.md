@@ -1,8 +1,10 @@
-# Drawing · 本地开发版
+# 页墨手记 PageInk
 
-Obsidian 内的有边记、无边记、PDF 批注和独立草稿。采用 Excalidraw 0.18.1 编辑内核与自有文档层。工作名称为 `Drawing (Local Development)`，插件 ID 为 `drawing-local-dev`；没有公开发布，也没有确定正式名称。开发目录 `Obsidian-Ink` 与已有的 Ink 插件无关联。
+**PDF 批注、分页笔记与无限画布手写。** 为教材阅读、笔记和草稿演算提供有边记、无边记与独立草稿窗。插件 ID 为 `pageink`，采用 Excalidraw 0.18.1 编辑内核与自有文档层。与已有的 Ink 插件无关联。
 
-**当前仍在完成首版验收。** 已实施的功能不等于全部通过；完整验证证据保留在本地交付物中。iPad/Pencil 与实际同步服务尚未验证，不能把 Windows 鼠标或合成触控事件当作真机笔感结果。
+Handwrite on PDFs, paginated notebooks and an infinite canvas, with a separate scratchpad. Save editable notes locally and export annotated PDFs or complete document archives. The current interface is in Simplified Chinese.
+
+**当前仍在完成首版验收。** 已实施的功能不等于全部通过；当前发布构建的检查及限制见 [发布验证](docs/release-validation.md)。iPad/Pencil 与实际同步服务尚未验证，不能把 Windows 鼠标或合成触控事件当作真机笔感结果。
 
 ## 构建与安装
 
@@ -16,27 +18,27 @@ npm run build
 npm run package
 ```
 
-- `dist/`：完整插件目录，含主脚本、清单、样式、`assets/` 和第三方声明。
-- `artifacts/drawing-local-dev-0.1.0.zip`：可安装包；解压后顶层为 `drawing-local-dev/`。
-- `artifacts/drawing-local-dev-0.1.0-source.zip`：源码、锁文件、测试、说明及必需字体。
+- `dist/main.js`、`dist/manifest.json`、`dist/styles.css`：社区安装使用的三个文件。字体、PDF Worker、解码资源及完整第三方许可文本均已内嵌。其余构建输出用于调试和核验。
+- `artifacts/pageink-0.1.1.zip`：可安装包；解压后顶层为 `pageink/`。
+- `artifacts/pageink-0.1.1-source.zip`：源码、锁文件、测试、说明及必需字体。
 - `artifacts/SHA256SUMS.txt`：交付 ZIP 的 SHA-256。
 - `npm run dev`：监听源码并重建 `dist`，不会自动修改笔记库。
 
 先在独立测试库安装：
 
-1. 在该库下建立 `.obsidian/plugins/drawing-local-dev/`。
-2. 把安装包中 `drawing-local-dev/` 的内容放进去。不要只复制三个主文件；`assets/` 包含 PDF Worker、字体和离线解码资源。
-3. 重启该库的 Obsidian，在“设置 → 第三方插件”启用 `Drawing (Local Development)`。
-4. 通过命令面板执行“新建绘图笔记”。
+1. 在该库下建立 `.obsidian/plugins/pageink/`。
+2. 从 [GitHub Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases) 下载 `pageink-0.1.1.zip`，将其中 `pageink/` 的内容放进去；也可以单独放入该版本的 `main.js`、`manifest.json`、`styles.css`。
+3. 重启该库的 Obsidian，在“设置 → 第三方插件”启用 「页墨手记 PageInk」。
+4. 通过命令面板执行“新建手写笔记”。
 
-声明最低 Obsidian 版本为 1.8.0，真实桌面验证使用 Windows Obsidian 1.12.7；未据此声称所有旧版本均已验证。
+此版最低 Obsidian 版本为 1.12.7，与实际验证宿主一致；更旧版本尚未验证。社区目录收录后，可在“设置 → 第三方插件 → 浏览”搜索 `PageInk`。GitHub 发布不等于已被目录收录。
 
-iPad 使用相同目录结构；插件未声明仅桌面可用。需要把完整目录放入 iPad 对应库的 `.obsidian/plugins/`。若文件工具不显示隐藏目录，可从 Windows 端准备，再通过已使用且支持该目录的搬运/同步方式传入。具体同步服务、iOS 版本和真机表现仍需实测，不假定同步工具默认同步插件目录。
+iPad 使用相同目录结构；插件未声明仅桌面可用。需要把同版本三个主文件放入 iPad 对应库的 `.obsidian/plugins/pageink/`。若文件工具不显示隐藏目录，可从 Windows 端准备，再通过已使用且支持该目录的搬运/同步方式传入。具体同步服务、iOS 版本和真机表现仍需实测，不假定同步工具默认同步插件目录。
 
 ## 基本使用
 
 - **有边记**：默认连续阅读，底栏可切换单页。左侧导航可跳页、管理自建页、调整四边留白。
-- **无边记**：新建时选择无边记，通过导航工具、滚轮或触控手势移动画布；聚焦画布后 `Shift+1` 全览。密集内容显示“正在补绘笔迹”时可继续导航，完整补绘耗时见验证记录。
+- **无边记**：新建时选择无边记，通过导航工具、滚轮或触控手势移动画布；聚焦画布后 `Shift+1` 全览。密集内容显示“正在补绘笔迹”时可继续导航，完整补绘耗时和构建边界见发布验证。
 - **PDF**：库内 PDF 文件菜单的“创建独立批注笔记”直接引用原文件。新建窗口导入库外 PDF 时复制入库，库外原件保持不动。
 - **书写与编辑**：顶部直接提供笔、荧光笔、局部擦、整笔擦、套索和选择工具；“插入”菜单提供文字、图片、形状和箭头。颜色、粗细和等宽/压感位于独立样式行；粗细档位遵循内核笔型比例，不宣称是屏幕物理像素。
 - **输入分工**：设计为 Pencil/笔编辑、手指导航。桌面可用鼠标；滚轮移动，内核缩放快捷键继续可用。合成事件不替代实际掌触和 Pencil 验证。
@@ -92,21 +94,23 @@ PDF 移动/改名会维护关联；内容改变或原件缺失时提示处理，
 
 ## 升级与卸载
 
-升级前完整打包或备份整个库，确认保存状态。关闭绘图视图，禁用插件，将新安装包完整覆盖插件目录，重启并启用；不要混用不同构建的脚本和离线资源。
+升级前完整打包或备份整个库，确认保存状态。关闭绘图视图，禁用插件，将新安装包完整覆盖插件目录，重启并启用；不要混用不同版本的三个文件。
 
-卸载只删除 `.obsidian/plugins/drawing-local-dev/`。入口、资源、PDF 和导出不会自动删除。没有插件时 `.inknote` 不能继续编辑，重新安装后可打开；脱离插件阅读请先导出 PDF，以后恢复编辑请同时保存 `.inkpack`。
+从旧开发版升级：先保存并关闭绘图视图、禁用 `Drawing (Local Development)`，再启用 PageInk。不要同时启用两个插件。保留旧插件文件以便回退。`.inknote`、`Drawing Resources/`、`drawing-region` 嵌入与 `obsidian://drawing-local` 引用继续兼容，不自动改写或搬移已有笔记。
+
+卸载只删除 `.obsidian/plugins/pageink/`。入口、资源、PDF 和导出不会自动删除。没有插件时 `.inknote` 不能继续编辑，重新安装后可打开；脱离插件阅读请先导出 PDF，以后恢复编辑请同时保存 `.inkpack`。
+
+## 离线与隐私
+
+插件无账户要求、无遥测，不自行下载或更新程序及依赖。所需字体、Worker、CMap 和 WASM 都包含在 `main.js` 中，首次启用也可离线。仅在用户主动选择库外 PDF、图片或打包文件时读取所选文件，并复制所需内容入库；不扫描库外目录。
+
+此离线分发方式使 `main.js` 约为 46 MB。它会增加安装下载量和启用时的解析、解压成本；大文档的内存边界及尚未验证的设备见发布验证。
 
 ## 开发资料
 
-- [内核修改说明](docs/kernel-patches.md)
+本项目自有代码采用 [MIT 许可证](LICENSE)，用户已确认公开源码。第三方代码和字体保留各自原许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。正式名称为「页墨手记 PageInk」。GitHub 发布与社区目录收录是不同步骤。
+
+- [内核修改](docs/kernel-patches.md)、[发布验证与限制](docs/release-validation.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
 
-测试只操作生成的 `.test-vault`、`.package-vault`、`.soak-vault` 和 `.common-soak-vault`。上游改动集中在 `scripts/kernel-patch.mjs`，构建校验补丁匹配；版本升级不能绕过检查。
-
-## 仓库状态
-
-此仓库用于私有上传和发布准备，尚未提交社区插件市场。当前安装包必须完整解压安装；市场的三个文件安装方式尚未适配。用户已确认公开源码；项目自有代码采用 MIT 许可证，正式名称待确定。第三方代码与字体继续遵守各自原有条款。历史规划、交接、测试库及机器相关测试证据保留在原工作区，未放入本仓库。
-
-## 许可证
-
-本项目自有代码采用 [MIT 许可证](LICENSE)。第三方代码、字体及资源仍遵守各自原许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+宿主验证只操作生成的隔离测试库。上游改动集中在 `scripts/kernel-patch.mjs`，构建校验补丁匹配；版本升级不能绕过检查。

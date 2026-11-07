@@ -1,9 +1,9 @@
 {
-  "id": "drawing-local-dev",
-  "name": "Drawing (Local Development)",
-  "version": "0.1.0",
-  "minAppVersion": "1.8.0",
-  "description": "Private drawing and PDF annotation workspace. Working title only.",
-  "author": "Local development",
+  "id": "pageink",
+  "name": "页墨手记 PageInk",
+  "version": "0.1.1",
+  "minAppVersion": "1.12.7",
+  "description": "Handwrite on PDFs, paginated notebooks and an infinite canvas, with a separate scratchpad.",
+  "author": "ZZZdragondYNGPHX",
   "isDesktopOnly": false
 }

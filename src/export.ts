@@ -3,6 +3,7 @@ import { Session } from './session';
 import { Element, pageRect, digest } from './model';
 import { bounds } from './geometry';
 import { vectorLayer } from './vector-export';
+import { assetBytes, assetUrl } from './assets';
 
 export async function png(session: Session, elements: readonly Element[]) {
   await session.loadFiles(elements);
@@ -13,7 +14,7 @@ export async function png(session: Session, elements: readonly Element[]) {
   return exportToBlob({ elements, files: { ...session.files }, mimeType: 'image/png', appState: { exportBackground: false }, exportPadding: padding, getDimensions: (w: number, h: number) => ({ width: w * 2, height: h * 2, scale: 2 }) });
 }
 export interface PdfExportOptions { selection?: readonly Element[]; paper?: 'original' | 'a4' | 'letter' }
-export async function readingPdf(session: Session, onProgress: (current: number, total: number) => void, signal?: AbortSignal, assetBase = '', options: PdfExportOptions = {}) {
+export async function readingPdf(session: Session, onProgress: (current: number, total: number) => void, signal?: AbortSignal, options: PdfExportOptions = {}) {
   signal?.throwIfAborted();
   if (session.manifest.mode === 'canvas' && !options.selection?.some(e => !e.isDeleted)) throw Error('无边记 PDF 请先选择要导出的对象。');
   let source: ArrayBuffer | undefined;
@@ -22,11 +23,7 @@ export async function readingPdf(session: Session, onProgress: (current: number,
     if (await digest(source) !== session.manifest.pdf.sha256) throw Error('源 PDF 已变化，不能导出为原教材批注。请重新关联同一原件。');
   }
   signal?.throwIfAborted();
-  // Vault resources use a different app:// origin. Fetch the self-contained local
-  // bundle and use a same-origin blob worker (also supported by PDF.js in this host).
-  const script = await fetch(assetBase + 'pdf-export.worker.mjs', { signal });
-  if (!script.ok) throw Error('离线 PDF 导出模块加载失败。');
-  const workerUrl = URL.createObjectURL(new Blob([await script.text()], { type: 'text/javascript' }));
+  const workerUrl = URL.createObjectURL(new Blob([assetBytes('pdf-export.worker.mjs')], { type: 'text/javascript' }));
   let worker: Worker;
   try { worker = new Worker(workerUrl, { type: 'module' }); } catch (error) { URL.revokeObjectURL(workerUrl); throw error; }
   let nextId = 0;
@@ -39,7 +36,7 @@ export async function readingPdf(session: Session, onProgress: (current: number,
   signal?.addEventListener('abort', abort, { once: true });
   const call = (kind: string, data?: unknown, transfer: Transferable[] = []) => new Promise<any>((resolve, reject) => { signal?.throwIfAborted(); const id = ++nextId; pending.set(id, { resolve, reject }); worker.postMessage({ id, kind, data }, transfer); });
   try {
-    await call('init', { source, assetBase }, source ? [source] : []);
+    await call('init', { source, fontUrl: assetUrl('fonts/NotoSansCJKsc-Regular.otf') }, source ? [source] : []);
     for (const [i, page] of session.manifest.pages.entries()) {
       signal?.throwIfAborted();
       const elements = (session.manifest.mode === 'canvas' ? options.selection! : await session.read(page.id)).filter(e => !e.isDeleted);

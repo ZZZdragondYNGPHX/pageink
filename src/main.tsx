@@ -10,7 +10,8 @@ import { pack, unpack, readingPdf, png } from './export';
 import type { PdfExportOptions } from './export';
 import { type EditorHandle, selectedContent } from './Editor';
 import { renderArea } from './preview';
-import { setInkAssetBase, clearInkFontFaces } from './kernel-assets';
+import { clearInkFontFaces } from './kernel-assets';
+import { assetUrl, clearAssetUrls } from './assets';
 const VIEW = 'drawing-local-view';
 async function progressTask<T>(app: Plugin['app'], title: string, task: (signal: AbortSignal, progress: (current: number, total: number) => void) => Promise<T>) {
   const controller = new AbortController(), modal = new Modal(app); modal.titleEl.setText(title);
@@ -44,7 +45,7 @@ class CreateModal extends Modal {
   constructor(private plugin: DrawingPlugin) { super(plugin.app); }
   onOpen() {
     this.modalEl.addClass('ink-host-modal', 'ink-create-modal');
-    this.titleEl.setText('新建绘图笔记'); let title = '新笔记';
+    this.titleEl.setText('新建手写笔记'); let title = '新笔记';
     new Setting(this.contentEl).setName('文档标题').addText(input => { input.inputEl.setAttribute('aria-label', '文档标题'); input.inputEl.autocomplete = 'off'; input.setValue(title).onChange(value => title = value); });
     for (const [mode, name] of [['pages', '有边记'], ['canvas', '无边记']] as const) {
       new Setting(this.contentEl).setName(name).setDesc(mode === 'pages' ? '按页书写，支持纸张模板与四边留白' : '自由延展，适合演算、草图与思维整理').addButton(button => button.setButtonText('创建').onClick(async () => {
@@ -74,7 +75,7 @@ class DrawingView extends FileView {
       const session = this.plugin.unsavedSessions.get(file.path) ?? new Session(await DocumentStore.open(this.plugin.io, file.path));
       let pdf: PdfService | undefined;
       if (session.manifest.pdf) {
-        try { pdf = await PdfService.open(this.plugin.io, session.manifest.pdf, this.plugin.assetBase); session.sourceIssue = ''; }
+        try { pdf = await PdfService.open(this.plugin.io, session.manifest.pdf); session.sourceIssue = ''; }
         catch (error) { session.sourceIssue = (error as Error).message; }
       }
       if (generation !== this.generation) { await pdf?.destroy(); return; }
@@ -117,7 +118,7 @@ class DrawingView extends FileView {
       bytes = await (await png(session, selected)).arrayBuffer(); ext = 'png';
     } else {
       const api = editor?.api, selection = api ? selectedContent(api) : undefined;
-      const data = await this.exportTask('导出 PDF', (signal, progress) => readingPdf(session, progress, signal, this.plugin.assetBase, { ...options, selection }));
+      const data = await this.exportTask('导出 PDF', (signal, progress) => readingPdf(session, progress, signal, { ...options, selection }));
       bytes = toArrayBuffer(data); ext = 'pdf';
     }
     await ensureDir(this.plugin.io, 'Drawing Exports');
@@ -147,16 +148,14 @@ export default class DrawingPlugin extends Plugin {
   io = new VaultIO(this);
   unsavedSessions = new Map<string, Session>();
   previewCache = new Map<string, HTMLCanvasElement>();
-  get assetBase() { return this.app.vault.adapter.getResourcePath(`${this.manifest.dir}/assets`).split('?')[0].replace(/\/$/, '') + '/'; }
   async onload() {
-    setInkAssetBase(this.assetBase);
-    this.register(clearInkFontFaces);
-    const face = new FontFace('Ink Notebook Sans', `url("${this.assetBase}fonts/NotoSansCJKsc-Regular.otf")`);
+    this.register(() => { clearInkFontFaces(); clearAssetUrls(); });
+    const face = new FontFace('Ink Notebook Sans', `url("${assetUrl('fonts/NotoSansCJKsc-Regular.otf')}")`);
     await face.load(); document.fonts.add(face); this.register(() => document.fonts.delete(face));
     this.registerView(VIEW, leaf => new DrawingView(leaf, this));
     this.registerExtensions(['inknote'], VIEW);
-    this.addRibbonIcon('pencil', '新建绘图笔记', () => new CreateModal(this).open());
-    this.addCommand({ id: 'new-drawing', name: '新建绘图笔记', callback: () => new CreateModal(this).open() });
+    this.addRibbonIcon('pencil', '新建手写笔记', () => new CreateModal(this).open());
+    this.addCommand({ id: 'new-drawing', name: '新建手写笔记', callback: () => new CreateModal(this).open() });
     this.addCommand({ id: 'relink-source', name: '重新关联原 PDF', callback: () => {
       const view = this.app.workspace.getActiveViewOfType(DrawingView), session = view?.session;
       if (!session?.manifest.pdf) { new Notice('请先打开 PDF 批注笔记。'); return; }
@@ -217,7 +216,7 @@ export default class DrawingPlugin extends Plugin {
           const key = store.manifest.id + '/' + store.manifest.revision + '/' + region.id;
           let cached = this.previewCache.get(key);
           if (!cached) {
-            const pdf = store.manifest.pdf ? await PdfService.open(this.io, store.manifest.pdf, this.assetBase) : undefined;
+            const pdf = store.manifest.pdf ? await PdfService.open(this.io, store.manifest.pdf) : undefined;
             try { cached = await renderArea(session, page, region, Math.min(2, 1200 / Math.max(region.width, region.height)), pdf, task.signal); }
             finally { await pdf?.destroy(); }
             task.signal.throwIfAborted(); this.previewCache.set(key, cached);
@@ -288,7 +287,7 @@ export default class DrawingPlugin extends Plugin {
     let path = file?.path;
     if (!path) { await ensureDir(this.io, `${manifest.resourceDir}/assets`); path = `${manifest.resourceDir}/assets/source.pdf`; await this.io.writeBinary(path, bytes); }
     manifest.pdf = { path, sha256: await digest(bytes), size: bytes.byteLength };
-    const pdf = await PdfService.fromBytes(bytes.slice(0), this.assetBase);
+    const pdf = await PdfService.fromBytes(bytes.slice(0));
     try {
       manifest.pages = [];
       for (let i = 1; i <= pdf.document.numPages; i++) { const p = await pdf.document.getPage(i), viewport = p.getViewport({ scale: 1 }); manifest.pages.push({ ...newPage(), pdfPage: i, width: viewport.width, height: viewport.height }); }

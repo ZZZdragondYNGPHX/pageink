@@ -2,19 +2,21 @@ import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { digest, Page, Rect } from './model';
 import { FileIO } from './storage';
+import { assetUrl, EmbeddedCMapReader, EmbeddedStandardFonts, EmbeddedWasm } from './assets';
 export class PdfService {
   document!: pdfjs.PDFDocumentProxy;
   private constructor() {}
-  static async open(io: FileIO, source: { path: string; sha256: string }, assetBase: string) {
+  static async open(io: FileIO, source: { path: string; sha256: string }) {
     const bytes = await io.readBinary(source.path);
     if (await digest(bytes) !== source.sha256) throw new Error('源 PDF 内容已变化。旧批注未自动迁移；请重新关联同一原件或为新版另建文档。');
-    return this.fromBytes(bytes, assetBase);
+    return this.fromBytes(bytes);
   }
-  static async fromBytes(bytes: ArrayBuffer, base: string) {
-    pdfjs.GlobalWorkerOptions.workerSrc = `${base}pdf.worker.min.mjs`;
+  static async fromBytes(bytes: ArrayBuffer) {
+    pdfjs.GlobalWorkerOptions.workerSrc = assetUrl('pdf.worker.min.mjs');
     const service = new PdfService();
-    service.document = await pdfjs.getDocument({ data: new Uint8Array(bytes), cMapUrl: `${base}cmaps/`, cMapPacked: true,
-      standardFontDataUrl: `${base}standard_fonts/`, wasmUrl: `${base}wasm/`, useSystemFonts: true }).promise;
+    service.document = await pdfjs.getDocument({ data: new Uint8Array(bytes), cMapPacked: true, useWorkerFetch: false,
+      CMapReaderFactory: EmbeddedCMapReader, StandardFontDataFactory: EmbeddedStandardFonts,
+      WasmFactory: EmbeddedWasm, useSystemFonts: true }).promise;
     return service;
   }
   async render(page: Page, canvas: HTMLCanvasElement, scale: number, rect?: Rect, signal?: AbortSignal) {

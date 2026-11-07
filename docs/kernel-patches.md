@@ -19,7 +19,7 @@
 | Canvas backing 尺寸 | 将 CSS 浮点宽高乘 DPR 后向下取整再比较，避免小数尺寸使画布每帧重置、缓存被清空。 |
 | 大画布全览 | `viewport.ts` 统一缩放下限；fit 低于 10% 时不按 0.1 步进取整。极大范围仍受浮点精度与渲染成本约束。 |
 | 真正局部擦 | `geometry.ts` 几何切割，内核一次更新替代逐对象重建；保留压力、旋转及撤销，锁定对象不擦。 |
-| 资源及样式隔离 | `kernel-assets.ts` 使用模块内路径，不改上游全局资产变量；`kernel-css.mjs` 作用域覆盖编辑器和独立 portal，并改名动画、界面字体。 |
+| 资源及样式隔离 | `assets.ts` 使用随主脚本内嵌的资源与受控 Blob URL，不改上游全局资产变量；`kernel-css.mjs` 作用域覆盖编辑器和独立 portal，并改名动画、界面字体。 |
 | 字体生命周期 | 只登记/释放本插件创建的 FontFace；去掉远端字体 fallback，资源来自安装包。旧宿主的既有字体不由本插件清理。 |
 | 中文导出 | 本地 Noto CJK 字体；SVG 图层经本地 `export-worker.ts` 组装，不依赖远端字体服务。 |
 
@@ -32,3 +32,7 @@
 PDF.js 和 PDF 导出 Worker 随包离线交付。字体二进制未修改，来源及逐项许可证见 `THIRD_PARTY_NOTICES.md` 和安装包 `licenses/`，不要以一个包级许可证替代实际字体版本的条款。许可证生成器缺项会使构建失败。
 
 验证报告要记录构建 SHA-256。正在运行的长测不热更新；后续 UI/导出构建不能冒充已接受相同版本长测。
+
+## PageInk 三文件分发（0.1.1）
+
+`scripts/embed-assets.mjs` 从固定依赖的原始资源逐个压缩，并验证解压字节一致；`src/asset-store.ts` 按需读取和管理 Blob URL，卸载时释放。PDF.js 使用自定义 CMap、标准字体和 WASM 工厂；导出 Worker 使用内嵌脚本与字体 URL。没有运行时网络依赖或向插件目录自安装文件。完整第三方许可文本同时内嵌 `main.js` 的 `pageinkLicenses` 导出，社区安装仅有三个文件时也保留版权条款。额外说明见 [发布验证](release-validation.md)。

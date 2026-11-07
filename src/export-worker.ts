@@ -6,7 +6,7 @@ import { templateLines, templateSpec } from './templates';
 import type { Page, Rect } from './model';
 import type { VectorLayer } from './vector-export';
 
-let result: PDFDocument, source: PDFDocument | undefined, assetBase = '', font: Promise<Buffer> | undefined;
+let result: PDFDocument, source: PDFDocument | undefined, fontUrl = '', font: Promise<Buffer> | undefined;
 async function layerPdf(layer: VectorLayer) {
   const doc = new PDFKit({ size: [Math.max(1, layer.width), Math.max(1, layer.height)], margin: 0, compress: true });
   const chunks: Uint8Array[] = [];
@@ -15,7 +15,7 @@ async function layerPdf(layer: VectorLayer) {
     doc.on('end', () => { const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0)); let offset = 0; for (const c of chunks) { bytes.set(c, offset); offset += c.length; } resolve(bytes); });
   });
   if (layer.text) {
-    font ??= fetch(`${assetBase}fonts/NotoSansCJKsc-Regular.otf`).then(async response => { if (!response.ok) throw Error('离线导出字体加载失败。'); return Buffer.from(await response.arrayBuffer()); });
+    font ??= fetch(fontUrl).then(async response => { if (!response.ok) throw Error('离线导出字体加载失败。'); return Buffer.from(await response.arrayBuffer()); });
     doc.registerFont('Ink CJK', await font);
   }
   const warnings: string[] = [];
@@ -47,7 +47,7 @@ async function addPage(p: Page, box: Rect, paperKind: string, paginated: boolean
 self.onmessage = async event => {
   const { id, kind, data } = event.data;
   try {
-    if (kind === 'init') { assetBase = data.assetBase; result = await PDFDocument.create(); if (data.source) source = await PDFDocument.load(data.source); }
+    if (kind === 'init') { fontUrl = data.fontUrl; result = await PDFDocument.create(); if (data.source) source = await PDFDocument.load(data.source); }
     else if (kind === 'page') await addPage(data.page, data.box, data.paper, data.paginated, data.layer);
     else if (kind === 'finish') { const bytes = await result.save(); (self as any).postMessage({id,result:bytes.buffer},[bytes.buffer]); return; }
     (self as any).postMessage({id});

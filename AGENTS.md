@@ -5,5 +5,5 @@
 - Follow the current source architecture and docs/kernel-patches.md.
 - Preserve raw drawing data, complete document exports and third-party license notices.
 - Do not claim iPad/Pencil or synchronization validation without real device/service evidence.
-- Keep the repository private until the owner chooses a public name and license.
+- The owner authorized public release as 页墨手记 PageInk under MIT. Preserve third-party license terms.
 - Do not commit secrets, private notes, generated vaults, caches or machine-specific artifacts.

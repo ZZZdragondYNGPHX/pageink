@@ -1,6 +1,6 @@
 # Third-party notices
 
-Private development build; no public release. Direct and transitive production dependencies are listed conservatively, including packages whose modules may be removed by bundling. Original notices are copied without modifying their terms.
+PageInk uses the MIT license for its original code. Third-party code and fonts retain their own terms. Direct and transitive production dependencies are listed conservatively, including packages whose modules may be removed by bundling. Original notices are copied without modifying their terms.
 
 The editing kernel is Excalidraw 0.18.1 (MIT). Our changes are centralized in scripts/kernel-patch.mjs: pressure/input adaptation, external undo ownership, spatial queries, incremental snapshots and eraser updates.
 
