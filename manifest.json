@@ -1,0 +1,9 @@
+{
+  "id": "drawing-local-dev",
+  "name": "Drawing (Local Development)",
+  "version": "0.1.0",
+  "minAppVersion": "1.8.0",
+  "description": "Private drawing and PDF annotation workspace. Working title only.",
+  "author": "Local development",
+  "isDesktopOnly": false
+}

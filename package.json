@@ -1,0 +1,44 @@
+{
+  "name": "obsidian-drawing-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "dev": "node scripts/dev.mjs",
+    "package": "npm run build && node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "buffer": "6.0.3",
+    "fflate": "0.8.3",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "5.4.624",
+    "pdfkit": "0.17.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "svg-to-pdfkit": "0.1.8"
+  },
+  "overrides": {
+    "nanoid@3.3.3": "3.3.20",
+    "nanoid@4.0.2": "5.1.16",
+    "lodash-es": "4.18.1",
+    "katex": "0.18.2",
+    "moment": "2.31.0"
+  },
+  "devDependencies": {
+    "@jridgewell/trace-mapping": "0.3.31",
+    "@napi-rs/canvas": "0.1.100",
+    "@types/node": "24.10.0",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "esbuild": "0.25.12",
+    "obsidian": "1.8.7",
+    "playwright": "1.56.1",
+    "postcss": "8.5.32",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

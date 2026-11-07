@@ -1,0 +1,9 @@
+node_modules/
+.soak-vault/
+.common-soak-vault/
+.package-vault/
+artifacts/
+dist/
+.test-vault/
+test-results/
+*.log
