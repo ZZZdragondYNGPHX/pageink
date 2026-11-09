@@ -25,9 +25,9 @@ Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite 
 
 需要 **Obsidian 1.12.7 或更高版本**。当前已在 Windows 验证；移动端尚未完成真机验证。
 
-1. 从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.2.zip`。
+1. 从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.3.zip`。
 2. 解压，将 `pageink` 文件夹放入笔记库的 `.obsidian/plugins/`。
-3. 重启 Obsidian，在「设置 → 第三方插件」中启用「页墨手记 PageInk」。
+3. 重启 Obsidian，在「设置 → 第三方插件」中启用「PageInk」。
 4. 点击侧边栏的笔记本图标，打开笔记库。
 
 也可将同一版本的 `main.js`、`manifest.json` 和 `styles.css` 放入 `.obsidian/plugins/pageink/`。社区目录收录前，请使用上述手动安装方式。
