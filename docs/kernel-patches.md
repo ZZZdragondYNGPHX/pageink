@@ -1,6 +1,6 @@
-# 内核修改与升级边界
+# 内核补丁
 
-编辑内核固定为 `@excalidraw/excalidraw@0.18.1`（MIT），来源为 npm 官方包；没有复制其他 Obsidian 绘图插件代码。锁文件固定实际依赖树，构建使用 `scripts/kernel-patch.mjs` 对可读发布模块集中修改，而不是手改 `node_modules`。
+编辑内核固定为 `@excalidraw/excalidraw@0.18.1`（MIT），来源为 npm 官方包。依赖树由锁文件固定，构建使用 `scripts/kernel-patch.mjs` 对可读发布模块集中修改，而不是手改 `node_modules`。
 
 ## 修改的职责
 
@@ -26,26 +26,23 @@
 
 每个字符串补丁检查精确出现次数，未知上游结构直接构建失败。不得删除匹配校验以“修复”升级构建；先理解上游变化，再迁移对应权威职责，避免双历史/双场景系统。
 
-## 工作区边界
+## 集成约定
 
-`InkCanvas.tsx` 统一承接正文、自由画布和草稿纸的输入；`layout.ts` 仅投影连续页坐标，保存时还原页内坐标，保留完整原始笔迹。`PaperLayer.tsx` 负责纸张和 PDF 背景，`view.ts` 管理视野。`Workspace.tsx` 组织工作流程，工具、侧栏和草稿纸分别由 `Toolbar.tsx`、`Sidebar.tsx`、`Scratch.tsx` 承接；`host.ts` 隔离 Obsidian 操作。界面偏好与文档数据分开存储，不修改旧文档格式。
+- `InkCanvas.tsx` 统一处理手札、长卷与草稿纸输入；`layout.ts` 投影连续页面坐标，保存时还原页内坐标。
+- 视口筛选不改变文档权威数据。保存和导出必须保留原始笔迹、压力、附件、绑定与全部页面。
+- Markdown 正文由原生编辑器保存；段落、卡片和属性复用现有会话、历史与存储服务。
+- 页面操作与草稿纸使用独立历史；原生 Markdown 撤销不由绘写历史代替。
 
-原生文字与统一笔记库由 `notes-host.tsx` 接入，`Library.tsx` 不直接调用宿主 API。Markdown 正文、保存及撤销归原生 `MarkdownView` 所有，不放入绘图会话或内核历史；引用共享稳定 ID。具体边界与验证见 [原生文字工作区](native-notes.md)。
+其他模块职责和构建命令见[开发指南](development.md)。
 
-混合笔记本的文字投影与段落锚定由 `mixed.ts` / `mixed-host.ts` / `mixed-render.ts` 管理，保持原生正文与绘图投影的历史分离。文字投影使用普通锁定文字对象，必须保留元素 ID；重排只平移绑定笔迹，不修改原始几何采样。内容与页面留白变更合为一次正文撤销。Markdown 原件快照作为独立资源完整备份，恢复的可编辑 `.md` 与快照分开。具体流程与边界见 [混合笔记本](mixed-notebooks.md)。
+## 升级依赖
 
-画板卡片由 `cards.ts` / `cards-host.ts` / `cards-render.ts` 管理。文字卡片复用原生块引用，临时草稿通过公开原生编辑器 API 提交；手写卡片保存区域预览和完整原件备份。连线和分组使用内核原生绑定。具体数据与流程见 [画板内容卡片](board-cards.md)。
+补丁按精确出现次数匹配上游结构，不匹配时构建失败。升级编辑内核时应理解并迁移对应职责，不能跳过匹配校验或引入第二套历史与场景数据。
 
-跨笔记搜索由 `library-search.ts` / `library-search-host.ts` 按需读取，不保存第二份正文索引。属性由 `properties.ts` / `properties-host.ts` 处理，仅修改发生编辑的键，检查并发变化；Markdown 使用公开 `processFrontMatter`，手写文档沿用会话与清单保存。具体范围见 [统一笔记库](unified-library.md) 与 [笔记属性](note-properties.md)。
+涉及内核的修改需回归保存重开、局部与整笔擦除、几何变换和撤销、绑定复制删除、跨页坐标、正文与草稿纸独立历史、PDF 摘录导出及资源隔离。性能路径修改还需检查持续输入与内存使用。
 
-## 升级验证
+## 离线资源与许可
 
-升级只对当前任务授权的范围实施。更新上游版本后，至少复测保存重开、自由笔与图形几何变换撤销、局部/整笔擦、绑定复制删除、空间查询旋转/长笔迹、正文草稿独立历史、PDF 摘录导出、主题及 portal 隔离；与性能热路径有关时重测同视口增长和长时间分配。
+`scripts/embed-assets.mjs` 从固定依赖收集字体、PDF Worker、CMap、WASM 和许可，逐个压缩并校验解压后的字节。`src/asset-store.ts` 管理按需读取，`src/assets.ts` 管理 Blob URL 的复用与卸载释放。
 
-PDF.js 和 PDF 导出 Worker 随包离线交付。字体二进制未修改，来源及逐项许可证见 `THIRD_PARTY_NOTICES.md` 和安装包 `licenses/`，不要以一个包级许可证替代实际字体版本的条款。许可证生成器缺项会使构建失败。
-
-验证报告要记录构建 SHA-256。正在运行的长测不热更新；后续 UI/导出构建不能冒充已接受相同版本长测。
-
-## PageInk 三文件分发（0.1.1）
-
-`scripts/embed-assets.mjs` 从固定依赖的原始资源逐个压缩，并验证解压字节一致；`src/asset-store.ts` 按需读取和管理 Blob URL，卸载时释放。PDF.js 使用自定义 CMap、标准字体和 WASM 工厂；导出 Worker 使用内嵌脚本与字体 URL。没有运行时网络依赖或向插件目录自安装文件。完整第三方许可文本同时内嵌 `main.js` 的 `pageinkLicenses` 导出，社区安装仅有三个文件时也保留版权条款。额外说明见 [发布验证](release-validation.md)。
+社区安装只需 `main.js`、`manifest.json`、`styles.css`。完整第三方许可内嵌于 `main.js` 的 `pageinkLicenses` 导出，并随安装 ZIP 提供。字体保持原始字节和实际版本条款；许可生成器缺项会阻止构建。

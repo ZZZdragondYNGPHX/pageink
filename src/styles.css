@@ -59,7 +59,7 @@
 }
 @media (pointer: coarse) { .ink-native-tools button { min-height: 44px; min-width: 44px; } }
 
-/* One catalogue. Direct creation and a quiet, content-first list (see docs/ui-polish.md). */
+/* Library: direct creation, search and a content-first list. */
 .ink-library { padding: 0 max(16px, calc((100% - 1040px) / 2)); min-height: 0; }
 .ink-library-heading { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 28px 4px 24px; }
 .ink-library-title { display: flex; align-items: center; gap: 12px; }
