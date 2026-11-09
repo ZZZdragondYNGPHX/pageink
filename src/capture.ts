@@ -1,16 +1,18 @@
-import { exportToCanvas, convertToExcalidrawElements } from '@excalidraw/excalidraw';
+import { convertToExcalidrawElements } from '@excalidraw/excalidraw';
 import { Session } from './session';
 import { Page, Element, uid } from './model';
 import { PdfService } from './pdf';
-import { Point, polygonBounds } from './SelectionOverlay';
-import { bounds } from './geometry';
+import { ScenePoint as Point, polygonBounds } from './geometry';
 import { renderArea } from './preview';
-export async function capturePdf(session: Session, pdf: PdfService, page: Page, polygon: Point[], annotations: boolean, signal: AbortSignal) {
-  const box = polygonBounds(polygon), scale = 2;
-  if (box.width < 1 || box.height < 1) throw Error('选区太小，请重新圈选。');
-  if (box.width * box.height * scale * scale > 16_000_000) throw Error('选区超过 1600 万像素预算；请缩小选区，未自动降低清晰度。');
-  const canvas = annotations ? await renderArea(session, page, box, scale, pdf, signal) : document.createElement('canvas');
-  if (!annotations) await pdf.render(page, canvas, scale, box, signal);
+/** Clips part of a page into a static image (source text only by default; blank pages always include ink). */
+export async function capturePdf(session: Session, pdf: PdfService | undefined, page: Page, polygon: Point[], annotations: boolean, signal: AbortSignal) {
+  const box = polygonBounds(polygon);
+  if (box.width < 4 || box.height < 4) throw Error('选区太小，请重新框选。');
+  // 2× sampling; very large areas use the largest scale that stays within 16 MP.
+  const scale = Math.min(2, Math.sqrt(16_000_000 / (box.width * box.height)));
+  const source = !annotations && page.pdfPage && pdf ? pdf : undefined;
+  const canvas = source ? document.createElement('canvas') : await renderArea(session, page, box, scale, pdf, signal);
+  if (source) await source.render(page, canvas, scale, box, signal);
   signal.throwIfAborted();
   const ctx = canvas.getContext('2d')!;
   ctx.globalCompositeOperation = 'destination-in'; ctx.beginPath();

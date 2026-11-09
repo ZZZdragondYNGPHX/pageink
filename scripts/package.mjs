@@ -6,7 +6,7 @@ const files={},source={};
 async function collect(root,prefix,target){for(const item of await readdir(root,{withFileTypes:true})){const path=`${root}/${item.name}`,key=prefix?`${prefix}/${item.name}`:item.name;if(item.isDirectory())await collect(path,key,target);else if(!item.name.endsWith('.map'))target[key]=new Uint8Array(await readFile(path));}}
 for(const name of ['main.js','manifest.json','styles.css','LICENSE','THIRD_PARTY_NOTICES.md'])files[`${manifest.id}/${name}`]=new Uint8Array(await readFile(`dist/${name}`));
 await collect('dist/licenses',`${manifest.id}/licenses`,files);
-for(const folder of ['src','scripts','tests','docs','vendor'])await collect(folder,folder,source);
+for(const folder of ['src','scripts','tests','dev','docs','vendor'])await collect(folder,folder,source);
 for(const file of ['README.md','AGENTS.md','LICENSE','THIRD_PARTY_NOTICES.md','.gitignore','manifest.json','versions.json','package.json','package-lock.json','tsconfig.json'])source[file]=new Uint8Array(await readFile(file));
 await mkdir('artifacts',{recursive:true});
 const outputs=[];

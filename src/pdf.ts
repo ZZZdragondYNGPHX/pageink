@@ -36,5 +36,17 @@ export class PdfService {
     try { const content = await pdfPage.getTextContent(); return content.items.filter((item): item is TextItem => 'str' in item); }
     finally { pdfPage.cleanup(); }
   }
+  /** Text runs with their page-local rectangles (scale 1, rotation applied). */
+  async textRuns(page: Page): Promise<{ text: string; rect: Rect }[]> {
+    const pdfPage = await this.document.getPage(page.pdfPage!);
+    try {
+      const viewport = pdfPage.getViewport({ scale: 1 }), content = await pdfPage.getTextContent();
+      return content.items.filter((item): item is TextItem => 'str' in item && !!item.str.trim()).map(item => {
+        const [, , c, d, e, f] = item.transform, height = Math.hypot(c, d) || item.height;
+        const [x1, y1, x2, y2] = viewport.convertToViewportRectangle([e, f - height * 0.2, e + item.width, f + height * 0.9]);
+        return { text: item.str, rect: { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) } };
+      });
+    } finally { pdfPage.cleanup(); }
+  }
   destroy() { return this.document.destroy(); }
 }

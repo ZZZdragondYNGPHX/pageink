@@ -1,5 +1,11 @@
 import { Element, Rect, Margins, Page, uid } from './model';
 type Point = readonly [number, number];
+export type ScenePoint = [number, number];
+export function polygonBounds(points: readonly Point[]): Rect {
+  let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const p of points) { x = Math.min(x, p[0]); y = Math.min(y, p[1]); right = Math.max(right, p[0]); bottom = Math.max(bottom, p[1]); }
+  return { x, y, width: right - x, height: bottom - y };
+}
 function localBox(e: Element) {
   if ('points' in e && e.points.length) {
     let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;

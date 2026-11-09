@@ -1,8 +1,11 @@
 import { BinaryFiles } from '@excalidraw/excalidraw/types';
-import { Element, Manifest, Rect, uid } from './model';
+import { Element, Rect, uid } from './model';
 import { DocumentStore, SurfaceBlocks, ensureDir, Conflict } from './storage';
 import { History } from './history';
 import { snapshotElement } from './element-snapshot';
+
+export type SaveState = 'saved' | 'pending' | 'saving' | 'failed';
+interface Applied { surface: string; before: readonly Element[]; after: readonly Element[] }
 
 export class Session {
   surfaces = new Map<string, readonly Element[]>();
@@ -10,20 +13,28 @@ export class Session {
   dirty = new Map<string, readonly Element[]>();
   bodyHistory = new History(); scratchHistory = new History();
   files: BinaryFiles = {};
-  status = '已保存到本地';
+  saveState: SaveState = 'saved';
+  saveError = '';
   listeners = new Set<() => void>();
   timer?: ReturnType<typeof setTimeout>;
   private pending?: Promise<void>;
   private generation = 0;
+  /** Editors that hold unflushed kernel state, keyed by owner (e.g. body, scratch). */
   flushers = new Map<string, () => Promise<void>>();
+  /** Predicates for surfaces that mounted editors keep in memory. */
+  keepers = new Set<(surface: string) => boolean>();
+  /** Increments whenever a surface's committed content changes (used for previews). */
+  revisions = new Map<string, number>();
   metadataDirty = false;
   sourceIssue = '';
   conflictPath = '';
   conflictResolved = false;
   navigation?: { page: string; region?: string; rect?: Rect; token: string };
   constructor(public store: DocumentStore, public manifest = structuredClone(store.manifest)) {}
+  get status() { return this.saveState === 'failed' ? `保存失败：${this.saveError}` : { saved: '已保存', pending: '待保存', saving: '保存中' }[this.saveState]; }
   notify() { for (const callback of this.listeners) callback(); }
   navigate(page: string, region?: string, rect?: Rect) { this.navigation = { page, region, rect, token: uid() }; this.notify(); }
+  revision(surface: string) { return this.revisions.get(surface) ?? 0; }
   async read(id: string) { return this.surfaces.get(id) ?? this.store.readSurface(id); }
   async flush() { await Promise.all([...this.flushers.values()].map(flush => flush())); await this.save(); }
   async load(id: string) {
@@ -33,7 +44,7 @@ export class Session {
     const tracker = new SurfaceBlocks(id); tracker.reset(elements); this.trackers.set(id, tracker);
     return elements;
   }
-  change(id: string, elements: readonly Element[], record = true) {
+  private apply(id: string, elements: readonly Element[]): Applied | undefined {
     if (!this.surfaces.has(id) && Object.keys(this.manifest.chunks).some(key => key.startsWith(`${id}/`))) throw Error('编辑前必须加载该页，不能把未加载内容当作空页。');
     const previous = this.surfaces.get(id) ?? [];
     if (previous.length === elements.length && previous.every((e, i) => e.id === elements[i].id && e.version === elements[i].version)) return;
@@ -49,9 +60,22 @@ export class Session {
     });
     const changes = tracker.changes(snapshot);
     if (!changes.size) return;
-    if (record) (id === 'scratch' ? this.scratchHistory : this.bodyHistory).push(id, previous, snapshot);
     this.surfaces.set(id, snapshot);
+    this.revisions.set(id, this.revision(id) + 1);
     for (const [key, value] of changes) this.dirty.set(key, value);
+    return { surface: id, before: previous, after: snapshot };
+  }
+  change(id: string, elements: readonly Element[], record = true) { this.changeMany(new Map([[id, elements]]), record); }
+  /** Commits several surfaces as one undo step (ink moved between pages stays one action). */
+  changeMany(groups: ReadonlyMap<string, readonly Element[]>, record = true) {
+    const applied: Applied[] = [];
+    for (const [id, elements] of groups) { const change = this.apply(id, elements); if (change) applied.push(change); }
+    if (!applied.length) return;
+    if (record) {
+      const scratch = applied.filter(c => c.surface === 'scratch'), body = applied.filter(c => c.surface !== 'scratch');
+      if (body.length) this.bodyHistory.pushMany(body);
+      if (scratch.length) this.scratchHistory.pushMany(scratch);
+    }
     this.schedule();
   }
   metadataChanged() { this.metadataDirty = true; this.schedule(); }
@@ -62,7 +86,7 @@ export class Session {
     this.bodyHistory.layout(before, after); this.metadataChanged();
   }
   schedule() {
-    this.generation++; this.status = '待保存'; this.notify();
+    this.generation++; if (this.saveState !== 'failed') this.saveState = 'pending'; this.notify();
     clearTimeout(this.timer); this.timer = setTimeout(() => void this.save().catch(() => {}), 350);
   }
   async loadFiles(elements?: readonly Element[]) {
@@ -78,8 +102,9 @@ export class Session {
     }
     this.pruneFiles(wanted ?? new Set(Object.keys(this.files)));
   }
+  private kept(id: string) { for (const keep of this.keepers) if (keep(id)) return true; return false; }
   private pruneFiles(wanted = new Set<string>()) {
-    for (const [surface, elements] of this.surfaces) if (surface === 'scratch' || this.flushers.has(surface)) for (const e of elements) if (e.type === 'image' && e.fileId) wanted.add(e.fileId);
+    for (const [surface, elements] of this.surfaces) if (this.kept(surface)) for (const e of elements) if (e.type === 'image' && e.fileId) wanted.add(e.fileId);
     let bytes = Object.values(this.files).reduce((sum, file) => sum + file.dataURL.length * 2, 0);
     for (const [id, file] of Object.entries(this.files)) {
       if (bytes <= 48 * 1024 * 1024) break;
@@ -87,7 +112,7 @@ export class Session {
     }
   }
   releaseSurface(id: string) {
-    if (id === 'scratch' || this.flushers.has(id) || [...this.dirty.keys()].some(key => key.startsWith(`${id}/`))) return;
+    if (this.kept(id) || [...this.dirty.keys()].some(key => key.startsWith(`${id}/`))) return;
     this.surfaces.delete(id); this.trackers.delete(id);
     this.pruneFiles();
   }
@@ -105,19 +130,19 @@ export class Session {
     clearTimeout(this.timer);
     if (this.conflictPath) { if (this.conflictResolved) return; throw new Conflict(this.conflictPath); }
     if (this.pending) { await this.pending; if (this.dirty.size || this.metadataDirty) return this.save(); return; }
-    if (!this.dirty.size && !this.metadataDirty) return;
+    if (!this.dirty.size && !this.metadataDirty) { if (this.saveState !== 'saved') { this.saveState = 'saved'; this.saveError = ''; this.notify(); } return; }
     const batch = new Map(this.dirty), generation = this.generation;
     const metadata = structuredClone(this.manifest);
-    this.status = '保存中'; this.notify();
+    this.saveState = 'saving'; this.notify();
     this.pending = (async () => {
       try {
         const next = await this.store.commit(batch, metadata);
         for (const [key, value] of batch) if (this.dirty.get(key) === value) this.dirty.delete(key);
         this.manifest.revision = next.revision; this.manifest.parent = next.parent; this.manifest.chunks = next.chunks;
         if (generation === this.generation) this.metadataDirty = false;
-        this.status = this.dirty.size || this.metadataDirty ? '待保存' : '已保存到本地';
+        this.saveState = this.dirty.size || this.metadataDirty ? 'pending' : 'saved'; this.saveError = '';
         for (const id of this.surfaces.keys()) this.releaseSurface(id);
-      } catch (error) { if (error instanceof Conflict) this.conflictPath = error.copyPath; this.status = `保存失败：${(error as Error).message}`; throw error; }
+      } catch (error) { if (error instanceof Conflict) this.conflictPath = error.copyPath; this.saveState = 'failed'; this.saveError = (error as Error).message; throw error; }
       finally { this.pending = undefined; this.notify(); }
     })();
     return this.pending;

@@ -37,7 +37,7 @@ The editing kernel is Excalidraw 0.18.1 (MIT). Our changes are centralized in sc
 | @iconify/utils | 3.1.7 | MIT | [iconify_utils-3.1.7-license.txt](dist/licenses/iconify_utils-3.1.7-license.txt) |
 | @mermaid-js/parser | 0.6.3 | MIT | [mermaid-js_parser-0.6.3-LICENSE](dist/licenses/mermaid-js_parser-0.6.3-LICENSE) |
 | @napi-rs/canvas | 0.1.100 | MIT | [napi-rs_canvas-0.1.100-LICENSE](dist/licenses/napi-rs_canvas-0.1.100-LICENSE) |
-| @napi-rs/canvas-win32-x64-msvc | 0.1.100 | MIT | [napi-rs_canvas-win32-x64-msvc-0.1.100-LICENSE](dist/licenses/napi-rs_canvas-win32-x64-msvc-0.1.100-LICENSE) |
+| @napi-rs/canvas-linux-x64-gnu | 0.1.100 | MIT | [napi-rs_canvas-linux-x64-gnu-0.1.100-LICENSE](dist/licenses/napi-rs_canvas-linux-x64-gnu-0.1.100-LICENSE) |
 | @pdf-lib/standard-fonts | 1.0.0 | MIT | [pdf-lib_standard-fonts-1.0.0-LICENSE.md](dist/licenses/pdf-lib_standard-fonts-1.0.0-LICENSE.md) |
 | pako | 1.0.11 | (MIT AND Zlib) | [pako-1.0.11-LICENSE](dist/licenses/pako-1.0.11-LICENSE) |
 | @pdf-lib/upng | 1.0.1 | MIT | [pdf-lib_upng-1.0.1-LICENSE](dist/licenses/pdf-lib_upng-1.0.1-LICENSE) |
@@ -238,6 +238,7 @@ The editing kernel is Excalidraw 0.18.1 (MIT). Our changes are centralized in sc
 | lodash.debounce | 4.0.8 | MIT | [lodash.debounce-4.0.8-LICENSE](dist/licenses/lodash.debounce-4.0.8-LICENSE) |
 | lodash.throttle | 4.1.1 | MIT | [lodash.throttle-4.1.1-LICENSE](dist/licenses/lodash.throttle-4.1.1-LICENSE) |
 | loose-envify | 1.4.0 | MIT | [loose-envify-1.4.0-LICENSE](dist/licenses/loose-envify-1.4.0-LICENSE) |
+| lucide-react | 1.70.0 | ISC | [lucide-react-1.70.0-LICENSE](dist/licenses/lucide-react-1.70.0-LICENSE) |
 | marked | 16.4.2 | MIT | [marked-16.4.2-LICENSE.md](dist/licenses/marked-16.4.2-LICENSE.md) |
 | mermaid | 11.17.2 | MIT | [mermaid-11.17.2-LICENSE](dist/licenses/mermaid-11.17.2-LICENSE) |
 | @braintree/sanitize-url | 7.1.2 | MIT | [braintree_sanitize-url-7.1.2-LICENSE](dist/licenses/braintree_sanitize-url-7.1.2-LICENSE) |
