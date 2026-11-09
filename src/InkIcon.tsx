@@ -7,7 +7,7 @@ import {
   Scan, SlidersHorizontal, ZoomIn, ZoomOut, Maximize, MoveHorizontal, Expand, ExternalLink,
   History, RefreshCw, FileText, ArrowUp, ArrowDown, GripVertical, TriangleAlert, LocateFixed,
   ArrowRightToLine, Droplet, PenTool, Pointer, LayoutDashboard, Notebook, BookOpen, FileType, Package,
-  type LucideIcon,
+  CalendarDays, FolderOpen, type LucideIcon,
 } from 'lucide-react';
 
 // Official Lucide SVG assets, pinned in package-lock.json. ISC + Feather MIT notices ship with the bundle.
@@ -25,7 +25,7 @@ const icons: Record<string, LucideIcon> = {
   relink: RefreshCw, docText: FileText, moveUp: ArrowUp, moveDown: ArrowDown, grip: GripVertical,
   warning: TriangleAlert, locate: LocateFixed, toBody: ArrowRightToLine, drop: Droplet,
   pressure: PenTool, finger: Pointer, canvas: LayoutDashboard, notebook: Notebook, read: BookOpen,
-  pdf: FileType, package: Package,
+  pdf: FileType, package: Package, calendar: CalendarDays, folderOpen: FolderOpen,
 };
 export const hasIcon = (name: string) => name in icons;
 export function InkIcon({ name, className = '' }: { name: string; className?: string }) {

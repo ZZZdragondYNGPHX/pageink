@@ -48,10 +48,11 @@ try {
   await app(app => app.vault.setConfig('alwaysUpdateLinks', true));
   await library();
   await waitFor(() => activeRoot().locator('.ink-library-note').count().then(n => n >= 3), 'Library did not load files');
-  await activeRoot().getByRole('button', { name: '新建笔记', exact: true }).click();
+  await activeRoot().getByRole('button', { name: '新建与导入', exact: true }).click();
+  await page.locator('.ink-create-options summary').click();
   await page.locator('.ink-create-name').fill('课堂记录');
   await shot(page, 'notes-create');
-  await page.getByRole('button', { name: '新建文字笔记', exact: true }).click();
+  await page.locator('.ink-create-modal').getByRole('button', { name: '新建文笺', exact: true }).click();
   await nativeTools().waitFor();
   assert.equal(await app(app => app.workspace.activeLeaf.getViewState().type), 'markdown');
   const editor = activeRoot().locator('.cm-content[contenteditable=true]');
@@ -89,7 +90,7 @@ try {
   const originalInk = await app(async app => { const s = app.workspace.activeLeaf.view.session; await s.flush(); return { manifest: structuredClone(s.manifest), ink: await s.read(s.manifest.pages[0].id) }; });
   assert.ok(originalInk.ink.some(e => e.type === 'freedraw' && e.points.length > 10));
   await drawing.getByRole('button', { name: '笔记库', exact: true }).click();
-  await activeRoot().getByRole('button', { name: '自由画布', exact: true }).click();
+  await activeRoot().getByRole('button', { name: '长卷', exact: true }).click();
   await waitFor(() => activeRoot().locator('.ink-library-note').count().then(n => n === 1), 'Canvas catalogue filter failed');
   await activeRoot().getByRole('button', { name: '全部', exact: true }).click();
   await openFromLibrary('课堂记录'); await nativeTools().waitFor(); await endOfText();

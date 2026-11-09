@@ -12,7 +12,7 @@ export function containFrame(frame: ScratchFrame, area: { width: number; height:
 export function ScratchWindow({ open, frame, area, onFrame, onClose, history, selection, children }: {
   open: boolean; frame: ScratchFrame; area: { width: number; height: number }; onFrame: (frame: ScratchFrame, done: boolean) => void; onClose: () => void;
   history: { canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; clear: () => void };
-  selection: { toBody: () => void; remove: () => void; source?: () => void } | null;
+  selection: { toBody: () => void; destination: string; remove: () => void; source?: () => void } | null;
   children: React.ReactNode;
 }) {
   const drag = useRef<{ id: number; x: number; y: number; frame: ScratchFrame; resize: boolean } | null>(null);
@@ -53,7 +53,7 @@ export function ScratchWindow({ open, frame, area, onFrame, onClose, history, se
     </header>
     <div className="ink-scratch-body">{children}
       {selection && <div className="ink-scratch-selection" role="toolbar" aria-label="草稿纸选区">
-        <button type="button" className="is-primary" onClick={selection.toBody}><InkIcon name="toBody"/>复制到正文</button>
+        <button type="button" className="is-primary" onClick={selection.toBody}><InkIcon name="toBody"/>复制到{selection.destination}</button>
         {selection.source && <button type="button" onClick={selection.source}><InkIcon name="locate"/>出处</button>}
         <IconButton icon="trash" label="删除" onClick={selection.remove}/>
       </div>}

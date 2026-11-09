@@ -52,7 +52,7 @@ try {
   checks.push('Drawing bookmark search navigates to exact region without changing raw ink');
 
   // Project a source paragraph, then find it from the shared library.
-  await root().getByRole('button', { name: '画板卡片', exact: true }).click();
+  await root().getByRole('button', { name: '画布卡片', exact: true }).click();
   await root().getByRole('button', { name: '插入文字卡片', exact: true }).click();
   await page.locator('.prompt-input').fill('课程.md'); await page.locator('.suggestion-item').filter({ hasText: '课程.md' }).first().click();
   await page.locator('.prompt-input').fill('洛伦兹力'); await page.locator('.suggestion-item').filter({ hasText: '洛伦兹力' }).first().click();

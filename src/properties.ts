@@ -11,7 +11,7 @@ export interface PropertiesSnapshot {
   readonly documentId?: string;
 }
 export const PROPERTY_TYPES: Record<PropertyType, string> = {
-  text: '文本', number: '数字', boolean: '布尔值', list: '字符串列表',
+  text: '文本', number: '数字', boolean: '是／否', list: '文字列表',
 };
 
 /** Dangerous names may exist as inert data, but must never be edited or traversed. */
@@ -103,7 +103,7 @@ export function propertyChanges(base: Readonly<Record<string, unknown>>, changes
     if (change.op === 'delete') { if (exists) result.push({ key, op: 'delete' }); }
     else if (change.op === 'set' && propertyType(change.value)) {
       if (!exists || !sameProperty(base[key], change.value)) result.push({ key, op: 'set', value: structuredClone(change.value) });
-    } else throw Error(`属性「${key}」仅支持文本、有限数字、布尔值或字符串列表。`);
+    } else throw Error(`属性「${key}」的值无效，请填写文本、数字、是／否或文字列表。`);
   }
   return result;
 }
@@ -125,7 +125,7 @@ export function applyPropertyChanges(current: Record<string, unknown>, base: Rea
 export function parsePropertyNumber(text: string): number {
   const value = text.trim();
   if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value) || !Number.isFinite(Number(value))) {
-    throw Error('请输入有限数字，例如 12、-3.5 或 1e3。');
+    throw Error('请输入有效数字，例如 12 或 -3.5。');
   }
   return Number(value);
 }

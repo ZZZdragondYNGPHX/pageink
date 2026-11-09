@@ -44,8 +44,9 @@ async function drag(points) {
 }
 async function create(mode, name) {
   await command('new-drawing');
+  await page.locator('.ink-create-options summary').click();
   await page.locator('.ink-create-name').fill(name);
-  if (mode === '笔记本') await page.getByRole('radio', { name: '横线', exact: true }).click();
+  if (mode === '手札') await page.getByRole('radio', { name: '横线', exact: true }).click();
   await page.getByRole('button', { name: `新建${mode}`, exact: true }).click();
   await workspace.waitFor(); await page.waitForTimeout(700);
 }
@@ -61,7 +62,7 @@ async function exportItem(label, extension) {
 }
 try {
   const environment = await page.evaluate(() => ({ obsidian: navigator.userAgent.match(/obsidian\/([\d.]+)/i)?.[1] ?? null, userAgent: navigator.userAgent }));
-  await create('笔记本', '流程笔记');
+  await create('手札', '流程笔记');
   const box = await workspace.locator('.ink-canvas-area').boundingBox();
   await drag([[box.x + 200, box.y + 140], [box.x + 250, box.y + 120], [box.x + 300, box.y + 160], [box.x + 340, box.y + 140]]);
   const written = await snapshot();
@@ -98,7 +99,7 @@ try {
   await waitFor(visibleScratchInk, 'Captured text is not visible in the opened scratchpad');
   let captured = await snapshot();
   assert.ok(captured.scratch[0].customData.source);
-  await workspace.getByRole('button', { name: '复制到正文', exact: true }).click();
+  await workspace.getByRole('button', { name: '复制到当前页', exact: true }).click();
   await waitFor(async () => (await snapshot()).body[0].some(e => e.type === 'image'), 'Copy to body missing');
   const copied = await snapshot();
   assert.notEqual(copied.body[0][0].id, copied.scratch[0].id);
@@ -138,7 +139,7 @@ try {
   assert.equal(Object.keys(restored.manifest.assets).length, Object.keys(backedUp.manifest.assets).length);
   checks.push('Six-page PDF export, full backup export and restore with scratch, images, source PDF and remapped source link');
 
-  await create('自由画布', '想法画布');
+  await create('长卷', '想法画布');
   const board = await workspace.locator('.ink-canvas-area').boundingBox();
   await button('笔').click();
   await drag([[board.x + 250, board.y + 220], [board.x + 320, board.y + 260], [board.x + 420, board.y + 200]]);

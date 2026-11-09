@@ -20,23 +20,30 @@ export function Popover({ anchor, onClose, label, align = 'start', className = '
       left = Math.max(8, Math.min(left, r.width - w - 8));
       let top = a.bottom - r.top + 6;
       if (top + h > r.height - 8 && a.top - r.top - h - 6 > 8) top = a.top - r.top - h - 6;
-      setPosition({ left, top: Math.max(8, Math.min(top, r.height - h - 8)) });
+      setPosition({ left: left + layer.scrollLeft, top: Math.max(8, Math.min(top, r.height - h - 8)) + layer.scrollTop });
     };
     place();
     const observer = new ResizeObserver(place); if (ref.current) observer.observe(ref.current); if (layer) observer.observe(layer);
-    return () => observer.disconnect();
+    const doc = anchor?.ownerDocument;
+    doc?.addEventListener('scroll', place, true);
+    return () => { observer.disconnect(); doc?.removeEventListener('scroll', place, true); };
   }, [anchor, layer, align]);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    if (focus) requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[data-autofocus], input, button:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true }));
-    const down = (event: PointerEvent) => { const target = event.target as Node; if (ref.current?.contains(target) || anchor?.contains(target)) return; close.current(); };
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); close.current(); } };
-    document.addEventListener('pointerdown', down, true); document.addEventListener('keydown', key, true);
+  useLayoutEffect(() => {
+    const pop = ref.current, doc = anchor?.ownerDocument ?? document, win = doc.defaultView!;
+    const previous = anchor ?? doc.activeElement as HTMLElement | null;
+    let restoreFocus = true;
+    const frame = focus ? requestAnimationFrame(() => pop?.querySelector<HTMLElement>('[data-autofocus], [aria-checked="true"], input, button:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true })) : 0;
+    const down = (event: PointerEvent) => { const target = event.target as Node; if (pop?.contains(target) || anchor?.contains(target)) return; restoreFocus = false; close.current(); };
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing) { event.stopPropagation(); event.preventDefault(); if (focus && previous?.isConnected) previous.focus({ preventScroll: true }); close.current(); } };
+    const leave = (event: FocusEvent) => { if (!focus || pop?.contains(event.target as Node) || anchor?.contains(event.target as Node)) return; restoreFocus = false; close.current(); };
+    // Escape belongs to the floating layer before the host's document-level shortcuts.
+    doc.addEventListener('pointerdown', down, true); win.addEventListener('keydown', key, true); doc.addEventListener('focusin', leave);
     return () => {
-      document.removeEventListener('pointerdown', down, true); document.removeEventListener('keydown', key, true);
-      if (focus && previous?.isConnected && ref.current?.contains(document.activeElement)) previous.focus({ preventScroll: true });
+      cancelAnimationFrame(frame);
+      doc.removeEventListener('pointerdown', down, true); win.removeEventListener('keydown', key, true); doc.removeEventListener('focusin', leave);
+      if (focus && restoreFocus && previous?.isConnected && (pop?.contains(doc.activeElement) || doc.activeElement === doc.body)) previous.focus({ preventScroll: true });
     };
-  }, [anchor]);
+  }, [anchor, focus]);
   if (!layer) return null;
   return createPortal(<div ref={ref} role="dialog" aria-label={label} className={`ink-popover ${className}`} style={position ?? { visibility: 'hidden', left: 0, top: 0 }}>{children}</div>, layer);
 }
@@ -73,11 +80,22 @@ export function Menu({ items, onDone }: { items: readonly (MenuEntry | false | n
   })}</div>;
 }
 
+/** APG radio groups use one Tab stop and arrow keys for the choices within it. */
+export function radioKeys(event: React.KeyboardEvent<HTMLElement>) {
+  if (event.nativeEvent.isComposing || (event.target as HTMLElement).tagName === 'INPUT' || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+  const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)')];
+  if (!buttons.length) return;
+  event.preventDefault(); event.stopPropagation();
+  const index = buttons.indexOf(event.target as HTMLButtonElement);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + buttons.length) % buttons.length;
+  buttons[next].focus(); buttons[next].click();
+}
+
 export function Segmented<T extends string | number>({ value, options, onChange, label, className = '' }: {
   value: T; options: readonly { value: T; label: string; icon?: string; title?: string }[]; onChange: (value: T) => void; label: string; className?: string;
 }) {
-  return <div className={`ink-segmented ${className}`} role="radiogroup" aria-label={label}>{options.map(option =>
-    <button key={String(option.value)} type="button" role="radio" aria-checked={option.value === value} title={option.title ?? option.label}
+  return <div className={`ink-segmented ${className}`} role="radiogroup" aria-label={label} onKeyDown={radioKeys}>{options.map(option =>
+    <button key={String(option.value)} type="button" role="radio" tabIndex={option.value === value ? 0 : -1} aria-checked={option.value === value} title={option.title ?? option.label}
       aria-label={option.icon ? option.title ?? option.label : undefined} onClick={() => onChange(option.value)}>
       {option.icon ? <InkIcon name={option.icon}/> : option.label}
     </button>)}</div>;
@@ -92,9 +110,9 @@ export function Switch({ checked, onChange, label, hint }: { checked: boolean; o
 
 export function Swatches({ colors, value, onChange, label, custom = true }: { colors: readonly string[]; value: string; onChange: (color: string) => void; label: string; custom?: boolean }) {
   const preset = colors.some(c => c.toLowerCase() === value.toLowerCase());
-  return <div className="ink-swatches" role="radiogroup" aria-label={label}>
-    {colors.map(color => <button key={color} type="button" role="radio" className="ink-swatch" aria-checked={color.toLowerCase() === value.toLowerCase()} aria-label={`颜色 ${color}`} title={color} onClick={() => onChange(color)}><span style={{ background: color }}/></button>)}
-    {custom && <label className="ink-swatch ink-swatch-custom" title="自定义颜色" aria-checked={!preset} role="radio">
+  return <div className="ink-swatches" role="radiogroup" aria-label={label} onKeyDown={radioKeys}>
+    {colors.map((color, index) => <button key={color} type="button" role="radio" tabIndex={color.toLowerCase() === value.toLowerCase() || !preset && index === 0 ? 0 : -1} className="ink-swatch" aria-checked={color.toLowerCase() === value.toLowerCase()} aria-label={`颜色 ${color}`} title={color} onClick={() => onChange(color)}><span style={{ background: color }}/></button>)}
+    {custom && <label className="ink-swatch ink-swatch-custom" title="自定义颜色" data-selected={!preset}>
       <span style={!preset ? { background: value } : undefined}/>
       <input type="color" aria-label="自定义颜色" value={value} onChange={event => onChange(event.target.value)}/>
     </label>}

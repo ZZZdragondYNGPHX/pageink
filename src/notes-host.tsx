@@ -1,15 +1,15 @@
 import React from 'react';
 import { createRoot, Root } from 'react-dom/client';
-import { App, Component, FileView, FuzzySuggestModal, ItemView, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf, setIcon } from 'obsidian';
+import { App, Component, FileView, FuzzySuggestModal, ItemView, MarkdownView, Notice, Plugin, Scope, TFile, WorkspaceLeaf, setIcon } from 'obsidian';
 import { Library, LibraryHost } from './Library';
-import { blockInsertion, drawingRegionCode, NoteEntry } from './notes';
+import { blockInsertion, drawingRegionCode, NOTE_TYPES, NoteCreateKind, NoteEntry } from './notes';
 import { parseManifest, Region } from './model';
 import { ErrorBoundary } from './ui';
 import { LibrarySearchState, NoteTarget, scanLibrary, SearchSegment } from './library-search';
 
 const LIBRARY_VIEW = 'pageink-library';
 export interface NotesActions {
-  create(): void;
+  create(kind?: NoteCreateKind): Promise<void>;
   createText(): void;
   flushDrawing(path: string): Promise<void>;
   daily(): Promise<void>;
@@ -30,7 +30,14 @@ class Picker<T> extends FuzzySuggestModal<T> {
 class LibraryView extends ItemView {
   private root?: Root;
   private renderVersion = 0;
-  constructor(leaf: WorkspaceLeaf, private host: LibraryHost) { super(leaf); }
+  constructor(leaf: WorkspaceLeaf, private host: LibraryHost) {
+    super(leaf);
+    this.scope = new Scope(this.app.scope);
+    // The library owns Find and Escape. Let its DOM controls handle these keys
+    // instead of inheriting the host's Escape shortcut that returns to the editor.
+    this.scope.register([], 'Escape', () => {});
+    this.scope.register(['Mod'], 'f', () => {});
+  }
   getViewType() { return LIBRARY_VIEW; }
   getDisplayText() { return 'PageInk 笔记库'; }
   getIcon() { return 'notebook'; }
@@ -52,14 +59,14 @@ class MarkdownTools extends Component {
   onload() {
     const view = this.view;
     const bar = view.containerEl.ownerDocument.createElement('div');
-    bar.className = 'ink-native-tools'; bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', 'PageInk 文字笔记工具');
+    bar.className = 'ink-native-tools'; bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', `PageInk ${NOTE_TYPES.text.label}工具`);
     const button = (icon: string, text: string, action: () => void, cls = '') => {
       const el = bar.createEl('button', { cls, attr: { type: 'button', 'aria-label': text, title: text } });
       setIcon(el.createSpan({ attr: { 'aria-hidden': 'true' } }), icon); el.createSpan({ text }); el.onclick = action;
       return el;
     };
     button('notebook', '笔记库', () => this.host.run(() => this.host.openLibrary()), 'ink-native-home');
-    bar.createSpan({ cls: 'ink-native-label', text: '文字笔记' });
+    bar.createSpan({ cls: 'ink-native-label', text: `${NOTE_TYPES.text.label} · Markdown` });
     this.link = button('link', '插入笔记链接', () => this.host.pickLink(view));
     this.insert = button('notebook-pen', '插入手写区域', () => this.host.pickRegion(view));
     button('sliders-horizontal', '笔记属性', () => { if (view.file) this.host.run(() => this.host.properties(view.file!.path)); });
@@ -93,10 +100,11 @@ export class NotesHost extends Component implements LibraryHost {
   private summaries = new Map<string, { modified: number; size: number; kind: NoteEntry['kind']; detail?: string }>();
   private refreshTimer?: ReturnType<typeof setTimeout>;
   private disposed = false;
+  private navigation = 0;
   constructor(private plugin: Plugin, private actions: NotesActions) { super(); }
   private get app() { return this.plugin.app; }
   run(task: () => unknown) { void Promise.resolve().then(task).catch(e => new Notice((e as Error).message)); }
-  create = () => this.actions.create();
+  create = (kind?: NoteCreateKind) => this.actions.create(kind);
   daily = () => this.actions.daily();
   properties = (path: string) => this.actions.properties(path);
   search = (entries: NoteEntry[], query: string, signal: AbortSignal, progress: (state: LibrarySearchState) => void) =>
@@ -104,7 +112,7 @@ export class NotesHost extends Component implements LibraryHost {
   quickOpen = () => this.run(async () => {
     const entries = await this.list(new AbortController().signal);
     if (this.disposed) return;
-    new Picker(this.app, '快速打开文字、手写或 PDF', entries.sort((a, b) => b.modified - a.modified), entry => entry.path, entry => this.open(entry.path)).open();
+    new Picker(this.app, '查找文笺、手札、长卷或 PDF', entries.sort((a, b) => b.modified - a.modified), entry => entry.path, entry => this.open(entry.path)).open();
   });
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private changed() { for (const listener of this.listeners) listener(); }
@@ -122,7 +130,7 @@ export class NotesHost extends Component implements LibraryHost {
       if (!file || !['md', 'inknote'].includes(file.extension)) return false;
       if (!checking) this.run(() => this.properties(file.path)); return true;
     } });
-    plugin.addCommand({ id: 'new-text-note', name: '新建文字笔记…', callback: () => this.actions.createText() });
+    plugin.addCommand({ id: 'new-text-note', name: `新建${NOTE_TYPES.text.label}（Markdown）`, callback: () => this.actions.createText() });
     plugin.addCommand({ id: 'insert-drawing-region', name: '插入手写区域', editorCheckCallback: (checking, _editor, info) => {
       if (!(info instanceof MarkdownView)) return false;
       if (!checking) this.pickRegion(info); return true;
@@ -155,21 +163,31 @@ export class NotesHost extends Component implements LibraryHost {
     }
   }
   async openLibrary() {
+    const navigation = ++this.navigation;
     const existing = this.app.workspace.getLeavesOfType(LIBRARY_VIEW)[0];
     const leaf = existing ?? this.app.workspace.getLeaf('tab');
     if (!existing) await leaf.setViewState({ type: LIBRARY_VIEW, active: true });
+    if (this.disposed || navigation !== this.navigation) return;
     await this.app.workspace.revealLeaf(leaf);
+    if (this.disposed || navigation !== this.navigation) return;
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    requestAnimationFrame(() => (leaf.view.containerEl.querySelector('.ink-library-search input') as HTMLInputElement | null)?.focus());
+    requestAnimationFrame(() => {
+      if (!this.disposed && navigation === this.navigation && this.app.workspace.activeLeaf === leaf) {
+        (leaf.view.containerEl.querySelector('.ink-library-search input') as HTMLInputElement | null)?.focus();
+      }
+    });
   }
   open = async (path: string, target?: NoteTarget) => {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) throw Error('文件已移动、删除，或尚未同步到这台设备。请刷新笔记库。');
+    const navigation = ++this.navigation;
     let existing: WorkspaceLeaf | undefined;
     this.app.workspace.iterateAllLeaves(leaf => { if (leaf.view instanceof FileView && leaf.view.file === file) existing ??= leaf; });
     const leaf = existing ?? this.app.workspace.getLeaf('tab');
     if (!existing) await leaf.openFile(file, { active: true, eState: target?.pdfPage ? { subpath: `#page=${target.pdfPage}` } : undefined });
+    if (this.disposed || navigation !== this.navigation) return;
     await this.app.workspace.revealLeaf(leaf);
+    if (this.disposed || navigation !== this.navigation) return;
     this.app.workspace.setActiveLeaf(leaf, { focus: true }); this.refreshTools();
     if (target?.page) await this.actions.reveal(path, target);
     else if (target?.pdfPage && existing) leaf.setEphemeralState({ subpath: `#page=${target.pdfPage}` });
@@ -177,6 +195,7 @@ export class NotesHost extends Component implements LibraryHost {
       if (leaf.view.getMode() !== 'source') {
         const state = leaf.getViewState(); await leaf.setViewState({ ...state, state: { ...state.state, mode: 'source' } });
       }
+      if (this.disposed || navigation !== this.navigation || this.app.workspace.activeLeaf !== leaf) return;
       const editor = (leaf.view as MarkdownView).editor, line = Math.min(target.line, editor.lastLine());
       const from = { line, ch: 0 }, to = { line, ch: editor.getLine(line).length };
       editor.setSelection(from, to); editor.scrollIntoView({ from, to }, true); editor.focus();
@@ -233,8 +252,8 @@ export class NotesHost extends Component implements LibraryHost {
   pickRegion(view: MarkdownView) {
     const target = this.insertion(view); if (!target) return;
     const files = this.app.vault.getFiles().filter(file => file.extension === 'inknote').sort((a, b) => b.stat.mtime - a.stat.mtime);
-    if (!files.length) { new Notice('还没有手写笔记。先新建笔记本或自由画布，并为需要引用的区域添加书签。'); return; }
-    new Picker(this.app, '选择包含书签的手写笔记', files, file => file.path, async file => {
+    if (!files.length) { new Notice('先在手札或长卷中为一处内容加书签，再来插入这块区域。'); return; }
+    new Picker(this.app, '选择手札、长卷或 PDF 批注', files, file => file.path, async file => {
       await this.actions.flushDrawing(file.path);
       const manifest = parseManifest(await this.app.vault.read(file));
       if (!manifest.regions.length) { new Notice('这份笔记还没有区域书签。打开笔记，圈选内容后选择「加书签」，再回到这里插入。'); return; }

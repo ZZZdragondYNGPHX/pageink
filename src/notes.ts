@@ -8,8 +8,15 @@ export interface NoteEntry {
   detail?: string;
 }
 export type NoteFilter = 'all' | Exclude<NoteKind, 'unavailable'>;
+export type NoteCreateKind = 'text' | 'pages' | 'canvas';
+/** Product names travel with their concrete meaning, across creation, lists and host commands. */
+export const NOTE_TYPES = {
+  text: { label: '文笺', description: '以字记事 · Markdown 文件', shortDescription: '.md 文件', detail: 'Markdown', icon: 'docText', hostIcon: 'file-text', action: '开始写作' },
+  pages: { label: '手札', description: '落笔成页 · 分页绘写', shortDescription: '分页绘写', detail: '分页画布', icon: 'notebook', hostIcon: 'notebook', action: '开始书写' },
+  canvas: { label: '长卷', description: '随笔铺展 · 无边画布', shortDescription: '无边画布', detail: '无边画布', icon: 'canvas', hostIcon: 'layout-dashboard', action: '展开画布' },
+} as const;
 export const NOTE_LABELS: Record<NoteKind, string> = {
-  text: '文字笔记', pages: '笔记本', canvas: '自由画布', pdf: 'PDF', unavailable: '待检查',
+  text: NOTE_TYPES.text.label, pages: NOTE_TYPES.pages.label, canvas: NOTE_TYPES.canvas.label, pdf: 'PDF', unavailable: '无法读取',
 };
 
 export function filterNotes(entries: readonly NoteEntry[], filter: NoteFilter, query: string): NoteEntry[] {

@@ -330,7 +330,7 @@ test('live same-key change and external revisions refuse stale property overwrit
   const next = await host.read(file.path), remote = await DocumentStore.open(io, file.path);
   remote.manifest.properties!.untouched = 'external'; await remote.commit(new Map());
   const original = await io.read(file.path);
-  await assert.rejects(host.save(next, [set('key', 'local')]), /外部已变化/);
+  await assert.rejects(host.save(next, [set('key', 'local')]), /在别处被修改/);
   assert.equal(await io.read(file.path), original);
 });
 
@@ -338,7 +338,7 @@ test('live session does not overwrite unversioned external properties', async ()
   const { io, file, liveHost: host } = await drawingFixture({ key: 'old', untouched: 'old' });
   const snapshot = await host.read(file.path), disk = parseManifest(await io.read(file.path));
   disk.properties!.untouched = 'unversioned external'; await io.write(file.path, JSON.stringify(disk));
-  await assert.rejects(host.save(snapshot, [set('key', 'local')]), /外部已变化/);
+  await assert.rejects(host.save(snapshot, [set('key', 'local')]), /在别处被修改/);
   assert.equal(parseManifest(await io.read(file.path)).properties!.untouched, 'unversioned external');
 });
 

@@ -87,21 +87,26 @@ export function BookmarkList({ regions, pageNumber, onOpen, onMenu, onAdd, onSav
 export function SearchPanel({ session, pdf, paged, onOpen, initial }: { session: Session; pdf?: PdfService; paged: boolean; onOpen: (hit: SearchHit) => void; initial?: string }) {
   const [query, setQuery] = useState(initial ?? ''), [hits, setHits] = useState<SearchHit[] | null>(null), [progress, setProgress] = useState(''), [active, setActive] = useState(-1);
   const task = useRef<AbortController>();
+  const [composing, setComposing] = useState(false);
   useEffect(() => {
     task.current?.abort();
+    if (composing) return;
     if (!query.trim()) { setHits(null); setProgress(''); return; }
+    setProgress('正在搜索…');
     const controller = new AbortController(); task.current = controller;
     const timer = setTimeout(() => void (async () => {
       await session.flush().catch(() => {});
-      const found = await searchDocument(session, pdf, query, controller.signal, (done, total) => setProgress(total > 1 && done < total ? `正在查找 ${done + 1}/${total}` : ''));
+      const found = await searchDocument(session, pdf, query, controller.signal, (done, total) => { if (!controller.signal.aborted) setProgress(total > 1 && done < total ? `正在查找 ${done + 1}/${total}` : '正在搜索…'); });
       if (!controller.signal.aborted) { setHits(found); setActive(-1); setProgress(''); }
     })().catch(error => { if (!controller.signal.aborted) setProgress((error as Error).message); }), 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [query]);
+  }, [query, composing]);
   const term = query.trim();
   return <div className="ink-search">
     <div className="ink-search-field"><InkIcon name="search"/><input type="search" value={query} placeholder={pdf ? '搜索 PDF 文字、文本框、书签' : '搜索文本框和书签'} aria-label="搜索" data-autofocus autoFocus
-      onChange={event => setQuery(event.target.value)} onKeyDown={event => {
+      onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}
+      onChange={event => { setQuery(event.target.value); setHits(null); }} onKeyDown={event => {
+        if (event.nativeEvent.isComposing || composing) return;
         if (!hits?.length) return;
         if (event.key === 'Enter' || event.key === 'ArrowDown') { event.preventDefault(); const next = (active + 1) % hits.length; setActive(next); onOpen(hits[next]); }
         if (event.key === 'ArrowUp') { event.preventDefault(); const next = (active - 1 + hits.length) % hits.length; setActive(next); onOpen(hits[next]); }

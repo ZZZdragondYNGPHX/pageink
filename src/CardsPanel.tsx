@@ -10,7 +10,7 @@ export function CardsPanel({ elements, selected, busy, onInsertText, onInsertInk
 }) {
   const cards = elements.filter(e => !e.isDeleted && cardReference(e)), selectedCards = selected.filter(e => cardReference(e));
   return <div className="ink-cards-panel" aria-busy={busy}>
-    <div className="ink-popover-title">画板卡片</div>
+    <div className="ink-popover-title">画布卡片</div>
     <p className="ink-popover-note">把文字与手写放在一起，拖动整理，连接想法。</p>
     <div className="ink-mixed-actions">
       <button type="button" className="mod-cta" disabled={busy} onClick={onInsertText}>插入文字卡片</button>
@@ -66,6 +66,6 @@ export function CardEditor({ root, source, text, views, onSave, onClose, bindKey
     <small title={source}>{source}</small>
     <label>段落正文<textarea ref={input} value={draft} onChange={event => setDraft(event.target.value)} disabled={busy} spellCheck={false}/></label>
     {error && <p role="alert" className="ink-card-error">{error}</p>}
-    <footer><span>Ctrl / ⌘ + Enter 提交</span><button type="button" disabled={busy} onClick={onClose}>{draft === text ? '关闭' : '放弃草稿'}</button><button type="button" className="mod-cta" disabled={busy} onClick={() => void save()}>{busy ? '正在保存…' : '保存到原文'}</button></footer>
+    <footer><span>Ctrl / ⌘ + Enter 保存</span><button type="button" disabled={busy} onClick={onClose}>{draft === text ? '关闭' : '放弃草稿'}</button><button type="button" className="mod-cta" disabled={busy} onClick={() => void save()}>{busy ? '正在保存…' : '保存到原文'}</button></footer>
   </section>;
 }

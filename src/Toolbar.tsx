@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
-import { Menu, Popover, Segmented, Swatches, useAnchor } from './ui';
+import { Menu, Popover, radioKeys, Segmented, Swatches, useAnchor } from './ui';
 import { ERASER_SIZES, HIGHLIGHTER_COLORS, HIGHLIGHTER_WIDTHS, PEN_COLORS, PEN_WIDTHS, Preferences, PreferenceStore, SHAPE_WIDTHS, ShapeKind, TEXT_SIZES, ToolId } from './preferences';
 
 interface ToolDef { id: ToolId; icon: string; label: string; key: string }
@@ -33,10 +33,16 @@ export function ToolButtons({ tool, onTool, onImage, capture }: { tool: ToolId; 
     const observer = new ResizeObserver(reveal); observer.observe(element);
     return () => observer.disconnect();
   }, [tool]);
-  const button = (t: ToolDef) => <IconButton key={t.id} icon={t.icon} label={t.label} shortcut={t.key} aria-pressed={tool === t.id} className="ink-tool" onClick={event => onTool(t.id, event.currentTarget)}><span>{t.label}</span></IconButton>;
-  return <div ref={tools} className="ink-tools" role="toolbar" aria-label="书写工具">
+  const button = (t: ToolDef) => <IconButton key={t.id} icon={t.icon} label={t.label} shortcut={t.key} tabIndex={tool === t.id ? 0 : -1} aria-pressed={tool === t.id} className="ink-tool" onClick={event => onTool(t.id, event.currentTarget)}><span>{t.label}</span></IconButton>;
+  return <div ref={tools} className="ink-tools" role="toolbar" aria-label="书写工具" onKeyDown={event => {
+    if (event.nativeEvent.isComposing || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')], index = buttons.indexOf(event.target as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  }}>
     <div className="ink-tool-group">{WRITING_TOOLS.map(button)}</div>
-    <div className="ink-tool-group">{INSERT_TOOLS.map(button)}<IconButton icon="image" label="插入图片" shortcut="I" className="ink-tool" onClick={onImage}><span>图片</span></IconButton>{capture && button(CAPTURE_TOOL)}</div>
+    <div className="ink-tool-group">{INSERT_TOOLS.map(button)}<IconButton icon="image" label="插入图片" shortcut="I" tabIndex={-1} className="ink-tool" onClick={onImage}><span>图片</span></IconButton>{capture && button(CAPTURE_TOOL)}</div>
   </div>;
 }
 
@@ -85,8 +91,8 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store }: {
 }
 
 function Widths({ values, value, color, onChange, scale = 1, label }: { values: readonly number[]; value: number; color: string; onChange: (width: number) => void; scale?: number; label: string }) {
-  return <div className="ink-widths" role="radiogroup" aria-label={label}>{values.map(width =>
-    <button key={width} type="button" role="radio" aria-checked={width === value} aria-label={`${label} ${width}`} title={`${label} ${width}`} onClick={() => onChange(width)}>
+  return <div className="ink-widths" role="radiogroup" aria-label={label} onKeyDown={radioKeys}>{values.map((width, index) =>
+    <button key={width} type="button" role="radio" tabIndex={width === value || !values.includes(value) && index === 0 ? 0 : -1} aria-checked={width === value} aria-label={`${label} ${width}`} title={`${label} ${width}`} onClick={() => onChange(width)}>
       <span style={{ width: Math.min(22, 4 + width * 3 * scale), height: Math.max(2, Math.min(14, width * 2.4 * scale)), background: color }}/>
     </button>)}</div>;
 }
@@ -106,7 +112,7 @@ export function ToolOptions({ tool, prefs, store }: { tool: ToolId; prefs: Prefe
     </>;
     case 'eraser': return <>
       <Segmented label="擦除方式" value={prefs.eraser.mode} onChange={mode => store.update({ eraser: { mode } })} options={[{ value: 'partial', label: '局部擦除' }, { value: 'stroke', label: '整笔擦除' }]}/>{divider}
-      <div className="ink-widths" role="radiogroup" aria-label="橡皮大小">{ERASER_SIZES.map(s => <button key={s.size} type="button" role="radio" aria-checked={prefs.eraser.size === s.size} title={`橡皮${s.label}`} aria-label={`橡皮${s.label}`} onClick={() => store.update({ eraser: { size: s.size } })}><span className="is-ring" style={{ width: 6 + s.size * 0.6, height: 6 + s.size * 0.6 }}/></button>)}</div>
+      <div className="ink-widths" role="radiogroup" aria-label="橡皮大小" onKeyDown={radioKeys}>{ERASER_SIZES.map(s => <button key={s.size} type="button" role="radio" tabIndex={prefs.eraser.size === s.size ? 0 : -1} aria-checked={prefs.eraser.size === s.size} title={`橡皮${s.label}`} aria-label={`橡皮${s.label}`} onClick={() => store.update({ eraser: { size: s.size } })}><span className="is-ring" style={{ width: 6 + s.size * 0.6, height: 6 + s.size * 0.6 }}/></button>)}</div>
     </>;
     case 'shape': return <>
       <Segmented label="形状" value={prefs.shape.kind} onChange={kind => store.update({ shape: { kind } })} options={SHAPES}/>{divider}

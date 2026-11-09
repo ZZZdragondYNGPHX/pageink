@@ -1,7 +1,8 @@
 // Isolated Obsidian host for manual and scripted checks. Never touches the user's own profile or vaults:
 // a generated vault (.test-vault/) and a throwaway profile (/tmp) are created on every launch.
 import { spawn } from 'node:child_process';
-import { cp, mkdir, rm, writeFile, readFile, readlink } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, writeFile, readFile, readlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,12 +11,17 @@ import { chromium } from 'playwright';
 import { writeFixturePdf } from './fixture-pdf.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-export const vault = join(root, '.test-vault');
-const appImage = process.env.OBSIDIAN_APPIMAGE ?? join(homedir(), '.local/opt/obsidian/Obsidian.AppImage');
+export const vault = join(root, '.test-vault', `run-${randomUUID()}`);
+const appImage = process.env.OBSIDIAN_EXECUTABLE ?? process.env.OBSIDIAN_APPIMAGE ?? join(homedir(), '.local/opt/obsidian/Obsidian.AppImage');
 
 // AppImage may put Electron in a different process group from its launcher. A CDP
 // disconnect alone is not an application exit; wait before reusing this test profile.
 async function stopProfile(profile, child) {
+  if (process.platform === 'win32') {
+    // Only the process spawned by this test. Never stop a user's other Obsidian instance.
+    if (child.exitCode === null && !child.killed) child.kill();
+    return;
+  }
   const lock = await readlink(join(profile, 'SingletonLock')).catch(() => '');
   const pid = Number(lock.match(/-(\d+)$/)?.[1]);
   const ownProcess = async id => {
@@ -32,7 +38,7 @@ async function stopProfile(profile, child) {
 }
 
 export async function prepareVault({ theme = 'moonstone', fresh = true, files = {} } = {}) {
-  if (fresh) await rm(vault, { recursive: true, force: true });
+  // Each process owns a fresh directory; keep failed runs available for diagnosis.
   const plugin = join(vault, '.obsidian/plugins/pageink');
   await mkdir(plugin, { recursive: true });
   for (const name of ['main.js', 'manifest.json', 'styles.css']) await cp(join(root, 'dist', name), join(plugin, name));
@@ -46,10 +52,9 @@ export async function prepareVault({ theme = 'moonstone', fresh = true, files = 
 
 export async function launch({ port = 9333, width = 1400, height = 900, theme, fresh = true, files } = {}) {
   await prepareVault({ theme, fresh, files });
-  const profile = join(tmpdir(), 'pageink-obsidian-profile');
-  await rm(profile, { recursive: true, force: true }); await mkdir(profile, { recursive: true });
+  const profile = await mkdtemp(join(tmpdir(), 'pageink-obsidian-profile-'));
   await writeFile(join(profile, 'obsidian.json'), JSON.stringify({ updateDisabled: true, vaults: { '0123456789abcdef': { path: vault, ts: Date.now(), open: true } } }));
-  const child = spawn(appImage, [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, `--window-size=${width},${height}`], { detached: true, stdio: 'ignore', env: { ...process.env, APPIMAGE_SILENT_INSTALL: '1' } });
+  const child = spawn(appImage, [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, `--window-size=${width},${height}`], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, APPIMAGE_SILENT_INSTALL: '1' } });
   child.unref();
   let browser;
   for (let i = 0; i < 120 && !browser; i++) {

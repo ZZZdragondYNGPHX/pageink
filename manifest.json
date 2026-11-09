@@ -1,9 +1,9 @@
 {
   "id": "pageink",
   "name": "页墨手记 PageInk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.12.7",
-  "description": "Handwrite on PDFs, paginated notebooks and an infinite canvas, with a separate scratchpad.",
+  "description": "Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite canvas, with a separate scratchpad.",
   "author": "ZZZdragondYNGPHX",
   "isDesktopOnly": false
 }

@@ -68,12 +68,12 @@ export class MixedNotes implements MixedHost {
   async pick(): Promise<SourceParagraph | undefined> {
     const origin = this.origin(), view = origin.view, target = view instanceof FileView ? view.file : null;
     const assertTarget = () => { if (origin.view !== view || !view.containerEl.isConnected || view instanceof FileView && view.file !== target) throw Error('目标笔记已关闭或切换，请重新插入段落。'); };
-    const file = await this.choose('选择文字笔记', this.app.vault.getMarkdownFiles().sort((a, b) => b.stat.mtime - a.stat.mtime), file => file.path);
+    const file = await this.choose('选择文笺（Markdown 文件）', this.app.vault.getMarkdownFiles().sort((a, b) => b.stat.mtime - a.stat.mtime), file => file.path);
     if (!file) return;
     assertTarget();
     const original = await this.source(file), choices = paragraphs(original);
     if (!choices.length) throw Error('这份笔记没有可插入的普通段落或标题。列表、表格、代码和嵌入请在原笔记中编辑。');
-    const paragraph = await this.choose('选择文字段落（首次插入会添加原生块标识）', choices, p => p.text.replace(/\s+/g, ' ').slice(0, 160));
+    const paragraph = await this.choose('选择要摘入的段落', choices, p => p.text.replace(/\s+/g, ' ').slice(0, 160));
     if (!paragraph) return;
     assertTarget();
     if (await this.source(file) !== original) throw Error('选择期间原笔记已变化，请重新选择段落。');

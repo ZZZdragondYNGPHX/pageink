@@ -26,6 +26,7 @@ import type { SourceParagraph } from './mixed-host';
 import { cardReference, cardText } from './cards';
 import { connectCards, inkCard, refreshTextCards, textCard } from './cards-render';
 import { CardEditor, CardsPanel } from './CardsPanel';
+import { NOTE_TYPES } from './notes';
 
 export interface WorkspaceProps { session: Session; pdf?: PdfService; host: WorkspaceHost }
 type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-export' | 'pdf-text' | 'mixed' | 'cards';
@@ -402,7 +403,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   async function toBody() {
     const items = scratch.current?.selected() ?? []; if (!items.length || !body.current) return;
     await body.current.insert(items); setTool('select');
-    toast.show({ kind: 'success', message: '已复制到正文，可拖动调整位置' });
+    toast.show({ kind: 'success', message: `已复制到${paged ? '当前页' : '画布'}，可拖动调整位置` });
   }
 
   // ---------- marquee results ----------
@@ -587,13 +588,13 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const chooseTab = (next: SidebarTab) => { setTab(next); store.update({ sidebar: { tab: next } }); };
   const status = session.conflictPath ? null : session.saveState === 'failed'
     ? <button type="button" className="ink-save-failed" onClick={() => run(() => session.flush())}><InkIcon name="warning"/>保存失败 · 重试</button>
-    : <span className="ink-save-state" role="status">{savingShown ? <><span className="ink-spinner"/>正在保存</> : session.saveState === 'saved' ? <><InkIcon name="check"/>已保存到本地</> : '等待保存'}</span>;
+    : <span className="ink-save-state" role="status" aria-label={savingShown ? '正在保存' : session.saveState === 'saved' ? '已保存到本地' : '等待保存'} title={savingShown ? '正在保存' : session.saveState === 'saved' ? '已保存到本地' : '等待保存'}>{savingShown ? <span className="ink-spinner"/> : <InkIcon name={session.saveState === 'saved' ? 'check' : 'more'}/>}<span className="ink-save-label">{savingShown ? '正在保存' : session.saveState === 'saved' ? '已保存到本地' : '等待保存'}</span></span>;
 
   const topbar = <header className="ink-topbar">
     <div className="ink-topbar-start">
       {!focus && <IconButton icon="notebook" label="笔记库" onClick={() => run(() => host.openLibrary())}/>}
       {!focus && <IconButton icon="sidebar" label={sidebar ? '隐藏侧栏' : '显示侧栏'} aria-expanded={sidebarVisible} aria-controls={sidebarId} onClick={toggleSidebar}/>}
-      <div className="ink-document-heading"><strong title={host.fileName()}>{host.fileName()}</strong><span>{paged ? manifest.pdf ? 'PDF 批注' : '笔记本' : '自由画布'}</span></div>
+      <div className="ink-document-heading"><strong title={host.fileName()}>{host.fileName()}</strong><span title={NOTE_TYPES[manifest.mode].description}>{manifest.pdf ? 'PDF 批注' : `${NOTE_TYPES[manifest.mode].label} · ${NOTE_TYPES[manifest.mode].detail}`}</span></div>
     </div>
     <div className="ink-topbar-end">
       {status}
@@ -613,7 +614,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     </div>
     <ToolShelf tool={tool} onTool={setTool} onImage={chooseImage} capture={!!pdf} prefs={prefs} store={store}/>
     <IconButton icon="docText" label="文字段落" aria-expanded={pop.open === 'mixed'} onClick={event => pop.toggle('mixed', event.currentTarget)}/>
-    {!paged && <IconButton icon="canvas" label="画板卡片" aria-expanded={pop.open === 'cards'} disabled={!!editingCard} onClick={event => pop.toggle('cards', event.currentTarget)}/>}
+    {!paged && <IconButton icon="canvas" label="画布卡片" aria-expanded={pop.open === 'cards'} disabled={!!editingCard} onClick={event => pop.toggle('cards', event.currentTarget)}/>}
   </div>;
 
   return <LayerContext.Provider value={layer}>
@@ -663,7 +664,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
             onFrame={(frame, done) => { store.update({ scratch: frame }); if (done) scratch.current?.api.refresh(); }}
             history={{ canUndo: session.scratchHistory.canUndo, canRedo: session.scratchHistory.canRedo, undo: () => undo('scratch'), redo: () => redo('scratch'),
               clear: () => run(async () => { const h = scratch.current; if (!h) return; await h.flush(); h.api.updateScene({ elements: [] }); await h.flush(); toast.show({ kind: 'info', message: '草稿纸已清空', action: { label: '撤销', run: () => undo('scratch') } }); }) }}
-            selection={scratchSelection && !scratchSelection.busy ? { toBody: () => run(toBody), remove: () => run(() => scratch.current?.replaceSelected(() => null)), source: scratchSelection.source ? () => selectionActions.source(scratchSelection) : undefined } : null}>
+            selection={scratchSelection && !scratchSelection.busy ? { toBody: () => run(toBody), destination: paged ? '当前页' : '画布', remove: () => run(() => scratch.current?.replaceSelected(() => null)), source: scratchSelection.source ? () => selectionActions.source(scratchSelection) : undefined } : null}>
             <InkCanvas session={session} kind="scratch" pagesKey="scratch" tool={scratchTool} fingerDraws={prefs.fingerDraws} theme={theme} ref={scratch}
               onReady={handle => { scratch.current = handle; for (const resolve of scratchWaiters.current.splice(0)) resolve(handle); }}
               onError={message => toast.show({ kind: 'error', message })} onSelection={setScratchSelection} onGesture={gesture => gesture === 'undo' ? undo('scratch') : redo('scratch')}/>
@@ -674,13 +675,13 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       {resolving && <div className="ink-cover" role="status"><span className="ink-spinner"/>正在保存独立副本…</div>}
 
       {pop.open === 'more' && <Popover anchor={pop.anchor} onClose={pop.close} label="更多" align="end"><Menu items={moreMenu} onDone={pop.close}/></Popover>}
-      {pop.open === 'cards' && <Popover anchor={pop.anchor} onClose={pop.close} label="画板卡片" align="end" className="ink-mixed-popover">
+      {pop.open === 'cards' && <Popover anchor={pop.anchor} onClose={pop.close} label="画布卡片" align="end" className="ink-mixed-popover">
         <CardsPanel elements={boardElements} selected={body.current?.selected() ?? []} busy={textBusy || !!editingCard}
           onInsertText={() => insertCard('text')} onInsertInk={() => insertCard('ink')} onEdit={editCard} onRefresh={refreshCard}
           onRecover={recoverCard} onReveal={showCard} onConnect={connectSelection} onGroup={() => groupSelection()} onUngroup={() => groupSelection(true)}/>
       </Popover>}
       {pop.open === 'mixed' && <Popover anchor={pop.anchor} onClose={pop.close} label="文字段落" align="end" className="ink-mixed-popover">
-        <MixedPanel elements={mixedElements} busy={textBusy} selectionCount={selectedInk().length} readOnly={reading}
+        <MixedPanel elements={mixedElements} busy={textBusy} selectionCount={selectedInk().length} readOnly={reading} paged={paged}
           onInsert={insertParagraph} onRefresh={refreshParagraphs}
           onEdit={e => { pop.close(); setSidebar(false); runText(() => host.text.edit(textReference(e)!)); }}
           onAttach={e => attachInk(e)} onDetach={() => attachInk()} onMove={reorderParagraph}

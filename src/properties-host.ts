@@ -66,7 +66,7 @@ export class NoteProperties {
       const live = this.session(path);
       const manifest = live?.manifest ?? parseManifest(await this.io.read(path));
       this.checkFile(path, file);
-      if (live && live.store.path !== path) throw Error('绘图会话路径已变化，请重新打开。');
+      if (live && live.store.path !== path) throw Error('笔记位置已变化，请重新打开属性。');
       if (manifest.properties !== undefined) validateProperties(manifest.properties);
       snapshot = propertiesSnapshot(path, 'drawing', manifest.properties ?? {}, manifest.id);
     } else if (file.extension.toLowerCase() === 'pdf') snapshot = propertiesSnapshot(path, 'pdf', {});
@@ -127,9 +127,9 @@ export class NoteProperties {
     const check = () => {
       this.checkFile(snapshot.path, file);
       if (this.session(snapshot.path) !== live || live.store.path !== snapshot.path || live.manifest.id !== snapshot.documentId) {
-        throw Error('绘图会话已变化，请保留草稿并重新打开属性。');
+        throw Error('当前笔记已变化，请保留草稿并重新打开属性。');
       }
-      if (live.conflictPath) throw Error('绘图会话存在保存冲突，请先处理冲突副本，再保存属性。');
+      if (live.conflictPath) throw Error('笔记存在保存冲突，请先选择要继续编辑的版本，再保存属性。');
     };
     check();
     // Flush kernel/native state before staging properties; failure cannot leak a draft.
@@ -138,7 +138,7 @@ export class NoteProperties {
     const disk = parseManifest(await this.io.read(snapshot.path));
     check();
     if (disk.id !== live.manifest.id || disk.revision !== live.store.manifest.revision || JSON.stringify(disk) !== JSON.stringify(live.store.manifest)) {
-      throw Error('文档在外部已变化，请先重新载入绘图会话；属性草稿已保留。');
+      throw Error('笔记在别处被修改过，请重新载入笔记后再保存属性。草稿已保留。');
     }
     const previous = live.manifest.properties, current = copyProperties(previous ?? {});
     validateProperties(current);
@@ -233,7 +233,7 @@ export class NotePropertiesModal extends Modal {
       this.button(this.contentEl, '关闭', () => this.close());
       return;
     }
-    this.contentEl.createEl('p', { text: '支持文本、数字、布尔值和字符串列表。复杂属性只读保留；只保存你修改的属性。', cls: 'pageink-properties-help' });
+    this.contentEl.createEl('p', { text: '添上标签、主题或进度，让笔记更容易整理。', cls: 'pageink-properties-help' });
     this.list = this.contentEl.createDiv({ cls: 'pageink-properties-list' });
     this.addButton = this.button(this.contentEl, '添加属性', () => {
       this.rows.push({ key: '', existing: false, type: 'text', text: '', checked: false, items: [], removed: false });
@@ -290,10 +290,10 @@ export class NotePropertiesModal extends Modal {
     if (row.type === 'boolean') {
       const label = parent.createEl('label', { cls: 'pageink-property-boolean' });
       const input = label.createEl('input', { type: 'checkbox' }); input.checked = row.checked;
-      const text = label.createSpan({ text: row.checked ? '属性值：是（true）' : '属性值：否（false）' });
-      input.onchange = () => { row.checked = input.checked; text.setText(row.checked ? '属性值：是（true）' : '属性值：否（false）'); this.changed(); };
+      const text = label.createSpan({ text: row.checked ? '属性值：是' : '属性值：否' });
+      input.onchange = () => { row.checked = input.checked; text.setText(row.checked ? '属性值：是' : '属性值：否'); this.changed(); };
     } else if (row.type === 'list') {
-      parent.createEl('p', { text: '列表值（保留顺序、空项和每项内的换行）', cls: 'pageink-properties-help' });
+      parent.createEl('p', { text: '每项单独填写，可用于标签或关键词。', cls: 'pageink-properties-help' });
       row.items.forEach((value, index) => {
         const item = parent.createDiv({ cls: 'pageink-property-list-item' });
         const label = item.createEl('label', { text: `第 ${index + 1} 项`, cls: 'pageink-property-field' });
@@ -321,7 +321,7 @@ export class NotePropertiesModal extends Modal {
     const reserved = new Set(this.rows.filter(row => !row.type).map(row => row.key));
     for (const row of this.rows) {
       if (row.removed || !row.type) continue;
-      if (!editableKey(row.key)) throw Error('请填写有效的属性名；名称不能为空或包含控制字符，也不能使用 __proto__、constructor、prototype。');
+      if (!editableKey(row.key)) throw Error('这个属性名无法使用，请换一个名称。');
       if (desired.has(row.key) || reserved.has(row.key)) throw Error(`属性名重复：${row.key}`);
       let value: PropertyValue;
       try { value = row.type === 'number' ? parsePropertyNumber(row.text) : row.type === 'boolean' ? row.checked : row.type === 'list' ? [...row.items] : row.text; }

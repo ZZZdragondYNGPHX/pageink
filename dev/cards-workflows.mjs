@@ -14,7 +14,7 @@ page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0
 const app = (fn, arg) => page.evaluate(([source, arg]) => new Function('app', 'plugin', 'arg', `return (${source})(app, plugin, arg)`)(window.app, window.app.plugins.plugins.pageink, arg), [fn.toString(), arg]);
 const drawing = () => page.locator('.workspace-leaf.mod-active .ink-workspace');
 const button = name => (['撤销', '重做'].includes(name) ? drawing().locator('.ink-history-tools') : drawing()).getByRole('button', { name, exact: true });
-const panel = () => drawing().getByRole('dialog', { name: '画板卡片', exact: true });
+const panel = () => drawing().getByRole('dialog', { name: '画布卡片', exact: true });
 const editor = () => drawing().getByRole('dialog', { name: '编辑卡片段落', exact: true });
 const waitFor = async (test, label, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await test()) return; await page.waitForTimeout(100); } throw Error(label); };
 const snapshot = () => app(async app => {
@@ -23,7 +23,7 @@ const snapshot = () => app(async app => {
 });
 const activate = () => app(async (app, plugin) => { const leaf = app.workspace.getLeavesOfType('drawing-local-view').find(l => l.view.file?.path === window.boardPath); if (!leaf) { await plugin.openPath(window.boardPath); return; } await app.workspace.revealLeaf(leaf); app.workspace.setActiveLeaf(leaf, { focus: true }); });
 async function pick(text) { await page.locator('.prompt-input').fill(text); await page.locator('.suggestion-item').filter({ hasText: text }).first().click(); }
-async function openPanel() { if (!(await panel().count())) await button('画板卡片').click(); }
+async function openPanel() { if (!(await panel().count())) await button('画布卡片').click(); }
 async function insert(text) {
   await openPanel(); await panel().getByRole('button', { name: '插入文字卡片', exact: true }).click(); await pick('卡片来源.md'); await pick(text);
   await waitFor(async () => (await snapshot()).elements.some(e => e.originalText === text), 'Card not inserted'); await activate();

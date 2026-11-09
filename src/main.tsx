@@ -15,7 +15,7 @@ import { ErrorBoundary } from './ui';
 import { TEMPLATES, paperStyle } from './templates';
 import type { ViewMemory, WorkspaceActions, WorkspaceHost } from './host';
 import { NotesHost } from './notes-host';
-import { drawingRegionCode } from './notes';
+import { drawingRegionCode, NOTE_TYPES } from './notes';
 import { MixedNotes } from './mixed-host';
 import { BoardSources } from './cards-host';
 import { LibrarySources } from './library-search-host';
@@ -50,11 +50,13 @@ class CreateModal extends Modal {
   constructor(private plugin: DrawingPlugin, private folder?: string, private initial: 'text' | 'pages' = 'text') { super(plugin.app); }
   onOpen() {
     this.modalEl.addClass('ink-host-modal', 'ink-create-modal');
-    this.titleEl.setText('从这里开始记录');
+    this.titleEl.setText('新建笔记');
     const content = this.contentEl;
-    content.createEl('p', { cls: 'ink-create-intro', text: '用文字记录，用笔书写，或在画布上展开想法。' });
-    const nameLabel = content.createEl('label', { cls: 'ink-create-name-label', text: '笔记名称' });
-    const name = nameLabel.createEl('input', { type: 'text', cls: 'ink-create-name', attr: { placeholder: '未命名笔记', autocomplete: 'off' } });
+    content.createEl('p', { cls: 'ink-create-intro', text: '把所见所思，留在纸间。' });
+    const options = content.createEl('details', { cls: 'ink-create-options' });
+    options.createEl('summary', { text: '名称与纸张（可选）' });
+    const nameLabel = options.createEl('label', { cls: 'ink-create-name-label', text: '笔记名称' });
+    const name = nameLabel.createEl('input', { type: 'text', cls: 'ink-create-name', attr: { placeholder: '为这份笔记取个名字', autocomplete: 'off' } });
     let template = this.plugin.prefs.get().newTemplate, busy = false;
     const error = content.createDiv({ cls: 'ink-create-error', attr: { role: 'alert' } });
     const go = async (task: () => Promise<void>) => {
@@ -65,44 +67,46 @@ class CreateModal extends Modal {
       finally { busy = false; content.removeAttribute('aria-busy'); buttons.forEach(button => button.disabled = false); }
     };
     const modes = content.createDiv({ cls: 'ink-create-modes' });
-    const text = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': '新建文字笔记' } });
-    const textArt = text.createDiv({ cls: 'ink-create-art ink-create-text-art', attr: { 'aria-hidden': 'true' } });
-    const textPage = textArt.createDiv({ cls: 'ink-create-text-page' });
-    textPage.createSpan({ text: 'Aa' }); textPage.createDiv(); textPage.createDiv(); textPage.createDiv();
-    text.createEl('strong', { text: '文字笔记' });
-    text.createSpan({ text: '文档、链接、阅读与整理', cls: 'ink-create-description' });
-    const textAction = text.createDiv({ cls: 'ink-create-mode-action', text: '开始记录' }); setIcon(textAction.createSpan(), 'arrow-right');
+    const text = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': `新建${NOTE_TYPES.text.label}`, 'aria-description': NOTE_TYPES.text.description } });
+    setIcon(text.createSpan({ cls: 'ink-create-glyph', attr: { 'aria-hidden': 'true' } }), NOTE_TYPES.text.hostIcon);
+    text.createEl('strong', { text: NOTE_TYPES.text.label });
+    text.createSpan({ text: NOTE_TYPES.text.description, cls: 'ink-create-description' });
+    const textAction = text.createDiv({ cls: 'ink-create-mode-action', text: NOTE_TYPES.text.action }); setIcon(textAction.createSpan(), 'arrow-right');
     text.onclick = () => void go(() => this.plugin.createText(name.value, this.folder));
-    const notebook = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': '新建笔记本' } });
-    const notebookArt = notebook.createDiv({ cls: 'ink-create-art ink-create-notebook-art', attr: { 'aria-hidden': 'true' } });
-    const paper = notebookArt.createDiv({ cls: 'ink-create-paper' });
-    Object.assign(paper.style, paperStyle(template));
-    notebook.createEl('strong', { text: '笔记本' });
-    notebook.createSpan({ text: '课堂笔记、日常手写', cls: 'ink-create-description' });
-    const notebookAction = notebook.createDiv({ cls: 'ink-create-mode-action', text: '开始书写' }); setIcon(notebookAction.createSpan(), 'arrow-right');
+    const notebook = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': `新建${NOTE_TYPES.pages.label}`, 'aria-description': NOTE_TYPES.pages.description } });
+    setIcon(notebook.createSpan({ cls: 'ink-create-glyph', attr: { 'aria-hidden': 'true' } }), NOTE_TYPES.pages.hostIcon);
+    notebook.createEl('strong', { text: NOTE_TYPES.pages.label });
+    notebook.createSpan({ text: NOTE_TYPES.pages.description, cls: 'ink-create-description' });
+    const notebookAction = notebook.createDiv({ cls: 'ink-create-mode-action', text: NOTE_TYPES.pages.action }); setIcon(notebookAction.createSpan(), 'arrow-right');
     notebook.onclick = () => void go(() => this.plugin.create('pages', { template, title: name.value, folder: this.folder }));
 
-    const canvas = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': '新建自由画布' } });
-    const board = canvas.createDiv({ cls: 'ink-create-art ink-create-board', attr: { 'aria-hidden': 'true' } });
-    board.createSpan({ cls: 'ink-board-note' }); board.createSpan({ cls: 'ink-board-path' }); board.createSpan({ cls: 'ink-board-idea' });
-    canvas.createEl('strong', { text: '自由画布' });
-    canvas.createSpan({ text: '演算、草图、整理想法', cls: 'ink-create-description' });
-    const canvasAction = canvas.createDiv({ cls: 'ink-create-mode-action', text: '打开画布' }); setIcon(canvasAction.createSpan(), 'arrow-right');
+    const canvas = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': `新建${NOTE_TYPES.canvas.label}`, 'aria-description': NOTE_TYPES.canvas.description } });
+    setIcon(canvas.createSpan({ cls: 'ink-create-glyph', attr: { 'aria-hidden': 'true' } }), NOTE_TYPES.canvas.hostIcon);
+    canvas.createEl('strong', { text: NOTE_TYPES.canvas.label });
+    canvas.createSpan({ text: NOTE_TYPES.canvas.description, cls: 'ink-create-description' });
+    const canvasAction = canvas.createDiv({ cls: 'ink-create-mode-action', text: NOTE_TYPES.canvas.action }); setIcon(canvasAction.createSpan(), 'arrow-right');
     canvas.onclick = () => void go(() => this.plugin.create('canvas', { title: name.value, folder: this.folder }));
 
-    const paperSection = content.createDiv({ cls: 'ink-create-paper-section' });
-    paperSection.createSpan({ text: '笔记本纸张' });
+    content.appendChild(options);
+    const paperSection = options.createDiv({ cls: 'ink-create-paper-section' });
+    paperSection.createSpan({ text: `${NOTE_TYPES.pages.label}纸张` });
     const papers = paperSection.createDiv({ cls: 'ink-create-grid', attr: { role: 'radiogroup', 'aria-label': '新笔记纸张' } });
     for (const option of TEMPLATES) {
-      const card = papers.createEl('button', { cls: 'ink-create-card', attr: { type: 'button', role: 'radio', 'aria-checked': String(option.id === template), 'aria-label': option.label } });
+      const card = papers.createEl('button', { cls: 'ink-create-card', attr: { type: 'button', role: 'radio', tabindex: option.id === template ? '0' : '-1', 'aria-checked': String(option.id === template), 'aria-label': option.label } });
       Object.assign(card.createSpan({ cls: 'ink-create-paper-chip', attr: { 'aria-hidden': 'true' } }).style, paperStyle(option.id));
       card.createSpan({ text: option.label });
       card.onclick = () => {
         template = option.id;
-        for (const button of papers.querySelectorAll('button')) button.setAttribute('aria-checked', String(button === card));
-        Object.assign(paper.style, paperStyle(template));
+        for (const button of papers.querySelectorAll('button')) { button.setAttribute('aria-checked', String(button === card)); button.tabIndex = button === card ? 0 : -1; }
       };
     }
+    papers.addEventListener('keydown', event => {
+      if (event.isComposing || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const buttons = [...papers.querySelectorAll('button')], index = buttons.indexOf(event.target as HTMLButtonElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus(); buttons[next]?.click();
+    });
     name.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); (this.initial === 'text' ? text : notebook).click(); } });
     const files = content.createDiv({ cls: 'ink-create-links' });
     const link = (icon: string, text: string, hint: string, run: () => void) => {
@@ -112,7 +116,7 @@ class CreateModal extends Modal {
     link('file-text', '批注 PDF', '从当前笔记库选择', () => { this.close(); this.plugin.pickVaultPdf(); });
     link('file-up', '导入 PDF', '从设备选择文件', () => this.plugin.chooseFile('.pdf', file => go(async () => { await this.plugin.importPdf(file.name, await file.arrayBuffer()); })));
     link('archive-restore', '恢复备份', '打开 .inkpack 文件', () => this.plugin.chooseFile('.inkpack,.zip', file => go(() => this.plugin.restorePackage(file))));
-    name.focus();
+    (this.initial === 'text' ? text : notebook).focus();
   }
   onClose() { this.contentEl.empty(); }
 }
@@ -133,7 +137,7 @@ class DrawingView extends FileView implements WorkspaceHost {
   get prefs() { return this.plugin.prefs; }
   getViewType() { return VIEW; }
   getIcon() { return 'pencil'; }
-  getDisplayText() { return this.file?.basename ?? '手写笔记'; }
+  getDisplayText() { return this.file?.basename ?? '绘写笔记'; }
   onPaneMenu(menu: Menu, source: string) {
     super.onPaneMenu(menu, source);
     if (!this.session) return;
@@ -196,7 +200,7 @@ class DrawingView extends FileView implements WorkspaceHost {
   // ---------- WorkspaceHost ----------
   openLibrary() { return this.plugin.notes.openLibrary(); }
   properties() { return this.file ? this.plugin.properties.open(this.file.path) : Promise.resolve(); }
-  fileName() { return this.file?.basename ?? this.session?.manifest.title ?? '手写笔记'; }
+  fileName() { return this.file?.basename ?? this.session?.manifest.title ?? '绘写笔记'; }
   async saveExport(name: string, extension: string, bytes: ArrayBuffer) {
     await ensureDir(this.plugin.io, EXPORT_FOLDER);
     const path = await this.plugin.uniquePath(name, extension, EXPORT_FOLDER);
@@ -267,8 +271,12 @@ export default class DrawingPlugin extends Plugin {
     this.properties = new NoteProperties(this.app, this.io, live);
     this.register(() => this.properties.dispose());
     this.notes = this.addChild(new NotesHost(this, {
-      create: () => new CreateModal(this).open(),
-      createText: () => new CreateModal(this, undefined, 'text').open(),
+      create: async kind => {
+        if (kind === 'text') await this.createText('');
+        else if (kind) await this.create(kind);
+        else new CreateModal(this).open();
+      },
+      createText: () => void this.createText('').catch(e => new Notice((e as Error).message)),
       daily: () => this.openDaily(),
       properties: path => this.properties.open(path),
       segments: (entry, signal) => sources.segments(entry, signal),
@@ -282,8 +290,8 @@ export default class DrawingPlugin extends Plugin {
     const active = () => this.app.workspace.getActiveViewOfType(DrawingView);
     const withView = (run: (view: DrawingView) => void) => (checking: boolean) => { const view = active(); if (!view?.session) return false; if (!checking) run(view); return true; };
     this.addCommand({ id: 'new-drawing', name: '新建笔记…', callback: () => new CreateModal(this).open() });
-    this.addCommand({ id: 'new-notebook', name: '新建笔记本', callback: () => void this.create('pages').catch(e => new Notice(e.message)) });
-    this.addCommand({ id: 'new-canvas', name: '新建自由画布', callback: () => void this.create('canvas').catch(e => new Notice(e.message)) });
+    this.addCommand({ id: 'new-notebook', name: `新建${NOTE_TYPES.pages.label}（分页绘写）`, callback: () => void this.create('pages').catch(e => new Notice(e.message)) });
+    this.addCommand({ id: 'new-canvas', name: `新建${NOTE_TYPES.canvas.label}（无边画布）`, callback: () => void this.create('canvas').catch(e => new Notice(e.message)) });
     this.addCommand({ id: 'annotate-pdf', name: '批注库中的 PDF…', callback: () => this.pickVaultPdf() });
     this.addCommand({ id: 'import-pdf', name: '导入 PDF 并批注…', callback: () => this.chooseFile('.pdf', async file => this.importPdf(file.name, await file.arrayBuffer())) });
     this.addCommand({ id: 'restore-package', name: '从备份恢复（.inkpack）…', callback: () => this.chooseFile('.inkpack,.zip', file => this.restorePackage(file)) });
@@ -296,9 +304,9 @@ export default class DrawingPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (file instanceof TFile && file.extension === 'pdf') menu.addItem(item => item.setTitle('创建批注笔记').setIcon('pencil').onClick(() => { void this.importPdf(file.basename, undefined, file).catch(e => new Notice(e.message)); }));
       if (file instanceof TFolder) {
-        menu.addItem(item => item.setTitle('新建文字笔记').setIcon('file-text').onClick(() => new CreateModal(this, file.path, 'text').open()));
-        menu.addItem(item => item.setTitle('新建笔记本').setIcon('notebook-pen').onClick(() => void this.create('pages', { folder: file.path }).catch(e => new Notice(e.message))));
-        menu.addItem(item => item.setTitle('新建自由画布').setIcon('pencil').onClick(() => void this.create('canvas', { folder: file.path }).catch(e => new Notice(e.message))));
+        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.text.label}（Markdown）`).setIcon(NOTE_TYPES.text.hostIcon).onClick(() => void this.createText('', file.path).catch(e => new Notice(e.message))));
+        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.pages.label}（分页绘写）`).setIcon(NOTE_TYPES.pages.hostIcon).onClick(() => void this.create('pages', { folder: file.path }).catch(e => new Notice(e.message))));
+        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.canvas.label}（无边画布）`).setIcon(NOTE_TYPES.canvas.hostIcon).onClick(() => void this.create('canvas', { folder: file.path }).catch(e => new Notice(e.message))));
       }
     }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { void this.maintainPdfPath(oldPath, file.path).catch(e => new Notice(e.message)); }));
@@ -431,13 +439,13 @@ export default class DrawingPlugin extends Plugin {
   }
   async create(mode: 'pages' | 'canvas', options: { template?: PageTemplate; title?: string; folder?: string } = {}) {
     const folder = this.newFolder(options.folder);
-    const path = await this.uniquePath(options.title?.trim() || (mode === 'canvas' ? '未命名画布' : '未命名笔记'), 'inknote', folder);
+    const path = await this.uniquePath(options.title?.trim() || `未命名${NOTE_TYPES[mode].label}`, 'inknote', folder);
     const manifest = newManifest(path.slice(path.lastIndexOf('/') + 1, -'.inknote'.length), mode, options.template ?? (mode === 'canvas' ? 'dotted' : this.prefs.get().newTemplate));
     if (mode === 'pages' && options.template) this.prefs.update({ newTemplate: options.template });
     await new DocumentStore(this.io, path, manifest).commit(new Map()); await this.openPath(path);
   }
   async createText(title: string, folder?: string) {
-    const path = await this.uniquePath(title.trim() || '未命名文字笔记', 'md', this.newFolder(folder));
+    const path = await this.uniquePath(title.trim() || `未命名${NOTE_TYPES.text.label}`, 'md', this.newFolder(folder));
     const file = await this.app.vault.create(path, '');
     const leaf = this.app.workspace.getLeaf('tab');
     await leaf.openFile(file, { active: true, state: { mode: 'source' } });
