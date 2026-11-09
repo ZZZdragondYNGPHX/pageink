@@ -2,7 +2,7 @@ import { exportToSvg, getCommonBounds } from '@excalidraw/excalidraw';
 import { Session } from './session';
 import { Page, Rect, Element, pageRect } from './model';
 import { PdfService } from './pdf';
-import { templateSpec, templateLines } from './templates';
+import { templateSpec, templateLines, templateDots } from './templates';
 export async function renderArea(session: Session, page: Page, area: Rect, scale: number, pdf?: PdfService, signal?: AbortSignal) {
   signal?.throwIfAborted();
   const canvas = document.createElement('canvas'); canvas.width = Math.ceil(area.width * scale); canvas.height = Math.ceil(area.height * scale);
@@ -12,6 +12,8 @@ export async function renderArea(session: Session, page: Page, area: Rect, scale
   if (!page.pdfPage) {
     ctx.strokeStyle = templateSpec(page.template).color; ctx.lineWidth = scale;
     for (const [x1,y1,x2,y2] of templateLines(page.template,pageRect(page),area)) { ctx.beginPath();ctx.moveTo((x1-area.x)*scale,(y1-area.y)*scale);ctx.lineTo((x2-area.x)*scale,(y2-area.y)*scale);ctx.stroke(); }
+    ctx.fillStyle = templateSpec(page.template).color;
+    for (const [x, y] of templateDots(page.template, pageRect(page), area)) { ctx.beginPath(); ctx.arc((x - area.x) * scale, (y - area.y) * scale, Math.max(.6, 1.15 * scale), 0, Math.PI * 2); ctx.fill(); }
   }
   const elements = (await session.read(page.id)).filter(e => {
     if (e.isDeleted) return false;

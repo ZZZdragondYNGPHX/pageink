@@ -1,26 +1,54 @@
 import { exportToBlob } from '@excalidraw/excalidraw';
 import { Session } from './session';
-import { Element, pageRect, digest } from './model';
+import { Element, Page, pageRect, digest, Rect } from './model';
 import { bounds } from './geometry';
 import { vectorLayer } from './vector-export';
 import { assetBytes, assetUrl } from './assets';
+import { renderArea } from './preview';
+import type { PdfService } from './pdf';
 
-export async function png(session: Session, elements: readonly Element[]) {
-  await session.loadFiles(elements);
-  if (!elements.some(e => !e.isDeleted)) throw Error('请先选择要导出的内容。');
-  const b = bounds(elements)!;
-  const padding = elements.reduce((max, e) => Math.max(max, e.strokeWidth * 4), 8);
-  if ((b.width + padding * 2) * (b.height + padding * 2) * 4 > 16_000_000) throw Error('选区超过 1600 万像素，请明确缩小选区后重新导出；未自动降低质量。');
-  return exportToBlob({ elements, files: { ...session.files }, mimeType: 'image/png', appState: { exportBackground: false }, exportPadding: padding, getDimensions: (w: number, h: number) => ({ width: w * 2, height: h * 2, scale: 2 }) });
+const PIXEL_BUDGET = 16_000_000;
+/** Largest scale up to 2× that keeps the bitmap within the pixel budget. */
+export const fittingScale = (width: number, height: number, preferred = 2) => Math.min(preferred, Math.sqrt(PIXEL_BUDGET / Math.max(1, width * height)));
+
+/** Transparent PNG of the given objects. */
+export async function png(session: Session, elements: readonly Element[]): Promise<{ blob: Blob; scale: number }> {
+  const live = elements.filter(e => !e.isDeleted);
+  if (!live.length) throw Error('没有可导出的内容。');
+  await session.loadFiles(live);
+  const b = bounds(live)!, padding = live.reduce((max, e) => Math.max(max, e.strokeWidth * 4), 8);
+  const scale = fittingScale(b.width + padding * 2, b.height + padding * 2);
+  const blob = await exportToBlob({ elements: live, files: { ...session.files }, mimeType: 'image/png', appState: { exportBackground: false }, exportPadding: padding, getDimensions: (w: number, h: number) => ({ width: w * scale, height: h * scale, scale }) });
+  return { blob, scale };
 }
-export interface PdfExportOptions { selection?: readonly Element[]; paper?: 'original' | 'a4' | 'letter' }
+
+/** One page as it looks on screen: paper, template, PDF and ink (including ink beyond the paper). */
+export async function pagePng(session: Session, page: Page, pdf?: PdfService, signal?: AbortSignal): Promise<{ blob: Blob; scale: number }> {
+  const ink = bounds((await session.read(page.id)).filter(e => !e.isDeleted));
+  const paper = pageRect(page), area = ink ? union(paper, ink) : paper;
+  const scale = fittingScale(area.width, area.height);
+  const canvas = await renderArea(session, page, area, scale, pdf, signal);
+  try { return { blob: await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error('图片编码失败。')), 'image/png')), scale }; }
+  finally { canvas.width = canvas.height = 0; }
+}
+const union = (a: Rect, b: Rect): Rect => { const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y }; };
+
+export interface PdfExportOptions {
+  paper?: 'original' | 'a4' | 'letter';
+  /** Page ids to include (default: every page). */
+  pages?: readonly string[];
+  /** Export only these objects on a single page. */
+  selection?: readonly Element[];
+}
 export async function readingPdf(session: Session, onProgress: (current: number, total: number) => void, signal?: AbortSignal, options: PdfExportOptions = {}) {
   signal?.throwIfAborted();
-  if (session.manifest.mode === 'canvas' && !options.selection?.some(e => !e.isDeleted)) throw Error('无边记 PDF 请先选择要导出的对象。');
+  const freeform = !!options.selection || session.manifest.mode === 'canvas';
+  const pages = freeform ? [session.manifest.pages[0]] : session.manifest.pages.filter(p => !options.pages || options.pages.includes(p.id));
+  if (!pages.length) throw Error('没有可导出的页面。');
   let source: ArrayBuffer | undefined;
-  if (session.manifest.pdf) {
+  if (session.manifest.pdf && !freeform) {
     source = await session.store.io.readBinary(session.manifest.pdf.path);
-    if (await digest(source) !== session.manifest.pdf.sha256) throw Error('源 PDF 已变化，不能导出为原教材批注。请重新关联同一原件。');
+    if (await digest(source) !== session.manifest.pdf.sha256) throw Error('原 PDF 已变化，无法导出批注版。请先重新关联同一原件。');
   }
   signal?.throwIfAborted();
   const workerUrl = URL.createObjectURL(new Blob([assetBytes('pdf-export.worker.mjs')], { type: 'text/javascript' }));
@@ -37,22 +65,21 @@ export async function readingPdf(session: Session, onProgress: (current: number,
   const call = (kind: string, data?: unknown, transfer: Transferable[] = []) => new Promise<any>((resolve, reject) => { signal?.throwIfAborted(); const id = ++nextId; pending.set(id, { resolve, reject }); worker.postMessage({ id, kind, data }, transfer); });
   try {
     await call('init', { source, fontUrl: assetUrl('fonts/NotoSansCJKsc-Regular.otf') }, source ? [source] : []);
-    for (const [i, page] of session.manifest.pages.entries()) {
+    for (const [i, page] of pages.entries()) {
       signal?.throwIfAborted();
-      const elements = (session.manifest.mode === 'canvas' ? options.selection! : await session.read(page.id)).filter(e => !e.isDeleted);
+      const elements = (options.selection ?? await session.read(page.id)).filter(e => !e.isDeleted);
       await session.loadFiles(elements); signal?.throwIfAborted();
-      let box = session.manifest.mode === 'pages' ? pageRect(page) : bounds(elements);
-      if (!box) continue;
+      let box = freeform ? bounds(elements) : pageRect(page);
+      if (!box) { if (freeform) throw Error(options.selection ? '没有可导出的内容。' : '画布还是空的。'); continue; }
       const layer = elements.length ? await vectorLayer(session, elements) : undefined;
-      // The editor also permits marks outside the current paper. Include the complete
-      // padded vector layer rather than silently clipping those marks at export.
+      // The editor also permits marks outside the paper. Include the complete padded vector
+      // layer rather than silently clipping those marks at export.
       if (layer) {
         const x = Math.min(box.x, layer.x), y = Math.min(box.y, layer.y);
-        box = { x, y, width: Math.max(box.x + box.width, layer.x + layer.width) - x,
-          height: Math.max(box.y + box.height, layer.y + layer.height) - y };
+        box = { x, y, width: Math.max(box.x + box.width, layer.x + layer.width) - x, height: Math.max(box.y + box.height, layer.y + layer.height) - y };
       }
-      await call('page', { page, box, paper: options.paper, paginated: session.manifest.mode === 'pages', layer });
-      onProgress(i + 1, session.manifest.pages.length);
+      await call('page', { page: freeform ? { ...page, pdfPage: undefined } : page, box, paper: options.paper, paginated: !freeform, layer });
+      onProgress(i + 1, pages.length);
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     const bytes: ArrayBuffer = await call('finish'); signal?.throwIfAborted(); return new Uint8Array(bytes);

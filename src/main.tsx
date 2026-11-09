@@ -1,33 +1,22 @@
 import React from 'react';
 import { createRoot, Root } from 'react-dom/client';
-import { Plugin, FileView, WorkspaceLeaf, TFile, Notice, Modal, Setting, normalizePath, FuzzySuggestModal, MarkdownRenderChild } from 'obsidian';
+import { Plugin, FileView, WorkspaceLeaf, TFile, TFolder, Notice, Modal, normalizePath, FuzzySuggestModal, MarkdownRenderChild, Menu, setIcon } from 'obsidian';
 import { DocumentStore, FileIO, ensureDir, forkDocument } from './storage';
-import { newManifest, newPage, digest, uid, parseManifest, safePath, toArrayBuffer, Manifest } from './model';
+import { newManifest, newPage, digest, parseManifest, safePath, Manifest, PageTemplate, Rect } from './model';
 import { Session } from './session';
 import { PdfService } from './pdf';
 import { Workspace } from './Workspace';
-import { pack, unpack, readingPdf, png } from './export';
-import type { PdfExportOptions } from './export';
-import { type EditorHandle, selectedContent } from './Editor';
+import { unpack } from './export';
 import { renderArea } from './preview';
 import { clearInkFontFaces } from './kernel-assets';
 import { assetUrl, clearAssetUrls } from './assets';
+import { normalizePreferences, PreferenceStore } from './preferences';
+import { ErrorBoundary } from './ui';
+import { TEMPLATES, paperStyle } from './templates';
+import type { ViewMemory, WorkspaceActions, WorkspaceHost } from './host';
+
 const VIEW = 'drawing-local-view';
-async function progressTask<T>(app: Plugin['app'], title: string, task: (signal: AbortSignal, progress: (current: number, total: number) => void) => Promise<T>) {
-  const controller = new AbortController(), modal = new Modal(app); modal.titleEl.setText(title);
-  modal.modalEl.addClass('ink-host-modal', 'ink-progress-modal');
-  const progress = modal.contentEl.createDiv({ text: '正在准备…' }); progress.setAttribute('role', 'status');
-  new Setting(modal.contentEl).addButton(button => button.setButtonText('取消').onClick(() => controller.abort()));
-  modal.onClose = () => controller.abort(); modal.open();
-  try { return await task(controller.signal, (i, n) => progress.setText(`${title} ${i}/${n}…`)); }
-  finally { modal.close(); }
-}
-class PdfPicker extends FuzzySuggestModal<TFile> {
-  constructor(private plugin: DrawingPlugin, private selected: (file: TFile) => Promise<void>) { super(plugin.app); this.setPlaceholder('选择同一份原 PDF（核对内容身份）'); }
-  getItems() { return this.app.vault.getFiles().filter(f => f.extension === 'pdf'); }
-  getItemText(file: TFile) { return file.path; }
-  onChooseItem(file: TFile) { void this.selected(file).catch(e => new Notice(e.message)); }
-}
+const EXPORT_FOLDER = 'Drawing Exports';
 
 class VaultIO implements FileIO {
   constructor(private plugin: DrawingPlugin) {}
@@ -41,36 +30,102 @@ class VaultIO implements FileIO {
   remove(path: string) { return this.adapter.remove(normalizePath(path)); }
   async list(path: string) { return (await this.adapter.list(normalizePath(path))).files; }
 }
+
+class PdfPicker extends FuzzySuggestModal<TFile> {
+  constructor(plugin: DrawingPlugin, placeholder: string, private selected: (file: TFile) => Promise<void>) { super(plugin.app); this.setPlaceholder(placeholder); }
+  getItems() { return this.app.vault.getFiles().filter(f => f.extension === 'pdf').sort((a, b) => b.stat.mtime - a.stat.mtime); }
+  getItemText(file: TFile) { return file.path; }
+  onChooseItem(file: TFile) { void this.selected(file).catch(e => new Notice((e as Error).message)); }
+}
+
+/** One-click creation: pick a paper or the infinite canvas; the name is optional. */
 class CreateModal extends Modal {
-  constructor(private plugin: DrawingPlugin) { super(plugin.app); }
+  constructor(private plugin: DrawingPlugin, private folder?: string) { super(plugin.app); }
   onOpen() {
     this.modalEl.addClass('ink-host-modal', 'ink-create-modal');
-    this.titleEl.setText('新建手写笔记'); let title = '新笔记';
-    new Setting(this.contentEl).setName('文档标题').addText(input => { input.inputEl.setAttribute('aria-label', '文档标题'); input.inputEl.autocomplete = 'off'; input.setValue(title).onChange(value => title = value); });
-    for (const [mode, name] of [['pages', '有边记'], ['canvas', '无边记']] as const) {
-      new Setting(this.contentEl).setName(name).setDesc(mode === 'pages' ? '按页书写，支持纸张模板与四边留白' : '自由延展，适合演算、草图与思维整理').addButton(button => button.setButtonText('创建').onClick(async () => {
-        try { await this.plugin.create(title, mode); this.close(); } catch (e) { new Notice((e as Error).message); }
-      }));
+    this.titleEl.setText('从这里开始记录');
+    const content = this.contentEl;
+    content.createEl('p', { cls: 'ink-create-intro', text: '一页笔记，或一张无限延展的画布。' });
+    const nameLabel = content.createEl('label', { cls: 'ink-create-name-label', text: '笔记名称' });
+    const name = nameLabel.createEl('input', { type: 'text', cls: 'ink-create-name', attr: { placeholder: '未命名笔记', autocomplete: 'off' } });
+    let template = this.plugin.prefs.get().newTemplate, busy = false;
+    const error = content.createDiv({ cls: 'ink-create-error', attr: { role: 'alert' } });
+    const go = async (task: () => Promise<void>) => {
+      if (busy) return; busy = true; error.empty(); content.setAttribute('aria-busy', 'true');
+      const buttons = [...content.querySelectorAll('button')]; buttons.forEach(button => button.disabled = true);
+      try { await task(); this.close(); }
+      catch (e) { error.setText((e as Error).message); }
+      finally { busy = false; content.removeAttribute('aria-busy'); buttons.forEach(button => button.disabled = false); }
+    };
+    const modes = content.createDiv({ cls: 'ink-create-modes' });
+    const notebook = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': '新建笔记本' } });
+    const notebookArt = notebook.createDiv({ cls: 'ink-create-art ink-create-notebook-art', attr: { 'aria-hidden': 'true' } });
+    const paper = notebookArt.createDiv({ cls: 'ink-create-paper' });
+    Object.assign(paper.style, paperStyle(template));
+    notebook.createEl('strong', { text: '笔记本' });
+    notebook.createSpan({ text: '课堂笔记、日常手写', cls: 'ink-create-description' });
+    const notebookAction = notebook.createDiv({ cls: 'ink-create-mode-action', text: '开始书写' }); setIcon(notebookAction.createSpan(), 'arrow-right');
+    notebook.onclick = () => void go(() => this.plugin.create('pages', { template, title: name.value, folder: this.folder }));
+
+    const canvas = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': '新建自由画布' } });
+    const board = canvas.createDiv({ cls: 'ink-create-art ink-create-board', attr: { 'aria-hidden': 'true' } });
+    board.createSpan({ cls: 'ink-board-note' }); board.createSpan({ cls: 'ink-board-path' }); board.createSpan({ cls: 'ink-board-idea' });
+    canvas.createEl('strong', { text: '自由画布' });
+    canvas.createSpan({ text: '演算、草图、整理想法', cls: 'ink-create-description' });
+    const canvasAction = canvas.createDiv({ cls: 'ink-create-mode-action', text: '打开画布' }); setIcon(canvasAction.createSpan(), 'arrow-right');
+    canvas.onclick = () => void go(() => this.plugin.create('canvas', { title: name.value, folder: this.folder }));
+
+    const paperSection = content.createDiv({ cls: 'ink-create-paper-section' });
+    paperSection.createSpan({ text: '笔记本纸张' });
+    const papers = paperSection.createDiv({ cls: 'ink-create-grid', attr: { role: 'radiogroup', 'aria-label': '新笔记纸张' } });
+    for (const option of TEMPLATES) {
+      const card = papers.createEl('button', { cls: 'ink-create-card', attr: { type: 'button', role: 'radio', 'aria-checked': String(option.id === template), 'aria-label': option.label } });
+      Object.assign(card.createSpan({ cls: 'ink-create-paper-chip', attr: { 'aria-hidden': 'true' } }).style, paperStyle(option.id));
+      card.createSpan({ text: option.label });
+      card.onclick = () => {
+        template = option.id;
+        for (const button of papers.querySelectorAll('button')) button.setAttribute('aria-checked', String(button === card));
+        Object.assign(paper.style, paperStyle(template));
+      };
     }
-    new Setting(this.contentEl).setName('导入库外 PDF').addButton(button => button.setButtonText('选择文件').onClick(() => this.plugin.chooseFile('.pdf', async file => { await this.plugin.importPdf(file.name, await file.arrayBuffer()); this.close(); })));
-    new Setting(this.contentEl).setName('恢复完整打包').addButton(button => button.setButtonText('选择打包').onClick(() => this.plugin.chooseFile('.inkpack,.zip', async file => {
-      const path = await this.plugin.uniquePath(file.name.replace(/\.(inkpack|zip)$/, '') + ' restored', 'inknote');
-      await progressTask(this.app, '恢复完整打包', async (signal, progress) => unpack(this.plugin.io, new Uint8Array(await file.arrayBuffer()), path, progress, signal)); await this.plugin.openPath(path); this.close();
-    })));
+    name.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); notebook.click(); } });
+    const files = content.createDiv({ cls: 'ink-create-links' });
+    const link = (icon: string, text: string, hint: string, run: () => void) => {
+      const button = files.createEl('button', { attr: { type: 'button' } }); setIcon(button.createSpan({ cls: 'ink-create-file-icon' }), icon);
+      const label = button.createSpan(); label.createEl('strong', { text }); label.createEl('small', { text: hint }); button.onclick = run;
+    };
+    link('file-text', '批注 PDF', '从当前笔记库选择', () => { this.close(); this.plugin.pickVaultPdf(); });
+    link('file-up', '导入 PDF', '从设备选择文件', () => this.plugin.chooseFile('.pdf', file => go(async () => { await this.plugin.importPdf(file.name, await file.arrayBuffer()); })));
+    link('archive-restore', '恢复备份', '打开 .inkpack 文件', () => this.plugin.chooseFile('.inkpack,.zip', file => go(() => this.plugin.restorePackage(file))));
+    name.focus();
   }
+  onClose() { this.contentEl.empty(); }
 }
-class DrawingView extends FileView {
+
+class DrawingView extends FileView implements WorkspaceHost {
   root?: Root; session?: Session; pdf?: PdfService; generation = 0;
+  actions: WorkspaceActions | null = null;
   private unloading?: Promise<void>;
+  private viewTimer?: ReturnType<typeof setTimeout>;
   constructor(leaf: WorkspaceLeaf, private plugin: DrawingPlugin) { super(leaf); }
+  get prefs() { return this.plugin.prefs; }
   getViewType() { return VIEW; }
-  getDisplayText() { return this.file?.basename ?? '绘图'; }
+  getIcon() { return 'pencil'; }
+  getDisplayText() { return this.file?.basename ?? '手写笔记'; }
+  onPaneMenu(menu: Menu, source: string) {
+    super.onPaneMenu(menu, source);
+    if (!this.session) return;
+    menu.addItem(item => item.setSection('action').setTitle('导出 PDF').setIcon('file-output').onClick(() => this.actions?.exportPdf()));
+    menu.addItem(item => item.setSection('action').setTitle('可编辑备份（.inkpack）').setIcon('package').onClick(() => this.actions?.exportPackage()));
+    menu.addItem(item => item.setSection('action').setTitle('历史版本…').setIcon('history').onClick(() => this.showVersions()));
+    if (this.session.manifest.pdf) menu.addItem(item => item.setSection('action').setTitle('重新关联原 PDF…').setIcon('link').onClick(() => this.relinkSource()));
+  }
   async onLoadFile(file: TFile) {
     const generation = ++this.generation;
     await this.unloading;
     if (generation !== this.generation) return;
     this.contentEl.empty(); this.contentEl.addClass('ink-view');
-    this.contentEl.createDiv({ text: '正在读取文档…', cls: 'ink-loading' });
+    this.contentEl.createDiv({ cls: 'ink-view-loading' }).createSpan({ cls: 'ink-spinner' });
     try {
       const session = this.plugin.unsavedSessions.get(file.path) ?? new Session(await DocumentStore.open(this.plugin.io, file.path));
       let pdf: PdfService | undefined;
@@ -82,126 +137,150 @@ class DrawingView extends FileView {
       this.plugin.unsavedSessions.delete(file.path);
       // Obsidian may empty contentEl before the asynchronous unload flush finishes.
       // A dedicated mount retains React's own child tree even after host detachment.
-      this.session = session; this.pdf = pdf; this.contentEl.empty(); this.root = createRoot(this.contentEl.createDiv({ cls: 'ink-react-root' }));
-      this.root.render(<Workspace session={session} pdf={pdf} onExport={(kind, page, editor, options) => this.export(kind, page, editor, options)} onReference={async (page, region, embed) => {
-        const uri = `obsidian://drawing-local?vault=${encodeURIComponent(this.app.vault.getName())}&document=${session.manifest.id}&file=${encodeURIComponent(file.path)}&page=${page}${region ? `&region=${region}` : ''}`;
-        await session.flush();
-        await navigator.clipboard.writeText(embed ? '```drawing-region\n' + JSON.stringify({ document: session.manifest.id, file: this.file?.path, region }) + '\n```' : `[${region ? session.manifest.regions.find(r => r.id === region)?.title : file.basename}](${uri})`);
-        new Notice('引用已复制');
-      }} onOpenSource={async (document, page, rect) => {
-        const path = await this.plugin.resolveDocument(undefined, document); await this.plugin.openPath(path);
-        const target = this.app.workspace.getLeavesOfType(VIEW).find(leaf => (leaf.view as DrawingView).file?.path === path)?.view as DrawingView;
-        target.session?.navigate(page, undefined, rect);
-      }} onResolveConflict={async openCopy => {
-        const path = await session.preserveConflict(); session.conflictResolved = true;
-        try { if (openCopy) await this.plugin.openPath(path); else { const current = this.file!; await this.onUnloadFile(); await this.onLoadFile(current); } }
-        catch (error) { session.conflictResolved = false; throw error; }
-      }} />);
+      this.session = session; this.pdf = pdf; this.contentEl.empty();
+      this.root = createRoot(this.contentEl.createDiv({ cls: 'ink-react-root' }));
+      this.root.render(<ErrorBoundary onReload={() => void this.reload()}><Workspace session={session} pdf={pdf} host={this}/></ErrorBoundary>);
     } catch (e) {
       if (generation !== this.generation) return;
-      this.contentEl.empty(); this.contentEl.createDiv({ cls: 'ink-error', text: (e as Error).message });
+      this.contentEl.empty();
+      const box = this.contentEl.createDiv({ cls: 'ink-view-error' });
+      box.createEl('strong', { text: '无法打开这个笔记' }); box.createEl('p', { text: (e as Error).message });
       const backup = `${file.path}.last-good.json`;
-      const recoverable = await this.plugin.io.exists(backup);
-      if (generation !== this.generation) return;
-      if (recoverable) this.contentEl.createEl('button', { text: '查看恢复记录并另存副本' }).onclick = () => void (async () => {
-        await this.plugin.showRecovery(parseManifest(await this.plugin.io.read(backup)));
-      })().catch(error => new Notice(error.message));
+      if (await this.plugin.io.exists(backup) && generation === this.generation) {
+        box.createEl('p', { text: '上一次完整保存的记录仍在，可以从中恢复一份副本。' });
+        box.createEl('button', { text: '查看可恢复的版本', cls: 'mod-cta' }).onclick = () => void (async () => {
+          await this.plugin.showRecovery(parseManifest(await this.plugin.io.read(backup)));
+        })().catch(error => new Notice((error as Error).message));
+      }
     }
-  }
-  async export(kind: 'pdf' | 'png' | 'package', page: string, editor?: EditorHandle, options: PdfExportOptions = {}) {
-    const session = this.session!;
-    await session.flush();
-    let bytes: ArrayBuffer, ext: string;
-    if (kind === 'package') { bytes = toArrayBuffer(await this.exportTask('完整打包', (signal, progress) => pack(session, progress, signal))); ext = 'inkpack'; }
-    else if (kind === 'png') {
-      const api = editor!.api, selected = selectedContent(api);
-      bytes = await (await png(session, selected)).arrayBuffer(); ext = 'png';
-    } else {
-      const api = editor?.api, selection = api ? selectedContent(api) : undefined;
-      const data = await this.exportTask('导出 PDF', (signal, progress) => readingPdf(session, progress, signal, { ...options, selection }));
-      bytes = toArrayBuffer(data); ext = 'pdf';
-    }
-    await ensureDir(this.plugin.io, 'Drawing Exports');
-    const path = await this.plugin.uniquePath(`Drawing Exports/${session.manifest.title}`, ext);
-    await this.plugin.io.writeBinary(path, bytes); new Notice(`已导出：${path}`);
-    return path;
-  }
-  async exportTask<T>(title: string, task: (signal: AbortSignal, progress: (current: number, total: number) => void) => Promise<T>) {
-    return progressTask(this.app, title, task);
   }
   async onUnloadFile() {
     ++this.generation;
     const session = this.session, root = this.root, pdf = this.pdf;
-    this.root = undefined; this.session = undefined; this.pdf = undefined;
+    if (session) this.saveViewNow();
+    this.root = undefined; this.session = undefined; this.pdf = undefined; this.actions = null;
     const operation = (async () => {
       try { await session?.flush(); }
       catch (error) {
         if (session) this.plugin.unsavedSessions.set(session.store.path, session);
-        new Notice(`关闭时保存失败，未保存内容暂留当前 Obsidian 会话；请重开笔记后重试保存。${(error as Error).message}`, 15000);
+        new Notice(`关闭时保存失败，未保存的内容暂存在本次 Obsidian 会话中。请重新打开该笔记重试保存，不要退出 Obsidian。${(error as Error).message}`, 15000);
       } finally { root?.unmount(); await pdf?.destroy(); }
     })();
     this.unloading = operation;
     try { await operation; } finally { if (this.unloading === operation) this.unloading = undefined; }
   }
+  async reload() { const file = this.file; if (!file) return; await this.onUnloadFile(); await this.onLoadFile(file); }
+
+  // ---------- WorkspaceHost ----------
+  fileName() { return this.file?.basename ?? this.session?.manifest.title ?? '手写笔记'; }
+  async saveExport(name: string, extension: string, bytes: ArrayBuffer) {
+    await ensureDir(this.plugin.io, EXPORT_FOLDER);
+    const path = await this.plugin.uniquePath(name, extension, EXPORT_FOLDER);
+    await this.plugin.io.writeBinary(path, bytes);
+    return path;
+  }
+  async openFile(path: string) {
+    const file = await this.plugin.waitForFile(path);
+    await this.app.workspace.getLeaf('tab').openFile(file);
+  }
+  async copyLink({ page, region, embed }: { page?: string; region?: string; embed?: boolean }) {
+    const session = this.session!, file = this.file!;
+    if (embed) {
+      await navigator.clipboard.writeText('```drawing-region\n' + JSON.stringify({ document: session.manifest.id, file: file.path, region }) + '\n```');
+      return;
+    }
+    const uri = `obsidian://drawing-local?vault=${encodeURIComponent(this.app.vault.getName())}&document=${session.manifest.id}&file=${encodeURIComponent(file.path)}${page ? `&page=${page}` : ''}${region ? `&region=${region}` : ''}`;
+    const index = session.manifest.pages.findIndex(p => p.id === page);
+    const title = region ? session.manifest.regions.find(r => r.id === region)?.title ?? file.basename
+      : session.manifest.mode === 'pages' && index >= 0 ? `${file.basename} · 第 ${index + 1} 页` : file.basename;
+    await navigator.clipboard.writeText(`[${title.replace(/[[\]]/g, '')}](${uri})`);
+  }
+  async openSource(document: string, page: string, rect: Rect) { await this.plugin.reveal(await this.plugin.resolveDocument(undefined, document), page, undefined, rect); }
+  async resolveConflict(openCopy: boolean) {
+    const session = this.session!;
+    const path = await session.preserveConflict(); session.conflictResolved = true;
+    try { if (openCopy) await this.plugin.openPath(path); else await this.reload(); }
+    catch (error) { session.conflictResolved = false; throw error; }
+  }
+  relinkSource() {
+    const session = this.session; if (!session?.manifest.pdf) return;
+    new PdfPicker(this.plugin, '选择同一份原 PDF（会核对文件内容）', async file => {
+      const bytes = await this.app.vault.readBinary(file);
+      if (await digest(bytes) !== session.manifest.pdf!.sha256) throw Error('这不是同一份 PDF（内容不同），旧批注没有迁移。改版教材请另建笔记。');
+      session.manifest.pdf!.path = file.path; session.metadataChanged(); await session.flush();
+      await this.reload(); new Notice('已重新关联原 PDF');
+    }).open();
+  }
+  showVersions() { if (this.session) void this.plugin.showRecovery(this.session.manifest).catch(e => new Notice((e as Error).message)); }
+  private viewKey() { return `pageink-view-${this.session?.manifest.id}`; }
+  private pendingView?: ViewMemory;
+  loadView() { const value = this.session && this.app.loadLocalStorage(this.viewKey()); return value && typeof value.zoom === 'number' ? value as ViewMemory : undefined; }
+  saveView(view: ViewMemory) { this.pendingView = view; clearTimeout(this.viewTimer); this.viewTimer = setTimeout(() => this.saveViewNow(), 800); }
+  private saveViewNow() { clearTimeout(this.viewTimer); if (this.pendingView && this.session) this.app.saveLocalStorage(this.viewKey(), this.pendingView); this.pendingView = undefined; }
+  theme() { return document.body.classList.contains('theme-dark') ? 'dark' as const : 'light' as const; }
+  onThemeChange(listener: () => void) { const ref = this.app.workspace.on('css-change', listener); return () => this.app.workspace.offref(ref); }
+  connect(actions: WorkspaceActions) { this.actions = actions; return () => { if (this.actions === actions) this.actions = null; }; }
 }
+
 export default class DrawingPlugin extends Plugin {
   io = new VaultIO(this);
   unsavedSessions = new Map<string, Session>();
   previewCache = new Map<string, HTMLCanvasElement>();
+  prefs!: PreferenceStore;
   async onload() {
-    this.register(() => { clearInkFontFaces(); clearAssetUrls(); });
+    this.prefs = new PreferenceStore(normalizePreferences(await this.loadData()), value => this.saveData(value));
+    this.register(() => { this.prefs.flush(); clearInkFontFaces(); clearAssetUrls(); });
     const face = new FontFace('Ink Notebook Sans', `url("${assetUrl('fonts/NotoSansCJKsc-Regular.otf')}")`);
     await face.load(); document.fonts.add(face); this.register(() => document.fonts.delete(face));
     this.registerView(VIEW, leaf => new DrawingView(leaf, this));
     this.registerExtensions(['inknote'], VIEW);
-    this.addRibbonIcon('pencil', '新建手写笔记', () => new CreateModal(this).open());
-    this.addCommand({ id: 'new-drawing', name: '新建手写笔记', callback: () => new CreateModal(this).open() });
-    this.addCommand({ id: 'relink-source', name: '重新关联原 PDF', callback: () => {
-      const view = this.app.workspace.getActiveViewOfType(DrawingView), session = view?.session;
-      if (!session?.manifest.pdf) { new Notice('请先打开 PDF 批注笔记。'); return; }
-      new PdfPicker(this, async file => {
-        const bytes = await this.app.vault.readBinary(file);
-        if (await digest(bytes) !== session.manifest.pdf!.sha256) throw Error('内容不是同一原件，未迁移旧批注；请为新版另建文档。');
-        session.manifest.pdf!.path = file.path; session.metadataChanged(); await session.flush();
-        await view!.onUnloadFile(); await view!.onLoadFile(view!.file!);
-      }).open();
-    }});
-    this.addCommand({ id: 'restore-copy', name: '恢复记录（另存副本）', callback: () => { void (async () => {
-      const view = this.app.workspace.getActiveViewOfType(DrawingView); if (!view?.session) { new Notice('请先打开绘图笔记。'); return; }
-      await this.showRecovery(view.session.manifest);
-    })().catch(e => new Notice(e.message)); }});
+    this.addRibbonIcon('pencil', '新建笔记', () => new CreateModal(this).open());
+    const active = () => this.app.workspace.getActiveViewOfType(DrawingView);
+    const withView = (run: (view: DrawingView) => void) => (checking: boolean) => { const view = active(); if (!view?.session) return false; if (!checking) run(view); return true; };
+    this.addCommand({ id: 'new-drawing', name: '新建笔记…', callback: () => new CreateModal(this).open() });
+    this.addCommand({ id: 'new-notebook', name: '新建笔记本', callback: () => void this.create('pages').catch(e => new Notice(e.message)) });
+    this.addCommand({ id: 'new-canvas', name: '新建自由画布', callback: () => void this.create('canvas').catch(e => new Notice(e.message)) });
+    this.addCommand({ id: 'annotate-pdf', name: '批注库中的 PDF…', callback: () => this.pickVaultPdf() });
+    this.addCommand({ id: 'import-pdf', name: '导入 PDF 并批注…', callback: () => this.chooseFile('.pdf', async file => this.importPdf(file.name, await file.arrayBuffer())) });
+    this.addCommand({ id: 'restore-package', name: '从备份恢复（.inkpack）…', callback: () => this.chooseFile('.inkpack,.zip', file => this.restorePackage(file)) });
+    this.addCommand({ id: 'export-pdf', name: '导出当前笔记为 PDF', checkCallback: withView(view => view.actions?.exportPdf()) });
+    this.addCommand({ id: 'toggle-scratch', name: '打开/收起草稿纸', checkCallback: withView(view => view.actions?.toggleScratch()) });
+    this.addCommand({ id: 'toggle-focus', name: '专注模式', checkCallback: withView(view => view.actions?.toggleFocus()) });
+    this.addCommand({ id: 'search', name: '在当前笔记中搜索', checkCallback: withView(view => view.actions?.search()) });
+    this.addCommand({ id: 'relink-source', name: '重新关联原 PDF…', checkCallback: (checking: boolean) => { const view = active(); if (!view?.session?.manifest.pdf) return false; if (!checking) view.relinkSource(); return true; } });
+    this.addCommand({ id: 'restore-copy', name: '历史版本…', checkCallback: withView(view => view.showVersions()) });
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
-      if (file instanceof TFile && file.extension === 'pdf') menu.addItem(item => item.setTitle('创建独立批注笔记').setIcon('pencil').onClick(() => { void this.importPdf(file.basename, undefined, file).catch(e => new Notice(e.message)); }));
+      if (file instanceof TFile && file.extension === 'pdf') menu.addItem(item => item.setTitle('创建批注笔记').setIcon('pencil').onClick(() => { void this.importPdf(file.basename, undefined, file).catch(e => new Notice(e.message)); }));
+      if (file instanceof TFolder) {
+        menu.addItem(item => item.setTitle('新建笔记本').setIcon('notebook-pen').onClick(() => void this.create('pages', { folder: file.path }).catch(e => new Notice(e.message))));
+        menu.addItem(item => item.setTitle('新建自由画布').setIcon('pencil').onClick(() => void this.create('canvas', { folder: file.path }).catch(e => new Notice(e.message))));
+      }
     }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { void this.maintainPdfPath(oldPath, file.path).catch(e => new Notice(e.message)); }));
     this.registerEvent(this.app.vault.on('modify', file => {
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) {
-        const view = leaf.view as DrawingView, session = view.session;
+      for (const view of this.views()) {
+        const session = view.session;
         if (session?.manifest.pdf?.path === file.path) void (async () => {
           const identity = await digest(await this.io.readBinary(file.path));
-          if (identity !== session.manifest.pdf!.sha256) {
-            session.sourceIssue = '原 PDF 内容已变化。请为新版另建文档，或重新关联同一原件。'; session.notify();
-          }
+          if (identity !== session.manifest.pdf!.sha256) { session.sourceIssue = '原 PDF 的内容变了。改版教材请另建笔记，或重新关联原来那份文件。'; session.notify(); }
         })().catch(e => { session.sourceIssue = e.message; session.notify(); });
       }
     }));
     this.registerEvent(this.app.vault.on('delete', file => {
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) {
-        const session = (leaf.view as DrawingView).session, path = session?.manifest.pdf?.path;
-        if (session && path && (path === file.path || path.startsWith(file.path + '/'))) { session.sourceIssue = '原 PDF 已删除或暂未同步到此设备。请重新关联同一原件。'; session.notify(); }
+      for (const view of this.views()) {
+        const session = view.session, path = session?.manifest.pdf?.path;
+        if (session && path && (path === file.path || path.startsWith(file.path + '/'))) { session.sourceIssue = '原 PDF 已删除，或还没有同步到这台设备。'; session.notify(); }
       }
     }));
     this.registerObsidianProtocolHandler('drawing-local', async params => {
       try {
         const path = await this.resolveDocument(params.file, params.document);
-        if (!path) throw Error('找不到引用文档。');
-        await this.openPath(path);
-        const view = this.app.workspace.getLeavesOfType(VIEW).find(leaf => (leaf.view as DrawingView).file?.path === path)?.view as DrawingView | undefined;
-        if (params.page) view?.session?.navigate(params.page, params.region);
+        await this.reveal(path, params.page, params.region);
       } catch (e) { new Notice((e as Error).message); }
     });
     this.registerMarkdownCodeBlockProcessor('drawing-region', async (source, el, context) => {
       const child = new MarkdownRenderChild(el); context.addChild(child);
+      el.addClass('ink-embed');
       let controller = new AbortController(), timer: ReturnType<typeof setTimeout> | undefined, disposed = false, currentPath = '', sourcePath = '';
       child.register(() => { disposed = true; controller.abort(); clearTimeout(timer); });
       const render = async () => {
@@ -211,8 +290,8 @@ export default class DrawingPlugin extends Plugin {
           const store = await DocumentStore.open(this.io, path), session = new Session(store);
           sourcePath = store.manifest.pdf?.path ?? '';
           const region = store.manifest.regions.find(r => r.id === ref.region);
-          if (!region) throw Error('区域不存在或尚未同步。');
-          const page = store.manifest.pages.find(p => p.id === region.pageId); if (!page) throw Error('引用页已删除。');
+          if (!region) throw Error('这个书签已删除，或还没有同步到这台设备。');
+          const page = store.manifest.pages.find(p => p.id === region.pageId); if (!page) throw Error('书签所在的页面已删除。');
           const key = store.manifest.id + '/' + store.manifest.revision + '/' + region.id;
           let cached = this.previewCache.get(key);
           if (!cached) {
@@ -224,14 +303,11 @@ export default class DrawingPlugin extends Plugin {
           }
           task.signal.throwIfAborted();
           const canvas = document.createElement('canvas'); canvas.width = cached.width; canvas.height = cached.height; canvas.getContext('2d')!.drawImage(cached, 0, 0);
-          canvas.style.maxWidth = '100%'; canvas.style.height = 'auto'; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', region.title);
-          el.replaceChildren(canvas);
-          el.createEl('button', { text: region.title }).onclick = () => void (async () => {
-            const target = await this.resolveDocument(ref.file, ref.document); await this.openPath(target);
-            const view = this.app.workspace.getLeavesOfType(VIEW).find(leaf => (leaf.view as DrawingView).file?.path === target)?.view as DrawingView;
-            view.session?.navigate(region.pageId, region.id);
-          })().catch(e => new Notice(e.message));
-        } catch (e) { if (!task.signal.aborted && !disposed) el.setText((e as Error).message); }
+          canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', region.title);
+          const open = createEl('button', { cls: 'ink-embed-title', text: `${region.title} · ${store.manifest.title}` });
+          open.onclick = () => void this.reveal(currentPath, region.pageId, region.id).catch(e => new Notice(e.message));
+          el.replaceChildren(canvas, open);
+        } catch (e) { if (!task.signal.aborted && !disposed) { el.empty(); el.createDiv({ cls: 'ink-embed-error', text: (e as Error).message }); } }
       };
       const schedule = () => { clearTimeout(timer); timer = setTimeout(() => { if (!disposed) void render(); }, 500); };
       child.registerEvent(this.app.vault.on('modify', file => { if (file.path === currentPath) schedule(); else if (file.path === sourcePath) { this.previewCache.clear(); schedule(); } }));
@@ -240,6 +316,7 @@ export default class DrawingPlugin extends Plugin {
     });
   }
 
+  views() { return this.app.workspace.getLeavesOfType(VIEW).map(leaf => leaf.view).filter((view): view is DrawingView => view instanceof DrawingView); }
   async resolveDocument(path?: string, id?: string) {
     if (path && await this.io.exists(path)) {
       const manifest = parseManifest(await this.io.read(path)); if (!id || manifest.id === id) return path;
@@ -247,53 +324,107 @@ export default class DrawingPlugin extends Plugin {
     if (id) for (const file of this.app.vault.getFiles().filter(f => f.extension === 'inknote')) {
       try { if (parseManifest(await this.io.read(file.path)).id === id) return file.path; } catch { /* An unrelated damaged note must not break all references. */ }
     }
-    throw Error('引用文档不存在或尚未同步。');
+    throw Error('找不到引用的笔记（可能已删除，或还没有同步到这台设备）。');
+  }
+  /** Opens a note and scrolls to a page, bookmark or rectangle once its editor is ready. */
+  async reveal(path: string, page?: string, region?: string, rect?: Rect) {
+    await this.openPath(path);
+    if (!page) return;
+    const view = this.views().find(v => v.file?.path === path);
+    for (let i = 0; i < 100 && !view?.session; i++) await new Promise(resolve => setTimeout(resolve, 50));
+    view?.session?.navigate(page, region, rect);
   }
   async showRecovery(manifest: Manifest) {
     const records = await new DocumentStore(this.io, '', manifest).recoveryRecords();
-    if (!records.some(record => record.manifest.revision === manifest.revision)) records.push({ path: '', manifest });
-    const modal = new Modal(this.app); modal.titleEl.setText('恢复记录 · 另存副本');
+    if (!records.some(record => record.manifest.revision === manifest.revision)) records.unshift({ path: '', manifest });
+    const modal = new Modal(this.app); modal.titleEl.setText('历史版本');
     modal.modalEl.addClass('ink-host-modal', 'ink-recovery-modal');
-    for (const record of records) new Setting(modal.contentEl).setName(new Date(record.manifest.modified).toLocaleString()).addButton(button => button.setButtonText('另存恢复').onClick(async () => {
-      try { const path = await this.uniquePath(`${record.manifest.title} recovered`, 'inknote'); await forkDocument(this.io, record.manifest, path); modal.close(); await this.openPath(path); } catch (error) { new Notice((error as Error).message); }
-    }));
+    modal.contentEl.createEl('p', { cls: 'ink-recovery-intro', text: '最近 20 次保存。恢复会另存为一份新笔记，当前笔记保持不变。' });
+    const list = modal.contentEl.createDiv({ cls: 'ink-recovery-list' });
+    for (const [index, record] of records.entries()) {
+      const row = list.createDiv({ cls: 'ink-recovery-row' });
+      const info = row.createDiv({ cls: 'ink-recovery-info' });
+      info.createEl('strong', { text: new Date(record.manifest.modified).toLocaleString() });
+      info.createSpan({ text: `${record.manifest.mode === 'pages' ? `${record.manifest.pages.length} 页` : '画布'}${index === 0 ? ' · 最新' : ''}` });
+      row.createEl('button', { text: '恢复为副本' }).onclick = () => void (async () => {
+        const path = await this.uniquePath(`${record.manifest.title} 恢复`, 'inknote', this.folderOf(manifest));
+        await forkDocument(this.io, record.manifest, path); modal.close(); await this.openPath(path);
+        new Notice(`已恢复为「${path}」`);
+      })().catch(error => new Notice((error as Error).message));
+    }
     modal.open();
   }
-  async uniquePath(title: string, ext: string) {
-    title = title.replace(/[<>:"\\|?*]/g, '-').trim() || 'Untitled';
-    safePath(`${title}.${ext}`);
-    let path = `${title}.${ext}`, n = 1; while (await this.io.exists(path)) path = `${title} ${n++}.${ext}`; return path;
+  private folderOf(manifest: Manifest) { return this.views().find(v => v.session?.manifest.id === manifest.id)?.file?.parent?.path ?? ''; }
+  /** A free path such as `Folder/Title 2.ext`; never overwrites. */
+  async uniquePath(title: string, extension: string, folder = '') {
+    title = title.replace(/[\\/<>:"|?*#^[\]]/g, '-').replace(/\s+/g, ' ').trim() || '未命名';
+    const prefix = folder && folder !== '/' ? `${normalizePath(folder)}/` : '';
+    let path = `${prefix}${title}.${extension}`, n = 2;
+    while (await this.io.exists(path)) path = `${prefix}${title} ${n++}.${extension}`;
+    return safePath(path);
+  }
+  /** Where new notes go: the given folder, else Obsidian's "new file location" for the active file. */
+  newFolder(folder?: string) {
+    if (folder !== undefined) return folder === '/' ? '' : folder;
+    const parent = this.app.fileManager.getNewFileParent(this.app.workspace.getActiveFile()?.path ?? '');
+    return parent.isRoot() ? '' : parent.path;
+  }
+  async waitForFile(path: string) {
+    for (let i = 0; i < 40; i++) {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile) return file;
+      await new Promise(resolve => setTimeout(resolve, 75));
+    }
+    throw Error(`文件尚未出现在库中：${path}`);
   }
   async openPath(path: string) {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) { await new Promise(resolve => setTimeout(resolve, 150)); }
-    const target = this.app.vault.getAbstractFileByPath(path);
-    if (!(target instanceof TFile)) throw Error(`文件尚未同步：${path}`);
+    const file = await this.waitForFile(path);
     const existing = this.app.workspace.getLeavesOfType(VIEW).find(leaf => (leaf.view as DrawingView).file?.path === path);
     const leaf = existing ?? this.app.workspace.getLeaf(false);
-    await leaf.openFile(target); this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    if (!existing) await leaf.openFile(file);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
   }
-  async create(title: string, mode: 'pages' | 'canvas') {
-    const manifest = newManifest(title, mode), path = await this.uniquePath(title, 'inknote');
+  async create(mode: 'pages' | 'canvas', options: { template?: PageTemplate; title?: string; folder?: string } = {}) {
+    const folder = this.newFolder(options.folder);
+    const path = await this.uniquePath(options.title?.trim() || (mode === 'canvas' ? '未命名画布' : '未命名笔记'), 'inknote', folder);
+    const manifest = newManifest(path.slice(path.lastIndexOf('/') + 1, -'.inknote'.length), mode, options.template ?? (mode === 'canvas' ? 'dotted' : this.prefs.get().newTemplate));
+    if (mode === 'pages' && options.template) this.prefs.update({ newTemplate: options.template });
     await new DocumentStore(this.io, path, manifest).commit(new Map()); await this.openPath(path);
+  }
+  pickVaultPdf() {
+    if (!this.app.vault.getFiles().some(f => f.extension === 'pdf')) { new Notice('库中还没有 PDF。可以用「导入 PDF」从设备中选择。'); return; }
+    new PdfPicker(this, '选择要批注的 PDF', file => this.importPdf(file.basename, undefined, file)).open();
   }
   chooseFile(accept: string, callback: (file: File) => Promise<void>) {
     const input = document.createElement('input'); input.type = 'file'; input.accept = accept;
     input.onchange = () => { if (input.files?.[0]) void callback(input.files[0]).catch(e => new Notice(e.message)); }; input.click();
   }
-  async importPdf(name: string, bytes?: ArrayBuffer, file?: TFile) {
-    const manifest = newManifest(name.replace(/\.pdf$/i, ''), 'pages');
-    bytes ??= await this.app.vault.readBinary(file!);
-    let path = file?.path;
-    if (!path) { await ensureDir(this.io, `${manifest.resourceDir}/assets`); path = `${manifest.resourceDir}/assets/source.pdf`; await this.io.writeBinary(path, bytes); }
-    manifest.pdf = { path, sha256: await digest(bytes), size: bytes.byteLength };
-    const pdf = await PdfService.fromBytes(bytes.slice(0));
+  async restorePackage(file: File) {
+    const notice = new Notice('正在恢复备份…', 0);
     try {
-      manifest.pages = [];
-      for (let i = 1; i <= pdf.document.numPages; i++) { const p = await pdf.document.getPage(i), viewport = p.getViewport({ scale: 1 }); manifest.pages.push({ ...newPage(), pdfPage: i, width: viewport.width, height: viewport.height }); }
-    } finally { await pdf.destroy(); }
-    const entry = await this.uniquePath(manifest.title, 'inknote');
-    await new DocumentStore(this.io, entry, manifest).commit(new Map()); await this.openPath(entry);
+      const path = await this.uniquePath(file.name.replace(/\.(inkpack|zip)$/i, ''), 'inknote', this.newFolder());
+      await unpack(this.io, new Uint8Array(await file.arrayBuffer()), path, (done, total) => notice.setMessage(`正在恢复备份 ${done}/${total}…`));
+      await this.openPath(path);
+    } finally { notice.hide(); }
+  }
+  /** A vault PDF is referenced in place (note goes beside it); an outside PDF is copied into the note's resources. */
+  async importPdf(name: string, bytes?: ArrayBuffer, file?: TFile) {
+    const notice = new Notice('正在准备 PDF…', 0);
+    try {
+      const folder = file ? (file.parent && !file.parent.isRoot() ? file.parent.path : '') : this.newFolder();
+      const entry = await this.uniquePath(name.replace(/\.pdf$/i, ''), 'inknote', folder);
+      const manifest = newManifest(entry.slice(entry.lastIndexOf('/') + 1, -'.inknote'.length), 'pages');
+      bytes ??= await this.app.vault.readBinary(file!);
+      const pdf = await PdfService.fromBytes(bytes.slice(0));
+      try {
+        manifest.pages = [];
+        for (let i = 1; i <= pdf.document.numPages; i++) { const p = await pdf.document.getPage(i), viewport = p.getViewport({ scale: 1 }); manifest.pages.push({ ...newPage({ width: viewport.width, height: viewport.height }), pdfPage: i }); }
+      } finally { await pdf.destroy(); }
+      let path = file?.path;
+      if (!path) { await ensureDir(this.io, `${manifest.resourceDir}/assets`); path = `${manifest.resourceDir}/assets/source.pdf`; await this.io.writeBinary(path, bytes); }
+      manifest.pdf = { path, sha256: await digest(bytes), size: bytes.byteLength };
+      await new DocumentStore(this.io, entry, manifest).commit(new Map()); await this.openPath(entry);
+    } finally { notice.hide(); }
   }
   async maintainPdfPath(oldPath: string, newPath: string) {
     const moved = (path: string) => path === oldPath ? newPath : path.startsWith(oldPath + '/') ? newPath + path.slice(oldPath.length) : path;
@@ -302,12 +433,9 @@ export default class DrawingPlugin extends Plugin {
       await this.io.write(`${newPath}.last-good.json`, await this.io.read(`${oldPath}.last-good.json`));
       await this.io.remove(`${oldPath}.last-good.json`);
     }
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW)) {
-      const view = leaf.view as DrawingView;
-      if (view.session) view.session.store.path = moved(view.session.store.path);
-    }
+    for (const view of this.views()) if (view.session) view.session.store.path = moved(view.session.store.path);
     for (const file of this.app.vault.getFiles().filter(file => file.extension === 'inknote')) {
-      const view = this.app.workspace.getLeavesOfType(VIEW).map(leaf => leaf.view as DrawingView).find(view => view.file?.path === file.path);
+      const view = this.views().find(view => view.file?.path === file.path);
       if (view?.session) {
         const session = view.session;
         if (session.manifest.pdf && moved(session.manifest.pdf.path) !== session.manifest.pdf.path) { session.manifest.pdf.path = moved(session.manifest.pdf.path); session.metadataChanged(); await session.flush(); }

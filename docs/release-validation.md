@@ -1,5 +1,7 @@
 # PageInk 0.1.1 发布验证
 
+此页保留 0.1.1 初始发布构建的验证记录。后续工作区改版的构建哈希与实际结果见 [工作区改版](workspace-redesign.md)。
+
 正式名称：页墨手记 PageInk；插件 ID：`pageink`。自有代码采用 MIT，第三方代码及字体保留原许可。当前界面为简体中文。
 
 本版将原开发版的外部字体、PDF Worker、CMap 与解码资源内嵌到 `main.js`，适配社区目录只安装 `main.js`、`manifest.json`、`styles.css` 的行为。资源在本地按需读取，不从网络下载、不运行自更新或自安装。

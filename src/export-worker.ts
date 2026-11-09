@@ -2,7 +2,7 @@ import { PDFDocument, degrees, rgb } from 'pdf-lib';
 import PDFKit from 'pdfkit/js/pdfkit.standalone.js';
 import svgToPdf from 'svg-to-pdfkit';
 import { Buffer } from 'buffer';
-import { templateLines, templateSpec } from './templates';
+import { templateLines, templateSpec, templateDots } from './templates';
 import type { Page, Rect } from './model';
 import type { VectorLayer } from './vector-export';
 
@@ -31,6 +31,7 @@ async function addPage(p: Page, box: Rect, paperKind: string, paginated: boolean
   if (!p.pdfPage && paginated && p.template !== 'blank') {
     const hex = templateSpec(p.template).color, color = rgb(parseInt(hex.slice(1,3),16)/255,parseInt(hex.slice(3,5),16)/255,parseInt(hex.slice(5,7),16)/255);
     for (const [x1,y1,x2,y2] of templateLines(p.template,box,box)) page.drawLine({start:{x:ox+(x1-box.x)*scale,y:oy+(box.height-y1+box.y)*scale},end:{x:ox+(x2-box.x)*scale,y:oy+(box.height-y2+box.y)*scale},color,thickness:scale});
+    for (const [x,y] of templateDots(p.template,box,box)) page.drawCircle({x:ox+(x-box.x)*scale,y:oy+(box.height-y+box.y)*scale,size:1.15*scale,color});
   }
   if (source && p.pdfPage) {
     const original = source.getPage(p.pdfPage - 1), crop = original.getCropBox();

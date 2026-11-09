@@ -3,12 +3,13 @@ import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 export type Element = ExcalidrawElement;
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Margins = { top: number; right: number; bottom: number; left: number };
+export type PageTemplate = 'blank' | 'ruled' | 'grid' | 'dotted';
 export interface Page {
   id: string;
   width: number;
   height: number;
   margins: Margins;
-  template: 'blank' | 'ruled' | 'grid';
+  template: PageTemplate;
   pdfPage?: number;
 }
 export interface Region extends Rect { id: string; pageId: string; title: string }
@@ -30,13 +31,17 @@ export interface Manifest {
   modified: number;
 }
 export const uid = () => crypto.randomUUID();
-export function newPage(): Page {
-  return { id: uid(), width: 794, height: 1123, margins: { top: 48, right: 48, bottom: 48, left: 48 }, template: 'blank' };
+/** A4 at 96 dpi. Paper is exactly the page; margins are opt-in extra writing space. */
+export const A4 = { width: 794, height: 1123 } as const;
+export const NO_MARGINS: Margins = { top: 0, right: 0, bottom: 0, left: 0 };
+export function newPage(like?: Partial<Pick<Page, 'width' | 'height' | 'margins' | 'template'>>): Page {
+  return { id: uid(), width: like?.width ?? A4.width, height: like?.height ?? A4.height,
+    margins: { ...(like?.margins ?? NO_MARGINS) }, template: like?.template ?? 'blank' };
 }
-export function newManifest(title: string, mode: Manifest['mode']): Manifest {
+export function newManifest(title: string, mode: Manifest['mode'], template: PageTemplate = mode === 'canvas' ? 'dotted' : 'blank'): Manifest {
   const id = uid();
   return { format: 'drawing-local', schema: 1, id, revision: uid(), parent: null, title, mode,
-    resourceDir: `Drawing Resources/${id}`, pages: [newPage()], regions: [], chunks: {}, assets: {}, modified: Date.now() };
+    resourceDir: `Drawing Resources/${id}`, pages: [newPage({ template })], regions: [], chunks: {}, assets: {}, modified: Date.now() };
 }
 export function parseManifest(text: string): Manifest {
   const value = JSON.parse(text) as Manifest;
@@ -48,7 +53,7 @@ export function parseManifest(text: string): Manifest {
     if (typeof page.id !== 'string' || !page.id || ids.has(page.id) || !Number.isFinite(page.width) || page.width <= 0 || !Number.isFinite(page.height) || page.height <= 0 || !page.margins || ['top','right','bottom','left'].some(key => !Number.isFinite(page.margins[key as keyof Margins]) || page.margins[key as keyof Margins] < 0)) throw Error('文档页面参数损坏；原文件未修改。');
     ids.add(page.id);
   }
-  if (value.mode === 'canvas' && value.pages.length !== 1) throw Error('无边记入口只能包含一个画布面。');
+  if (value.mode === 'canvas' && value.pages.length !== 1) throw Error('自由画布文档只能包含一张画布。');
   for (const region of value.regions) if (!region.id || typeof region.title !== 'string' || ![region.x,region.y,region.width,region.height].every(Number.isFinite) || region.width <= 0 || region.height <= 0) throw Error('文档区域参数损坏；原文件未修改。');
   safePath(value.resourceDir);
   for (const path of Object.values(value.chunks)) safePath(path);
