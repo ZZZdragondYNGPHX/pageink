@@ -57,12 +57,12 @@ function PdfRaster({ page, placement, pdf, scale, views }: { page: Page; placeme
     const area = sceneViewport(v);
     const x = Math.max(0, area.x - placement.x), y = Math.max(0, area.y - placement.y);
     const width = Math.min(page.width, area.x + area.width - placement.x) - x, height = Math.min(page.height, area.y + area.height - placement.y) - y;
-    if (wanted <= scale + 0.05 || width <= 0 || height <= 0) { target.style.display = 'none'; return; }
+    if (wanted <= scale + 0.05 || width <= 0 || height <= 0) { target.setCssStyles({ display: 'none' }); return; }
     const abort = new AbortController(), rect = { x, y, width, height }, rendered = document.createElement('canvas');
     pdf.render(page, rendered, Math.min(wanted, Math.sqrt(8_000_000 / (width * height))), rect, abort.signal).then(() => {
       if (abort.signal.aborted) return;
       target.width = rendered.width; target.height = rendered.height; target.getContext('2d')!.drawImage(rendered, 0, 0);
-      Object.assign(target.style, { display: 'block', left: `${page.margins.left + x}px`, top: `${page.margins.top + y}px`, width: `${width}px`, height: `${height}px` });
+      target.setCssStyles({ display: 'block', left: `${page.margins.left + x}px`, top: `${page.margins.top + y}px`, width: `${width}px`, height: `${height}px` });
     }).catch(() => {}).finally(() => { rendered.width = rendered.height = 0; });
     return () => abort.abort();
   }, [settled, scale, pdf, page.pdfPage]);
@@ -92,7 +92,7 @@ export function GridLayer({ views, template, dark }: { views: ViewStore; templat
   useEffect(() => {
     const apply = () => {
       const el = ref.current; if (!el) return;
-      if (template !== 'dotted' && template !== 'grid' && template !== 'ruled') { el.style.backgroundImage = 'none'; return; }
+      if (template !== 'dotted' && template !== 'grid' && template !== 'ruled') { el.setCssStyles({ backgroundImage: 'none' }); return; }
       const v = views.get(), base = templateSpec(template === 'ruled' ? 'grid' : template).step;
       let step = base * v.zoom; while (step < 14) step *= 4;
       const color = dark ? 'rgba(255,255,255,.16)' : template === 'dotted' ? 'rgba(80,96,115,.32)' : 'rgba(80,96,115,.12)';

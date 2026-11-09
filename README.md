@@ -25,7 +25,7 @@ Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite 
 
 需要 **Obsidian 1.12.7 或更高版本**。当前已在 Windows 验证；移动端尚未完成真机验证。
 
-1. 从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.3.zip`。
+1. 从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.4.zip`。
 2. 解压，将 `pageink` 文件夹放入笔记库的 `.obsidian/plugins/`。
 3. 重启 Obsidian，在「设置 → 第三方插件」中启用「PageInk」。
 4. 点击侧边栏的笔记本图标，打开笔记库。
@@ -44,7 +44,19 @@ Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite 
 
 PageInk 免费、开源，无账号要求、无广告、无遥测，不发起运行时网络请求。字体、PDF 处理和解码资源随插件提供，因此主脚本约 46 MB。
 
+主脚本超过 Obsidian Sync Standard 的 5 MB 单文件同步上限，使用该方案时请在每台设备分别安装插件。
+
 仅在你主动选择导入 PDF、图片或备份文件时读取所选库外文件，并将所需内容复制入库。
+
+## Installation and usage
+
+PageInk requires Obsidian 1.12.7 or later. The interface is currently in Simplified Chinese. Desktop workflows have been tested on Windows; mobile devices have not been verified yet.
+
+1. Download the installation ZIP from [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest), extract the `pageink` folder into your vault's `.obsidian/plugins/` directory, and enable **PageInk** in Community plugins.
+2. Open the library using the notebook icon. Choose **文笺** for a Markdown file, **手札** for paginated writing and drawing, or **长卷** for an infinite canvas. Use **新建与导入** to import a PDF or backup.
+3. Notes save locally. To back up a drawing, choose **导出 → 可编辑备份**; copying an `.inknote` file alone does not include its ink and attachments. PDF and PNG exports are also available.
+
+PageInk works offline without an account, ads, or telemetry. Fonts and PDF resources are bundled. The main script exceeds the 5 MB file limit of Obsidian Sync Standard, so install the plugin separately on each device when using that plan. Files outside the vault are read only when you select them for import. Original code is MIT-licensed; bundled dependencies retain their own licenses.
 
 ## 开发与许可
 

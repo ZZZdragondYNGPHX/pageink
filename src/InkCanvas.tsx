@@ -481,7 +481,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       });
       if (card) { event.stopPropagation(); event.preventDefault(); latest.current.onCardEdit(card); }
     }}
-    onPointerLeave={() => { if (eraserCursor.current) eraserCursor.current.style.display = 'none'; }}
+    onPointerLeave={() => { eraserCursor.current?.setCssStyles({ display: 'none' }); }}
     onPointerDownCapture={onPointerDown} onPointerMoveCapture={onPointerMove} onPointerUpCapture={onPointerUp} onPointerCancelCapture={onPointerCancel}>
     {kind === 'pages' ? <PaperLayer layout={layout} views={views} pdf={pdf} sourceIssue={session.sourceIssue}/> : <GridLayer views={views} template={kind === 'canvas' ? session.manifest.pages[0].template : 'blank'} dark={dark}/>}
     {initial ? <Excalidraw langCode="zh-CN" excalidrawAPI={setApi} theme={dark ? 'dark' : 'light'} viewModeEnabled={props.readOnly ?? false}
