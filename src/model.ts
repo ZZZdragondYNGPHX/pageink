@@ -1,4 +1,5 @@
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
+import { validateProperties, type JsonProperties } from './properties';
 
 export type Element = ExcalidrawElement;
 export type Rect = { x: number; y: number; width: number; height: number };
@@ -28,6 +29,7 @@ export interface Manifest {
   chunks: Record<string, string>;
   assets: Record<string, Asset>;
   pdf?: { path: string; sha256: string; size: number };
+  properties?: JsonProperties;
   modified: number;
 }
 export const uid = () => crypto.randomUUID();
@@ -59,6 +61,7 @@ export function parseManifest(text: string): Manifest {
   for (const path of Object.values(value.chunks)) safePath(path);
   for (const asset of Object.values(value.assets)) safePath(asset.path);
   if (value.pdf) safePath(value.pdf.path);
+  if (Object.hasOwn(value, 'properties')) validateProperties(value.properties);
   return value;
 }
 export function safePath(path: string): string {

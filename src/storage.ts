@@ -1,4 +1,6 @@
 import { Manifest, Element, parseManifest, uid, retargetInternalSources, safePath } from './model';
+import { validateMixed } from './mixed';
+import { validateCards } from './cards';
 
 /** Vault-compatible I/O. Entry publication happens only after immutable dependencies exist. */
 export interface FileIO {
@@ -39,7 +41,7 @@ export class DocumentStore {
       if (!Array.isArray(chunk)) throw new Error(`损坏的数据块：${path}`);
       elements.push(...chunk);
     }
-    return elements;
+    validateMixed(elements, this.manifest); validateCards(elements, this.manifest); return elements;
   }
   commit(dirty: Map<string, readonly Element[]>, metadata?: Manifest): Promise<Manifest> {
     // Callers pass immutable element snapshots; concurrent edits wait behind the current publication.

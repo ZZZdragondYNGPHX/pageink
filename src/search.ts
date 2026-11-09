@@ -22,8 +22,8 @@ export async function searchDocument(session: Session, pdf: PdfService | undefin
     signal.throwIfAborted(); onProgress(index, pages.length);
     for (const e of await session.read(page.id)) {
       if (e.type !== 'text' || e.isDeleted) continue;
-      const at = e.text.toLocaleLowerCase().indexOf(term);
-      if (at >= 0) { const s = snippet(e.text, at, term.length); hits.push({ page: page.id, pageIndex: index, kind: 'text', snippet: s.text, at: s.at, rect: bounds([e]) ?? undefined }); }
+      const text = e.originalText ?? e.text, at = text.toLocaleLowerCase().indexOf(term);
+      if (at >= 0) { const s = snippet(text, at, term.length); hits.push({ page: page.id, pageIndex: index, kind: 'text', snippet: s.text, at: s.at, rect: bounds([e]) ?? undefined }); }
     }
     if (pdf && page.pdfPage) {
       const runs = await pdf.textRuns(page);

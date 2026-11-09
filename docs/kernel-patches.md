@@ -21,6 +21,7 @@
 | 真正局部擦 | `geometry.ts` 几何切割，内核一次更新替代逐对象重建；保留压力、旋转及撤销，锁定对象不擦。 |
 | 资源及样式隔离 | `assets.ts` 使用随主脚本内嵌的资源与受控 Blob URL，不改上游全局资产变量；`kernel-css.mjs` 作用域覆盖编辑器和独立 portal，并改名动画、界面字体。 |
 | 字体生命周期 | 只登记/释放本插件创建的 FontFace；去掉远端字体 fallback，资源来自安装包。旧宿主的既有字体不由本插件清理。 |
+| 卡片尺寸与连线 | `inkRebind` 在分离的箭头／文字副本上调用上游 `updateBoundElements`，程序更新卡片尺寸时一并更新绑定连线，随后与卡片合为一次正文撤销。不修改原始笔迹。 |
 | 中文导出 | 本地 Noto CJK 字体；SVG 图层经本地 `export-worker.ts` 组装，不依赖远端字体服务。 |
 
 每个字符串补丁检查精确出现次数，未知上游结构直接构建失败。不得删除匹配校验以“修复”升级构建；先理解上游变化，再迁移对应权威职责，避免双历史/双场景系统。
@@ -28,6 +29,14 @@
 ## 工作区边界
 
 `InkCanvas.tsx` 统一承接正文、自由画布和草稿纸的输入；`layout.ts` 仅投影连续页坐标，保存时还原页内坐标，保留完整原始笔迹。`PaperLayer.tsx` 负责纸张和 PDF 背景，`view.ts` 管理视野。`Workspace.tsx` 组织工作流程，工具、侧栏和草稿纸分别由 `Toolbar.tsx`、`Sidebar.tsx`、`Scratch.tsx` 承接；`host.ts` 隔离 Obsidian 操作。界面偏好与文档数据分开存储，不修改旧文档格式。
+
+原生文字与统一笔记库由 `notes-host.tsx` 接入，`Library.tsx` 不直接调用宿主 API。Markdown 正文、保存及撤销归原生 `MarkdownView` 所有，不放入绘图会话或内核历史；引用共享稳定 ID。具体边界与验证见 [原生文字工作区](native-notes.md)。
+
+混合笔记本的文字投影与段落锚定由 `mixed.ts` / `mixed-host.ts` / `mixed-render.ts` 管理，保持原生正文与绘图投影的历史分离。文字投影使用普通锁定文字对象，必须保留元素 ID；重排只平移绑定笔迹，不修改原始几何采样。内容与页面留白变更合为一次正文撤销。Markdown 原件快照作为独立资源完整备份，恢复的可编辑 `.md` 与快照分开。具体流程与边界见 [混合笔记本](mixed-notebooks.md)。
+
+画板卡片由 `cards.ts` / `cards-host.ts` / `cards-render.ts` 管理。文字卡片复用原生块引用，临时草稿通过公开原生编辑器 API 提交；手写卡片保存区域预览和完整原件备份。连线和分组使用内核原生绑定。具体数据与流程见 [画板内容卡片](board-cards.md)。
+
+跨笔记搜索由 `library-search.ts` / `library-search-host.ts` 按需读取，不保存第二份正文索引。属性由 `properties.ts` / `properties-host.ts` 处理，仅修改发生编辑的键，检查并发变化；Markdown 使用公开 `processFrontMatter`，手写文档沿用会话与清单保存。具体范围见 [统一笔记库](unified-library.md) 与 [笔记属性](note-properties.md)。
 
 ## 升级验证
 

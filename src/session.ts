@@ -85,6 +85,19 @@ export class Session {
     const after = structuredClone({ pages: this.manifest.pages, regions: this.manifest.regions });
     this.bodyHistory.layout(before, after); this.metadataChanged();
   }
+  /** Text reflow and page growth share one body undo step. Assets are immutable and retained. */
+  editContent(groups: ReadonlyMap<string, readonly Element[]>, edit: () => void = () => {}) {
+    if (groups.has('scratch')) throw Error('正文排版不能修改草稿纸历史。');
+    const before = structuredClone({ pages: this.manifest.pages, regions: this.manifest.regions });
+    const applied: Applied[] = [];
+    for (const [id, elements] of groups) { const change = this.apply(id, elements); if (change) applied.push(change); }
+    edit();
+    const after = structuredClone({ pages: this.manifest.pages, regions: this.manifest.regions });
+    const changed = JSON.stringify(before) !== JSON.stringify(after);
+    this.bodyHistory.pushMany(applied, changed ? before : undefined, changed ? after : undefined);
+    if (changed) this.metadataDirty = true;
+    if (applied.length || changed) this.schedule();
+  }
   schedule() {
     this.generation++; if (this.saveState !== 'failed') this.saveState = 'pending'; this.notify();
     clearTimeout(this.timer); this.timer = setTimeout(() => void this.save().catch(() => {}), 350);
@@ -92,6 +105,7 @@ export class Session {
   async loadFiles(elements?: readonly Element[]) {
     const wanted = elements ? new Set(elements.filter(e => e.type === 'image').map(e => (e as any).fileId)) : null;
     for (const [id, asset] of Object.entries(this.manifest.assets)) {
+      if (!asset.mimeType.startsWith('image/')) continue;
       if (this.files[id] || wanted && !wanted.has(id)) continue;
       const bytes = await this.store.io.readBinary(asset.path);
       const dataURL = await new Promise<string>((resolve, reject) => {

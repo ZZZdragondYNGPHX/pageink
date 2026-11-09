@@ -21,7 +21,7 @@ for (const match of [...engineCss.matchAll(/url\("\.\/fonts\/([^\"]+)"\)/g)]) {
   const bytes = await readFile(`node_modules/@excalidraw/excalidraw/dist/prod/fonts/${match[1]}`);
   engineCss = engineCss.replace(match[0], `url("data:font/woff2;base64,${bytes.toString('base64')}")`);
 }
-await writeFile('dist/styles.css', isolateKernelCss(engineCss) + '\n' + await readFile('src/styles.css', 'utf8'));
+await writeFile('dist/styles.css', isolateKernelCss(engineCss) + '\n' + await readFile('src/styles.css', 'utf8') + '\n' + await readFile('src/properties.css', 'utf8'));
 await mkdir('dist/assets', { recursive: true });
 await cp('node_modules/@excalidraw/excalidraw/dist/prod/fonts', 'dist/assets/fonts', { recursive: true });
 await cp('vendor/fonts', 'dist/assets/fonts', { recursive: true });

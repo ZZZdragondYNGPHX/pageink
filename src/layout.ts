@@ -1,6 +1,7 @@
 import type { Element, Page, Rect } from './model';
 import { pageRect, uid } from './model';
 import { bounds } from './geometry';
+import { inkAnchor } from './mixed';
 
 /** Vertical gap between stacked pages, in page units. */
 export const PAGE_GAP = 40;
@@ -106,6 +107,8 @@ export class PageScene {
     const decide = (e: Element): string => {
       const container = e.type === 'text' && e.containerId ? byId.get(e.containerId) : undefined;
       if (container) return decide(container);
+      const anchor = inkAnchor(e), paragraph = anchor ? byId.get(anchor.elementId) : undefined;
+      if (paragraph?.type === 'text') return decide(paragraph);
       const g = e.groupIds?.[e.groupIds.length - 1];
       if (g && groupPage.has(g)) return groupPage.get(g)!;
       return moved(e) ? locate(bounds([e])) : this.owner.get(e.id)!;
@@ -140,6 +143,7 @@ function reidentify(elements: readonly Element[], taken: ReadonlySet<string>): E
     if (copy.boundElements) copy.boundElements = copy.boundElements.map((b: any) => ({ ...b, id: map(b.id) }));
     for (const key of ['startBinding', 'endBinding']) if (copy[key]) copy[key] = { ...copy[key], elementId: map(copy[key].elementId) };
     if (ids.has(e.id)) { copy.version = (e.version ?? 1) + 1; copy.versionNonce = Math.floor(Math.random() * 2 ** 30); }
+    if (copy.customData?.pageinkAnchor && ids.has(copy.customData.pageinkAnchor.elementId)) copy.customData.pageinkAnchor.elementId = map(copy.customData.pageinkAnchor.elementId);
     return copy as Element;
   });
 }

@@ -14,7 +14,7 @@ export class History {
   private heads = new Map<string, readonly Element[]>();
   constructor(private limit = 100) {}
   push(surface: string, before: readonly Element[], after: readonly Element[]) { this.pushMany([{ surface, before, after }]); }
-  pushMany(changes: readonly { surface: string; before: readonly Element[]; after: readonly Element[] }[]) {
+  pushMany(changes: readonly { surface: string; before: readonly Element[]; after: readonly Element[] }[], beforeLayout?: Layout, afterLayout?: Layout) {
     const parts: Part[] = [];
     for (const { surface, before, after } of changes) {
       if (same(before, after)) continue;
@@ -24,8 +24,8 @@ export class History {
       parts.push({ surface, start, before: before.slice(start, before.length - tail), after: after.slice(start, after.length - tail) });
       this.heads.set(surface, after);
     }
-    if (!parts.length) return;
-    this.undoStack.push({ parts }); this.redoStack = []; this.trim();
+    if (!parts.length && !beforeLayout) return;
+    this.undoStack.push({ parts, beforeLayout, afterLayout }); this.redoStack = []; this.trim();
   }
   layout(beforeLayout: Layout, afterLayout: Layout) { this.undoStack.push({ parts: [], beforeLayout, afterLayout }); this.redoStack = []; this.trim(); }
   private trim() {

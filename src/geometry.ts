@@ -1,4 +1,5 @@
 import { Element, Rect, Margins, Page, uid } from './model';
+import { retargetAnchors } from './mixed';
 type Point = readonly [number, number];
 export type ScenePoint = [number, number];
 export function polygonBounds(points: readonly Point[]): Rect {
@@ -91,7 +92,7 @@ export function cloneElements(elements: readonly Element[], dx = 24, dy = 24): E
     copy.boundElements = e.boundElements?.filter(b => ids.has(b.id)).map(b => ({ ...b, id: ids.get(b.id) })) ?? null;
     if (copy.containerId) copy.containerId = ids.get(copy.containerId) ?? null;
     for (const key of ['startBinding', 'endBinding']) if (copy[key]) copy[key] = ids.has(copy[key].elementId) ? { ...copy[key], elementId: ids.get(copy[key].elementId) } : null;
-    return copy;
+    return retargetAnchors(copy, ids);
   });
 }
 export function removeElements(elements: readonly Element[], ids: Set<string>): Element[] {

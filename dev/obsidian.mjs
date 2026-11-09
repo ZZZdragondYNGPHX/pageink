@@ -1,7 +1,7 @@
 // Isolated Obsidian host for manual and scripted checks. Never touches the user's own profile or vaults:
 // a generated vault (.test-vault/) and a throwaway profile (/tmp) are created on every launch.
 import { spawn } from 'node:child_process';
-import { cp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
+import { cp, mkdir, rm, writeFile, readFile, readlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,24 @@ import { writeFixturePdf } from './fixture-pdf.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 export const vault = join(root, '.test-vault');
 const appImage = process.env.OBSIDIAN_APPIMAGE ?? join(homedir(), '.local/opt/obsidian/Obsidian.AppImage');
+
+// AppImage may put Electron in a different process group from its launcher. A CDP
+// disconnect alone is not an application exit; wait before reusing this test profile.
+async function stopProfile(profile, child) {
+  const lock = await readlink(join(profile, 'SingletonLock')).catch(() => '');
+  const pid = Number(lock.match(/-(\d+)$/)?.[1]);
+  const ownProcess = async id => {
+    if (!id) return false;
+    const cmd = await readFile(`/proc/${id}/cmdline`, 'utf8').catch(() => '');
+    return cmd.split('\0').includes(`--user-data-dir=${profile}`);
+  };
+  for (const id of new Set([pid, child.pid])) {
+    if (!(await ownProcess(id))) continue;
+    try { process.kill(id, 'SIGTERM'); } catch {}
+    for (let i = 0; i < 100 && await ownProcess(id); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    if (await ownProcess(id)) { try { process.kill(id, 'SIGKILL'); } catch {} }
+  }
+}
 
 export async function prepareVault({ theme = 'moonstone', fresh = true, files = {} } = {}) {
   if (fresh) await rm(vault, { recursive: true, force: true });
@@ -37,7 +55,7 @@ export async function launch({ port = 9333, width = 1400, height = 900, theme, f
   for (let i = 0; i < 120 && !browser; i++) {
     try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`); } catch { await new Promise(r => setTimeout(r, 500)); }
   }
-  if (!browser) throw Error('Obsidian did not expose CDP');
+  if (!browser) { await stopProfile(profile, child); throw Error('Obsidian did not expose CDP'); }
   let page;
   for (let i = 0; i < 120 && !page; i++) {
     page = browser.contexts().flatMap(c => c.pages()).find(p => !p.url().startsWith('devtools'));
@@ -57,7 +75,11 @@ export async function launch({ port = 9333, width = 1400, height = 900, theme, f
   await page.bringToFront();
   await resize(page, width, height);
   await page.evaluate(() => { window.activeWindow = window; window.activeDocument = document; });
-  const close = async () => { try { await browser.close(); } catch {} try { process.kill(-child.pid, 'SIGTERM'); } catch {} };
+  const close = async () => {
+    try { const cdp = await browser.newBrowserCDPSession(); await cdp.send('Browser.close'); } catch {}
+    try { await browser.close(); } catch {}
+    await stopProfile(profile, child);
+  };
   return { browser, page, close };
 }
 

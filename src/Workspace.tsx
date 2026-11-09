@@ -4,7 +4,7 @@ import { InkCanvas, CanvasHandle, CanvasTool, SelectionInfo, ZoomAction } from '
 import { Session } from './session';
 import { PdfService } from './pdf';
 import { Element, Margins, Page, Rect, Region, newPage, uid, PageTemplate } from './model';
-import { cloneElements, constrainMargins, polygonBounds, ScenePoint } from './geometry';
+import { bounds, cloneElements, constrainMargins, polygonBounds, ScenePoint } from './geometry';
 import { placementAt, toLocalRect } from './layout';
 import { capturePdf } from './capture';
 import { pack, pagePng, png, readingPdf, PdfExportOptions } from './export';
@@ -19,9 +19,16 @@ import { TEMPLATES, paperStyle } from './templates';
 import type { WorkspaceHost } from './host';
 import type { SearchHit } from './search';
 import { toArrayBuffer } from './model';
+import { MixedPanel } from './MixedPanel';
+import { detachParagraph, moveParagraph, reflowParagraphs, revised, textReference, type TextReference } from './mixed';
+import { preserveText, projectParagraph } from './mixed-render';
+import type { SourceParagraph } from './mixed-host';
+import { cardReference, cardText } from './cards';
+import { connectCards, inkCard, refreshTextCards, textCard } from './cards-render';
+import { CardEditor, CardsPanel } from './CardsPanel';
 
 export interface WorkspaceProps { session: Session; pdf?: PdfService; host: WorkspaceHost }
-type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-export' | 'pdf-text';
+type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-export' | 'pdf-text' | 'mixed' | 'cards';
 
 /** Kernel settings for a tool; a pending bookmark marquee temporarily overrides the tool. */
 function canvasTool(tool: ToolId, prefs: Preferences, marquee: CanvasTool['marquee'] | null): CanvasTool {
@@ -70,6 +77,9 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const [theme, setTheme] = useState(host.theme());
   const [views, setViews] = useState<ViewStore>(EMPTY_VIEWS);
   const [resolving, setResolving] = useState(false);
+  const [textBusy, setTextBusy] = useState(false);
+  const textTask = useRef(false);
+  const [editingCard, setEditingCard] = useState<{ root: Element; source: SourceParagraph; reference: TextReference } | null>(null);
   const [paper, setPaper] = useState<NonNullable<PdfExportOptions['paper']>>('original');
   const [pdfText, setPdfText] = useState({ page: 1, text: '' });
   const pop = useAnchor<PopoverId>();
@@ -90,6 +100,11 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   }, [layer]);
   const report = (error: unknown) => { if ((error as Error)?.name !== 'AbortError') toast.show({ kind: 'error', message: (error as Error).message }); };
   const run = (task: () => unknown) => { void Promise.resolve().then(task).catch(report); };
+  const runText = (task: () => Promise<unknown>) => {
+    if (textTask.current) return;
+    textTask.current = true; setTextBusy(true);
+    run(async () => { try { await task(); } finally { textTask.current = false; setTextBusy(false); } });
+  };
 
   // ---------- tools ----------
   const setTool = (next: ToolId) => { setReading(false); setMarquee(null); setToolState(next); if (next !== 'capture') store.update({ tool: next }); };
@@ -162,6 +177,191 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       await editPages(() => { for (const p of manifest.pages) if (next.has(p.id)) p.margins = next.get(p.id)!; });
       if (clamped) toast.show({ kind: 'info', message: '已有笔迹的一侧保留了足够留白，避免裁掉内容' });
     });
+  }
+
+  // ---------- shared text and paragraph anchors ----------
+  const mixedElements = session.surfaces.get(currentPageId) ?? [];
+  const selectedInk = () => body.current?.selected().filter(e => e.type === 'freedraw').map(e => e.id) ?? [];
+  async function applyMixed(pageId: string, change: (elements: readonly Element[]) => Element[]) {
+    if (!area.current?.isConnected || session.conflictPath) throw Error('笔记已关闭或正在处理冲突，请重新打开后操作。');
+    const page = manifest.pages.find(p => p.id === pageId), handle = body.current;
+    if (!page || !handle) throw Error('目标页面已删除，请重新选择。');
+    await handle.flush();
+    const before = await session.load(pageId);
+    let elements = change(before);
+    const previousCards = new Map(before.filter(e => cardReference(e)).map(e => [e.id, e]));
+    const resized = elements.filter(e => {
+      const old = previousCards.get(e.id);
+      return old && (old.width !== e.width || old.height !== e.height || old.x !== e.x || old.y !== e.y || old.angle !== e.angle);
+    });
+    if (resized.length) elements = (handle.api as any).inkRebind(elements, resized.map(e => e.id));
+    session.editContent(new Map([[pageId, elements]]), () => {
+      // Grow the page's writable margin; following pages move as a whole. Never clip the new text or ink.
+      if (paged) { const box = bounds(elements); if (box) page.margins.bottom = Math.max(page.margins.bottom, box.y + box.height + 24 - page.height); }
+    });
+    await handle.rebuild(); await session.save();
+  }
+  function insertParagraph() {
+    const pageId = currentPageId;
+    pop.close();
+    runText(async () => {
+      const source = await host.text.pick(); if (!source) return;
+      if (!area.current?.isConnected) return;
+      if (layer && layer.clientWidth <= 760) setSidebar(false);
+      const page = manifest.pages.find(p => p.id === pageId); if (!page) throw Error('目标页面已删除，请重新插入。');
+      const asset = await preserveText(session, source), width = paged ? Math.max(160, Math.min(560, page.width - 96)) : 480;
+      const paragraph = projectParagraph(source, asset, width);
+      let placed: Element = paragraph;
+      await applyMixed(pageId, elements => {
+        const last = elements.filter(e => textReference(e) && !(e.type === 'text' && e.containerId)).sort((a, b) => b.y + b.height - a.y - a.height)[0];
+        const centre = body.current!.center();
+        const placement = body.current!.layout().byId.get(pageId)!;
+        placed = { ...paragraph, x: last?.x ?? (paged ? 48 : centre[0] - placement.x - width / 2), y: last ? last.y + last.height + 40 : paged ? 64 : centre[1] - placement.y - paragraph.height / 2 } as Element;
+        return [...elements, placed];
+      });
+      body.current?.reveal(pageId, { x: placed.x, y: placed.y, width, height: placed.height });
+      setTool('pen'); toast.show({ kind: 'success', message: '文字段落已插入，可在旁边书写', detail: '圈选批注后，在「文字段落」中绑定到对应段落。' });
+    });
+  }
+  function refreshParagraphs() {
+    const pageId = currentPageId;
+    runText(async () => {
+      await body.current?.flush();
+      const original = [...await session.load(pageId)], replacements = new Map<string, Element>();
+      // Resolve every source before applying anything. A missing block cannot partially reflow the page.
+      const updates: { e: Element; reference: TextReference; source: SourceParagraph }[] = [];
+      for (const e of original) { const reference = textReference(e); if (reference && !(e.type === 'text' && e.containerId)) updates.push({ e, reference, source: await host.text.read(reference) }); }
+      for (const { e, reference, source } of updates) {
+        const asset = await preserveText(session, source);
+        if (asset !== reference.snapshotAsset || source.path !== reference.path) replacements.set(e.id, projectParagraph(source, asset, reference.width, e));
+      }
+      await applyMixed(pageId, current => {
+        for (const { e } of updates) if (!current.some(now => now.id === e.id && now.version === e.version)) throw Error('更新期间段落已变化，请重试。');
+        return reflowParagraphs(current, replacements);
+      });
+      toast.show({ kind: 'success', message: replacements.size ? '文字已更新，绑定笔迹已随段落移动' : '文字已是最新版本', detail: replacements.size ? '段内换行后的批注请检查位置；可撤销本次更新。' : undefined });
+    });
+  }
+  function attachInk(paragraph?: Element) {
+    const ids = new Set(selectedInk()), pageId = currentPageId;
+    runText(async () => {
+      await applyMixed(pageId, elements => {
+        if (paragraph && !elements.some(e => e.id === paragraph.id && textReference(e))) throw Error('目标段落已移除。');
+        let count = 0;
+        const next = elements.map(e => {
+          if (e.type !== 'freedraw' || !ids.has(e.id)) return e;
+          count++; const customData = { ...e.customData };
+          if (paragraph) customData.pageinkAnchor = { version: 1, elementId: paragraph.id };
+          else delete customData.pageinkAnchor;
+          return revised(e, { customData });
+        });
+        if (count !== ids.size) throw Error('请只选择本页的笔迹，再绑定到本页段落。');
+        return next;
+      });
+      toast.show({ kind: 'success', message: paragraph ? `已绑定 ${ids.size} 条笔迹` : '已解除所选笔迹的绑定' });
+    });
+  }
+  function reorderParagraph(paragraph: Element, direction: 'up' | 'down') {
+    const pageId = currentPageId;
+    runText(() => applyMixed(pageId, elements => {
+      const refs = elements.filter(e => textReference(e) && !(e.type === 'text' && e.containerId)).sort((a, b) => a.y - b.y), index = refs.findIndex(e => e.id === paragraph.id);
+      const other = refs[index + (direction === 'up' ? -1 : 1)]; if (!other) return [...elements];
+      const first = direction === 'up' ? other : refs[index], second = direction === 'up' ? refs[index] : other;
+      const gap = Math.max(24, second.y - first.y - first.height);
+      const next = moveParagraph(elements, second.id, first.x - second.x, first.y - second.y);
+      return moveParagraph(next, first.id, second.x - first.x, second.height + gap);
+    }));
+  }
+
+  // ---------- board cards ----------
+  const boardElements = session.surfaces.get(manifest.pages[0].id) ?? [];
+  const showCard = (e: Element) => { pop.close(); body.current?.reveal(manifest.pages[0].id, e); };
+  function insertCard(kind: 'text' | 'ink') {
+    pop.close();
+    runText(async () => {
+      let elements: Element[];
+      if (kind === 'text') {
+        const source = await host.text.pick(); if (!source) return;
+        elements = textCard(source, await preserveText(session, source));
+      } else {
+        const source = await host.cards.pickInk(); if (!source) return;
+        elements = [await inkCard(session, source)];
+      }
+      if (!area.current?.isConnected || session.conflictPath) throw Error('画板已关闭或出现冲突，请重新插入。');
+      setSidebar(false); await body.current?.insert(elements); await session.save(); setTool('select');
+    });
+  }
+  function editCard(root: Element) {
+    if (editingCard) return;
+    pop.close();
+    runText(async () => {
+      const ref = cardReference(root);
+      if (ref?.kind === 'ink') { await host.cards.openInk(ref); return; }
+      const text = cardText(root, body.current?.api.getSceneElements() ?? []), reference = text && textReference(text);
+      if (!reference) throw Error('卡片文字已移除，请撤销或重新插入卡片。');
+      const source = await host.text.read(reference);
+      if (!area.current?.isConnected) return;
+      setEditingCard({ root, source, reference });
+    });
+  }
+  async function saveCardDraft(value: string) {
+    if (!editingCard || !body.current || !area.current?.isConnected || session.conflictPath) throw Error('画板已关闭或出现冲突，草稿未提交。');
+    await body.current.flush();
+    if (!(await session.load(manifest.pages[0].id)).some(e => !e.isDeleted && e.id === editingCard.root.id && cardReference(e))) throw Error('卡片已移除，草稿未提交。');
+    const source = await host.text.commit(editingCard.reference, editingCard.source, value);
+    // The native commit has its own undo. A projection failure must not suggest the source was untouched.
+    try {
+      const asset = await preserveText(session, source);
+      await applyMixed(manifest.pages[0].id, elements => {
+        const updates = new Map<string, { source: SourceParagraph; asset: string }>();
+        for (const e of elements) {
+          const ref = textReference(e);
+          if (ref && ref.blockId === source.blockId && [source.path, editingCard.reference.path].includes(ref.path)) updates.set(e.id, { source, asset });
+        }
+        return refreshTextCards(elements, updates);
+      });
+    } catch (error) { throw Error(`原文已保存，卡片尚未更新：${(error as Error).message}。请关闭编辑后更新卡片。`); }
+  }
+  function refreshCard(root: Element) {
+    runText(async () => {
+      const ref = cardReference(root);
+      if (ref?.kind === 'ink') {
+        const source = await host.cards.readInk(ref), next = await inkCard(session, source, root);
+        await applyMixed(manifest.pages[0].id, elements => {
+          const current = elements.find(e => e.id === root.id);
+          if (!current || current.version !== root.version) throw Error('更新期间卡片已变化，请重试。');
+          return elements.map(e => e.id === root.id ? next : e);
+        });
+      } else {
+        const text = cardText(root, boardElements), reference = text && textReference(text); if (!text || !reference) throw Error('卡片文字已移除。');
+        const source = await host.text.read(reference), asset = await preserveText(session, source);
+        await applyMixed(manifest.pages[0].id, elements => refreshTextCards(elements, new Map([[text.id, { source, asset }]])));
+      }
+      toast.show({ kind: 'success', message: '卡片已更新，可撤销本次更新' });
+    });
+  }
+  function recoverCard(root: Element) {
+    runText(async () => {
+      const ref = cardReference(root); if (ref?.kind !== 'ink') return;
+      const asset = manifest.assets[ref.archiveAsset]; if (!asset) throw Error('卡片缺少原件备份。');
+      const next = await host.cards.recoverInk(new Uint8Array(await session.store.io.readBinary(asset.path)), ref);
+      await applyMixed(manifest.pages[0].id, elements => elements.map(e => e.id === root.id ? revised(e, { customData: { ...e.customData, pageinkCard: next } }) : e));
+      toast.show({ kind: 'success', message: '原件已恢复为新笔记，卡片已关联到恢复副本' });
+    });
+  }
+  function groupSelection(ungroup = false) {
+    const selected = body.current?.selected() ?? [], group = uid();
+    const outer = new Set(selected.flatMap(e => e.groupIds.length ? [e.groupIds.at(-1)!] : []));
+    run(() => body.current?.replaceSelected(e => ({ ...e, groupIds: ungroup ? e.groupIds.filter(id => !outer.has(id)) : [...e.groupIds, group] })));
+  }
+  function connectSelection() {
+    const selected = body.current?.selected().filter(e => cardReference(e)).sort((a, b) => a.x - b.x) ?? [];
+    if (selected.length !== 2) return;
+    runText(() => applyMixed(manifest.pages[0].id, elements => {
+      const roots = selected.map(e => elements.find(now => now.id === e.id && !now.isDeleted));
+      if (!roots[0] || !roots[1]) throw Error('卡片已移除，请重新选择。');
+      return (body.current!.api as any).inkRebind(connectCards(elements, roots[0], roots[1]), roots.map(e => e!.id));
+    }));
   }
 
   // ---------- bookmarks & links ----------
@@ -255,7 +455,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       await session.flush();
       let bytes: ArrayBuffer, extension: string, detail = '';
       const progress = (done: number, total: number) => toast.update(id, { message: `正在导出${label} ${done}/${total}` });
-      if (kind === 'package') { bytes = toArrayBuffer(await pack(session, progress, task.signal)); extension = 'inkpack'; detail = '包含正文、草稿纸、图片和原 PDF，可在任意库恢复编辑'; }
+      if (kind === 'package') { bytes = toArrayBuffer(await pack(session, progress, task.signal)); extension = 'inkpack'; detail = '包含正文、草稿纸、图片、原 PDF 与引用时的文字原件快照，可恢复编辑'; }
       else if (kind === 'pdf') {
         const options: PdfExportOptions = { paper, pages: scope === 'page' ? [currentPageId] : undefined, selection: scope === 'selection' ? body.current?.selected() : undefined };
         bytes = toArrayBuffer(await readingPdf(session, progress, task.signal, options)); extension = 'pdf';
@@ -302,6 +502,10 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     if (resolving) { event.preventDefault(); event.stopPropagation(); return; }
     const element = event.target as HTMLElement;
     if (event.nativeEvent.isComposing || element.closest('input, textarea, select, [contenteditable=true]')) return;
+    if (!paged && event.key === 'Enter' && !element.closest('button, [role=dialog]')) {
+      const selected = body.current?.selected().filter(e => cardReference(e)) ?? [];
+      if (selected.length === 1) { event.preventDefault(); event.stopPropagation(); editCard(selected[0]); return; }
+    }
     const key = event.key.toLowerCase(), mod = event.ctrlKey || event.metaKey;
     const surface = element.closest('.ink-scratch') ? 'scratch' : 'body';
     // Menus and form-like controls own their arrow/space keys; writing shortcuts belong to the canvas.
@@ -363,6 +567,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     requestAnimationFrame(() => pop.set({ id: 'page-settings', anchor: anchor?.isConnected ? anchor : layer!.querySelector<HTMLElement>('[data-anchor="more"]')! }));
   };
   const moreMenu: (MenuEntry | false)[] = [
+    { icon: 'docText', label: '文字段落…', onSelect: () => requestAnimationFrame(() => pop.set({ id: 'mixed', anchor: layer!.querySelector<HTMLElement>('[data-anchor="more"]')! })) },
     paged ? { icon: 'sliders', label: '纸张与页边距…', onSelect: () => openSettings(currentPageId, pop.anchor) }
       : { icon: 'canvas', label: '画布样式…', onSelect: () => openSettings(manifest.pages[0].id, pop.anchor) },
     { icon: 'focus', label: '专注模式', hint: '隐藏侧栏和工具栏之外的界面', onSelect: () => { setFocus(true); setSidebar(false); } },
@@ -374,6 +579,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     !!(pdf && currentPage?.pdfPage) && { icon: 'text', label: '选择本页文字…', onSelect: () => showPageText(currentPage, pop.anchor) },
     !!manifest.pdf && { icon: 'relink', label: '重新关联原 PDF…', onSelect: () => host.relinkSource() },
     { icon: 'history', label: '历史版本…', hint: '把较早的保存恢复为副本', onSelect: () => host.showVersions() },
+    { icon: 'sliders', label: '笔记属性…', onSelect: () => run(() => host.properties()) },
   ];
 
   const sidebarVisible = sidebar && !focus;
@@ -385,6 +591,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
 
   const topbar = <header className="ink-topbar">
     <div className="ink-topbar-start">
+      {!focus && <IconButton icon="notebook" label="笔记库" onClick={() => run(() => host.openLibrary())}/>}
       {!focus && <IconButton icon="sidebar" label={sidebar ? '隐藏侧栏' : '显示侧栏'} aria-expanded={sidebarVisible} aria-controls={sidebarId} onClick={toggleSidebar}/>}
       <div className="ink-document-heading"><strong title={host.fileName()}>{host.fileName()}</strong><span>{paged ? manifest.pdf ? 'PDF 批注' : '笔记本' : '自由画布'}</span></div>
     </div>
@@ -405,6 +612,8 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       <IconButton icon="redo" label="重做" shortcut="Ctrl+Shift+Z" disabled={!session.bodyHistory.canRedo} onClick={() => redo()}/>
     </div>
     <ToolShelf tool={tool} onTool={setTool} onImage={chooseImage} capture={!!pdf} prefs={prefs} store={store}/>
+    <IconButton icon="docText" label="文字段落" aria-expanded={pop.open === 'mixed'} onClick={event => pop.toggle('mixed', event.currentTarget)}/>
+    {!paged && <IconButton icon="canvas" label="画板卡片" aria-expanded={pop.open === 'cards'} disabled={!!editingCard} onClick={event => pop.toggle('cards', event.currentTarget)}/>}
   </div>;
 
   return <LayerContext.Provider value={layer}>
@@ -431,17 +640,19 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         </aside></>}
         <main className="ink-canvas-area" ref={area}>
           {!paged && tools}
-          <InkCanvas session={session} pdf={pdf} kind={paged ? 'pages' : 'canvas'} pagesKey={pagesKey} tool={bodyTool} fingerDraws={prefs.fingerDraws} theme={theme} readOnly={reading}
+          <InkCanvas session={session} pdf={pdf} kind={paged ? 'pages' : 'canvas'} pagesKey={pagesKey} tool={bodyTool} fingerDraws={prefs.fingerDraws} theme={theme} readOnly={reading || !!editingCard}
             initialView={host.loadView()} ref={body}
             onReady={handle => { body.current = handle; setViews(handle.views); }}
             onError={message => toast.show({ kind: 'error', message })}
             onSelection={setSelection} onMarquee={onMarquee} onGesture={gesture => gesture === 'undo' ? undo() : redo()}
+            onCardEdit={!paged ? editCard : undefined}
             onAddPage={paged && !reading ? () => addPage() : undefined}
             onViewChange={() => { if (body.current) host.saveView(body.current.memory()); }}/>
-          {selection && !selection.busy && !marquee && !reading && <SelectionBar views={views} selection={selection} paged={paged}
+          {selection && !selection.busy && !marquee && !reading && !editingCard && <SelectionBar views={views} selection={selection} paged={paged}
             onDuplicate={selectionActions.duplicate} onRemove={selectionActions.remove} onScratch={selectionActions.toScratch} onBookmark={selectionActions.bookmark}
             onColor={anchor => pop.set({ id: 'selection-color', anchor })} onExport={anchor => pop.set({ id: 'selection-export', anchor })}
             onSource={selection.source ? () => selectionActions.source(selection) : undefined}/>}
+          {editingCard && <CardEditor root={editingCard.root} source={editingCard.source.path} text={editingCard.source.text} views={views} onSave={saveCardDraft} onClose={() => setEditingCard(null)} bindKeys={(element, submit) => host.text.bindDraftKeys(element, submit)}/>}
           {marquee && <div className="ink-mode-hint" role="status">拖动框选要加书签的区域<button type="button" onClick={() => setMarquee(null)}>取消</button></div>}
           <ViewControls views={views} paged={paged} pageCount={manifest.pages.length} pageIndex={currentIndex}
             onZoom={anchor => pop.toggle('zoom', anchor)} onJump={anchor => pop.toggle('jump', anchor)}
@@ -463,6 +674,18 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       {resolving && <div className="ink-cover" role="status"><span className="ink-spinner"/>正在保存独立副本…</div>}
 
       {pop.open === 'more' && <Popover anchor={pop.anchor} onClose={pop.close} label="更多" align="end"><Menu items={moreMenu} onDone={pop.close}/></Popover>}
+      {pop.open === 'cards' && <Popover anchor={pop.anchor} onClose={pop.close} label="画板卡片" align="end" className="ink-mixed-popover">
+        <CardsPanel elements={boardElements} selected={body.current?.selected() ?? []} busy={textBusy || !!editingCard}
+          onInsertText={() => insertCard('text')} onInsertInk={() => insertCard('ink')} onEdit={editCard} onRefresh={refreshCard}
+          onRecover={recoverCard} onReveal={showCard} onConnect={connectSelection} onGroup={() => groupSelection()} onUngroup={() => groupSelection(true)}/>
+      </Popover>}
+      {pop.open === 'mixed' && <Popover anchor={pop.anchor} onClose={pop.close} label="文字段落" align="end" className="ink-mixed-popover">
+        <MixedPanel elements={mixedElements} busy={textBusy} selectionCount={selectedInk().length} readOnly={reading}
+          onInsert={insertParagraph} onRefresh={refreshParagraphs}
+          onEdit={e => { pop.close(); setSidebar(false); runText(() => host.text.edit(textReference(e)!)); }}
+          onAttach={e => attachInk(e)} onDetach={() => attachInk()} onMove={reorderParagraph}
+          onRemove={e => runText(async () => { await applyMixed(currentPageId, elements => detachParagraph(elements, e.id)); toast.show({ kind: 'info', message: '段落已移除，笔迹保留在原位', action: { label: '撤销', run: () => undo() } }); })}/>
+      </Popover>}
       {pop.open === 'pdf-text' && <Popover anchor={pop.anchor} onClose={pop.close} label="PDF 原文文字" align="end" className="ink-pdf-text-popover">
         <div className="ink-popover-title">第 {pdfText.page} 页文字</div>
         <p className="ink-popover-note">选中需要的文字即可复制。</p>

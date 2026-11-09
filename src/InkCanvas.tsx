@@ -9,6 +9,7 @@ import { layoutPages, PageLayout, PageScene, PagePlacement, placementAt, toScene
 import { GridLayer, PageOverlay, PaperLayer } from './PaperLayer';
 import { View, ViewStore, clampToDocument, clampZoom, fitRect, sceneViewport, toScene, zoomAround } from './view';
 import type { ViewMemory } from './host';
+import { cardReference } from './cards';
 
 export type KernelTool = 'freedraw' | 'selection' | 'hand' | 'text' | 'rectangle' | 'ellipse' | 'diamond' | 'line' | 'arrow';
 export type MarqueePurpose = 'select' | 'capture' | 'bookmark';
@@ -54,6 +55,7 @@ interface Props {
   onGesture?: (gesture: 'undo' | 'redo') => void;
   onAddPage?: () => void;
   onViewChange?: () => void;
+  onCardEdit?: (element: Element) => void;
 }
 const SCRATCH_PAGE: Page = { id: 'scratch', width: 1, height: 1, margins: { top: 0, right: 0, bottom: 0, left: 0 }, template: 'blank' };
 const NEVER = CaptureUpdateAction.NEVER;
@@ -469,6 +471,16 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const dark = props.theme === 'dark' && kind !== 'pages';
   const marqueeMode = tool.marquee ? ` is-marquee` : '';
   return <div ref={root} className={`ink-editor ink-editor-${kind}${tool.erase ? ' is-erasing' : ''}${marqueeMode}${dark ? ' is-dark' : ''}`} data-pressure={tool.pressure ? 'physical' : 'fixed'}
+    onDoubleClickCapture={event => {
+      if (!api || props.readOnly || !latest.current.onCardEdit || tool.marquee || tool.erase || tool.kernel !== 'selection') return;
+      const box = root.current!.getBoundingClientRect(), s = api.getAppState(), x = (event.clientX - box.left) / s.zoom.value - s.scrollX, y = (event.clientY - box.top) / s.zoom.value - s.scrollY;
+      const card = [...api.getSceneElements()].reverse().find(e => {
+        if (!cardReference(e)) return false;
+        const dx = x - e.x - e.width / 2, dy = y - e.y - e.height / 2;
+        return Math.abs(dx * Math.cos(e.angle) + dy * Math.sin(e.angle)) <= e.width / 2 && Math.abs(-dx * Math.sin(e.angle) + dy * Math.cos(e.angle)) <= e.height / 2;
+      });
+      if (card) { event.stopPropagation(); event.preventDefault(); latest.current.onCardEdit(card); }
+    }}
     onPointerLeave={() => { if (eraserCursor.current) eraserCursor.current.style.display = 'none'; }}
     onPointerDownCapture={onPointerDown} onPointerMoveCapture={onPointerMove} onPointerUpCapture={onPointerUp} onPointerCancelCapture={onPointerCancel}>
     {kind === 'pages' ? <PaperLayer layout={layout} views={views} pdf={pdf} sourceIssue={session.sourceIssue}/> : <GridLayer views={views} template={kind === 'canvas' ? session.manifest.pages[0].template : 'blank'} dark={dark}/>}

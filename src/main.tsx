@@ -14,6 +14,13 @@ import { normalizePreferences, PreferenceStore } from './preferences';
 import { ErrorBoundary } from './ui';
 import { TEMPLATES, paperStyle } from './templates';
 import type { ViewMemory, WorkspaceActions, WorkspaceHost } from './host';
+import { NotesHost } from './notes-host';
+import { drawingRegionCode } from './notes';
+import { MixedNotes } from './mixed-host';
+import { BoardSources } from './cards-host';
+import { LibrarySources } from './library-search-host';
+import { dailyNotePath } from './library-search';
+import { NoteProperties } from './properties-host';
 
 const VIEW = 'drawing-local-view';
 const EXPORT_FOLDER = 'Drawing Exports';
@@ -40,12 +47,12 @@ class PdfPicker extends FuzzySuggestModal<TFile> {
 
 /** One-click creation: pick a paper or the infinite canvas; the name is optional. */
 class CreateModal extends Modal {
-  constructor(private plugin: DrawingPlugin, private folder?: string) { super(plugin.app); }
+  constructor(private plugin: DrawingPlugin, private folder?: string, private initial: 'text' | 'pages' = 'text') { super(plugin.app); }
   onOpen() {
     this.modalEl.addClass('ink-host-modal', 'ink-create-modal');
     this.titleEl.setText('从这里开始记录');
     const content = this.contentEl;
-    content.createEl('p', { cls: 'ink-create-intro', text: '一页笔记，或一张无限延展的画布。' });
+    content.createEl('p', { cls: 'ink-create-intro', text: '用文字记录，用笔书写，或在画布上展开想法。' });
     const nameLabel = content.createEl('label', { cls: 'ink-create-name-label', text: '笔记名称' });
     const name = nameLabel.createEl('input', { type: 'text', cls: 'ink-create-name', attr: { placeholder: '未命名笔记', autocomplete: 'off' } });
     let template = this.plugin.prefs.get().newTemplate, busy = false;
@@ -58,6 +65,14 @@ class CreateModal extends Modal {
       finally { busy = false; content.removeAttribute('aria-busy'); buttons.forEach(button => button.disabled = false); }
     };
     const modes = content.createDiv({ cls: 'ink-create-modes' });
+    const text = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': '新建文字笔记' } });
+    const textArt = text.createDiv({ cls: 'ink-create-art ink-create-text-art', attr: { 'aria-hidden': 'true' } });
+    const textPage = textArt.createDiv({ cls: 'ink-create-text-page' });
+    textPage.createSpan({ text: 'Aa' }); textPage.createDiv(); textPage.createDiv(); textPage.createDiv();
+    text.createEl('strong', { text: '文字笔记' });
+    text.createSpan({ text: '文档、链接、阅读与整理', cls: 'ink-create-description' });
+    const textAction = text.createDiv({ cls: 'ink-create-mode-action', text: '开始记录' }); setIcon(textAction.createSpan(), 'arrow-right');
+    text.onclick = () => void go(() => this.plugin.createText(name.value, this.folder));
     const notebook = modes.createEl('button', { cls: 'ink-create-mode', attr: { type: 'button', 'aria-label': '新建笔记本' } });
     const notebookArt = notebook.createDiv({ cls: 'ink-create-art ink-create-notebook-art', attr: { 'aria-hidden': 'true' } });
     const paper = notebookArt.createDiv({ cls: 'ink-create-paper' });
@@ -88,7 +103,7 @@ class CreateModal extends Modal {
         Object.assign(paper.style, paperStyle(template));
       };
     }
-    name.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); notebook.click(); } });
+    name.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); (this.initial === 'text' ? text : notebook).click(); } });
     const files = content.createDiv({ cls: 'ink-create-links' });
     const link = (icon: string, text: string, hint: string, run: () => void) => {
       const button = files.createEl('button', { attr: { type: 'button' } }); setIcon(button.createSpan({ cls: 'ink-create-file-icon' }), icon);
@@ -107,7 +122,14 @@ class DrawingView extends FileView implements WorkspaceHost {
   actions: WorkspaceActions | null = null;
   private unloading?: Promise<void>;
   private viewTimer?: ReturnType<typeof setTimeout>;
-  constructor(leaf: WorkspaceLeaf, private plugin: DrawingPlugin) { super(leaf); }
+  text = new MixedNotes(this.app, () => this.leaf);
+  cards: BoardSources;
+  constructor(leaf: WorkspaceLeaf, private plugin: DrawingPlugin) {
+    super(leaf);
+    this.cards = new BoardSources(this.app, { io: plugin.io, live: path => plugin.views().find(v => v.file?.path === path)?.session,
+      resolve: (path, id) => plugin.resolveDocument(path, id), reveal: (path, page, region) => plugin.reveal(path, page, region),
+      unique: title => plugin.uniquePath(title, 'inknote') });
+  }
   get prefs() { return this.plugin.prefs; }
   getViewType() { return VIEW; }
   getIcon() { return 'pencil'; }
@@ -172,6 +194,8 @@ class DrawingView extends FileView implements WorkspaceHost {
   async reload() { const file = this.file; if (!file) return; await this.onUnloadFile(); await this.onLoadFile(file); }
 
   // ---------- WorkspaceHost ----------
+  openLibrary() { return this.plugin.notes.openLibrary(); }
+  properties() { return this.file ? this.plugin.properties.open(this.file.path) : Promise.resolve(); }
   fileName() { return this.file?.basename ?? this.session?.manifest.title ?? '手写笔记'; }
   async saveExport(name: string, extension: string, bytes: ArrayBuffer) {
     await ensureDir(this.plugin.io, EXPORT_FOLDER);
@@ -186,7 +210,8 @@ class DrawingView extends FileView implements WorkspaceHost {
   async copyLink({ page, region, embed }: { page?: string; region?: string; embed?: boolean }) {
     const session = this.session!, file = this.file!;
     if (embed) {
-      await navigator.clipboard.writeText('```drawing-region\n' + JSON.stringify({ document: session.manifest.id, file: file.path, region }) + '\n```');
+      if (!region) throw Error('请先选择需要嵌入的区域书签。');
+      await navigator.clipboard.writeText(drawingRegionCode({ document: session.manifest.id, file: file.path, region }));
       return;
     }
     const uri = `obsidian://drawing-local?vault=${encodeURIComponent(this.app.vault.getName())}&document=${session.manifest.id}&file=${encodeURIComponent(file.path)}${page ? `&page=${page}` : ''}${region ? `&region=${region}` : ''}`;
@@ -223,6 +248,9 @@ class DrawingView extends FileView implements WorkspaceHost {
 }
 
 export default class DrawingPlugin extends Plugin {
+  notes!: NotesHost;
+  properties!: NoteProperties;
+  private dailyTask?: Promise<void>;
   io = new VaultIO(this);
   unsavedSessions = new Map<string, Session>();
   previewCache = new Map<string, HTMLCanvasElement>();
@@ -234,6 +262,22 @@ export default class DrawingPlugin extends Plugin {
     await face.load(); document.fonts.add(face); this.register(() => document.fonts.delete(face));
     this.registerView(VIEW, leaf => new DrawingView(leaf, this));
     this.registerExtensions(['inknote'], VIEW);
+    const live = (path: string) => this.views().find(view => view.file?.path === path)?.session ?? this.unsavedSessions.get(path);
+    const sources = new LibrarySources(this.app, this.io, live);
+    this.properties = new NoteProperties(this.app, this.io, live);
+    this.register(() => this.properties.dispose());
+    this.notes = this.addChild(new NotesHost(this, {
+      create: () => new CreateModal(this).open(),
+      createText: () => new CreateModal(this, undefined, 'text').open(),
+      daily: () => this.openDaily(),
+      properties: path => this.properties.open(path),
+      segments: (entry, signal) => sources.segments(entry, signal),
+      reveal: (path, target) => this.reveal(path, target.page, target.region, target.rect),
+      flushDrawing: async path => {
+        const session = this.views().find(view => view.file?.path === path)?.session ?? this.unsavedSessions.get(path);
+        await session?.flush();
+      },
+    }));
     this.addRibbonIcon('pencil', '新建笔记', () => new CreateModal(this).open());
     const active = () => this.app.workspace.getActiveViewOfType(DrawingView);
     const withView = (run: (view: DrawingView) => void) => (checking: boolean) => { const view = active(); if (!view?.session) return false; if (!checking) run(view); return true; };
@@ -252,6 +296,7 @@ export default class DrawingPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (file instanceof TFile && file.extension === 'pdf') menu.addItem(item => item.setTitle('创建批注笔记').setIcon('pencil').onClick(() => { void this.importPdf(file.basename, undefined, file).catch(e => new Notice(e.message)); }));
       if (file instanceof TFolder) {
+        menu.addItem(item => item.setTitle('新建文字笔记').setIcon('file-text').onClick(() => new CreateModal(this, file.path, 'text').open()));
         menu.addItem(item => item.setTitle('新建笔记本').setIcon('notebook-pen').onClick(() => void this.create('pages', { folder: file.path }).catch(e => new Notice(e.message))));
         menu.addItem(item => item.setTitle('新建自由画布').setIcon('pencil').onClick(() => void this.create('canvas', { folder: file.path }).catch(e => new Notice(e.message))));
       }
@@ -390,6 +435,27 @@ export default class DrawingPlugin extends Plugin {
     const manifest = newManifest(path.slice(path.lastIndexOf('/') + 1, -'.inknote'.length), mode, options.template ?? (mode === 'canvas' ? 'dotted' : this.prefs.get().newTemplate));
     if (mode === 'pages' && options.template) this.prefs.update({ newTemplate: options.template });
     await new DocumentStore(this.io, path, manifest).commit(new Map()); await this.openPath(path);
+  }
+  async createText(title: string, folder?: string) {
+    const path = await this.uniquePath(title.trim() || '未命名文字笔记', 'md', this.newFolder(folder));
+    const file = await this.app.vault.create(path, '');
+    const leaf = this.app.workspace.getLeaf('tab');
+    await leaf.openFile(file, { active: true, state: { mode: 'source' } });
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+  openDaily(): Promise<void> {
+    if (this.dailyTask) return this.dailyTask;
+    this.dailyTask = (async () => {
+      const path = dailyNotePath(new Date()), folder = path.slice(0, path.lastIndexOf('/'));
+      if (!this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+      if (!this.app.vault.getAbstractFileByPath(path)) {
+        try { await this.app.vault.create(path, `# ${path.slice(folder.length + 1, -3)}\n\n`); }
+        catch (error) { if (!(this.app.vault.getAbstractFileByPath(path) instanceof TFile)) throw error; }
+      }
+      await this.notes.open(path);
+    })().finally(() => { this.dailyTask = undefined; });
+    return this.dailyTask;
   }
   pickVaultPdf() {
     if (!this.app.vault.getFiles().some(f => f.extension === 'pdf')) { new Notice('库中还没有 PDF。可以用「导入 PDF」从设备中选择。'); return; }

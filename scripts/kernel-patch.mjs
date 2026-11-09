@@ -243,7 +243,17 @@ function releaseInkElementCanvas(element) {
         ['const selections = [];\n      for (const element of elementsMap.values()) {', 'const selections = [];\n      const selectionCandidates = new Set(selectedElements);\n      for (const id of renderConfig.remoteSelectedElementIds.keys()) { const e = elementsMap.get(id); if (e) selectionCandidates.add(e); }\n      for (const element of selectionCandidates) {'],
         ['const container = opts?.parentSelector ? excalidrawContainer?.querySelector(opts.parentSelector) : document.body;', 'const portalHost = opts?.parentSelector ? null : document.createElement("div");\n    if (portalHost) { portalHost.className = "ink-kernel-portal"; document.body.appendChild(portalHost); }\n    const container = portalHost || excalidrawContainer?.querySelector(opts.parentSelector);'],
         ['container.removeChild(div2);', 'container.removeChild(div2);\n      portalHost?.remove();'],
-        ['getSceneElements: this.getSceneElements,', 'getSceneElements: this.getSceneElements,\n        inkQuery: (rect) => queryInkScene(this.scene, rect),\n        inkErase: (patches) => this.scene.inkErase(patches),'],
+        ['getSceneElements: this.getSceneElements,', `getSceneElements: this.getSceneElements,
+        inkQuery: (rect) => queryInkScene(this.scene, rect),
+        inkErase: (patches) => this.scene.inkErase(patches),
+        inkRebind: (elements, changedIds) => {
+          // Work on detached copies: source projections and their arrows enter one host undo step.
+          // The upstream binding code mutates arrows and their labels, never handwriting.
+          const next = elements.map(e => e.type === "arrow" || e.type === "text" ? deepCopyElement(e) : e);
+          const map = new Map(next.filter(e => !e.isDeleted).map(e => [e.id, e]));
+          for (const id of changedIds) { const e = map.get(id); if (e) updateBoundElements(e, map); }
+          return next;
+        },`],
         ['const embeddableElements = this.scene.getNonDeletedElements().filter(', 'const embeddableElements = getInkEmbeds(this.scene).filter('],
         ['this.scene.getNonDeletedElements().filter((element) => {\n        if (isEmbeddableElement(element))', 'getInkEmbeds(this.scene).filter((element) => {\n        if (isEmbeddableElement(element))'],
         // Freehand creation never reads transform originals; copying every point on pointerdown

@@ -1,5 +1,7 @@
 import type { Rect } from './model';
 import type { PreferenceStore } from './preferences';
+import type { MixedHost } from './mixed-host';
+import type { CardsHost } from './cards-host';
 
 /** Remembered viewport of one document on this device. */
 export interface ViewMemory { page?: string; dx: number; dy: number; zoom: number }
@@ -10,6 +12,10 @@ export interface WorkspaceActions { exportPdf(): void; exportPackage(): void; to
 /** Everything the workspace needs from Obsidian. Keeps UI code free of host APIs and testable. */
 export interface WorkspaceHost {
   prefs: PreferenceStore;
+  text: MixedHost;
+  cards: CardsHost;
+  openLibrary(): Promise<void>;
+  properties(): Promise<void>;
   /** Base name for exported files (the note's file name). */
   fileName(): string;
   /** Writes an export into the vault without overwriting and returns its path. */
