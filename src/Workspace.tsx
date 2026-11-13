@@ -11,6 +11,7 @@ import { pack, pagePng, png, readingPdf, PdfExportOptions } from './export';
 import { IconButton, InkIcon } from './InkIcon';
 import { Popover, Menu, MenuEntry, Segmented, Swatches, Toasts, useAnchor, useToasts, LayerContext } from './ui';
 import { ToolShelf, SHORTCUTS } from './Toolbar';
+import { ToolDock } from './ToolDock';
 import { BookmarkList, PageList, SearchPanel, SidebarTabs } from './Sidebar';
 import { ScratchWindow } from './Scratch';
 import { PEN_COLORS, Preferences, SidebarTab, ToolId } from './preferences';
@@ -615,11 +616,11 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       </>}
     </div>
   </header>;
-  const tools = (!reading || scratchOpen) && <div className="ink-writing-bar">
+  const tools = <ToolDock layer={layer} visible={!reading || scratchOpen} onDrag={pop.close}>
     <ToolShelf tool={tool} onTool={setTool} onImage={chooseImage} capture={!!pdf} prefs={prefs} store={store}/>
     <IconButton icon="docText" label="文字段落" aria-expanded={pop.open === 'mixed'} onClick={event => pop.toggle('mixed', event.currentTarget)}/>
     {!paged && <IconButton icon="canvas" label="画布卡片" aria-expanded={pop.open === 'cards'} disabled={!!editingCard} onClick={event => pop.toggle('cards', event.currentTarget)}/>}
-  </div>;
+  </ToolDock>;
 
   return <LayerContext.Provider value={layer}>
     <div ref={setLayer} className={`ink-workspace ink-mode-${manifest.mode}${focus ? ' is-focus' : ''}${reading ? ' is-reading' : ''}${sidebarVisible ? ' has-sidebar' : ''}`} onKeyDownCapture={onKeyDown}>

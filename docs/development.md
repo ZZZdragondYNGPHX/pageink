@@ -38,6 +38,7 @@ Markdown 正文与撤销由原生编辑器负责。绘写数据保存完整对�
 
 ```sh
 node dev/ui-polish.mjs
+node dev/dock-workflows.mjs
 node dev/writing-workflows.mjs
 node dev/library-workflows.mjs
 node dev/notes-workflows.mjs

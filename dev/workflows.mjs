@@ -70,7 +70,7 @@ try {
   assert.ok(written.body[0][0].points.length > 10);
   assert.equal(written.manifest.pages[0].template, 'ruled');
   await button('阅读模式').click();
-  assert.equal(await workspace.locator('.ink-writing-bar').count(), 0);
+  assert.equal(await workspace.locator('.ink-writing-bar').isVisible(), false);
   await drag([[box.x + 200, box.y + 260], [box.x + 300, box.y + 260]]);
   assert.deepEqual((await snapshot()).body, written.body);
   await button('继续书写').click();

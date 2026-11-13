@@ -51,7 +51,7 @@ try {
   const scratch = editor().locator('.ink-scratch:not([hidden])'); await scratch.waitFor();
   await page.waitForFunction(()=>window.app.workspace.activeLeaf.view.session?.flushers.has('scratch'));
   const sb = await scratch.boundingBox(), body = await editor().locator('.ink-canvas-area').boundingBox();
-  assert.ok(sb.x >= body.x + body.width - 1, 'Docked scratch must not overlap body');
+  assert.ok(sb.x >= body.x + body.width - 1 || sb.y >= body.y + body.height - 1, 'Docked scratch must stay beside or below the body');
   const scratchArea = await scratch.locator('.ink-scratch-body').boundingBox(); await stroke(scratchArea);
   const scratchInk = await app(async app=>{const s=app.workspace.activeLeaf.view.session;await s.flushers.get('scratch')();return structuredClone(await s.read('scratch'));});
   assert.ok(scratchInk.length); assert.deepEqual(await memory(),ink);

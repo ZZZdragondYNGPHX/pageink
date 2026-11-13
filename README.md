@@ -27,7 +27,7 @@ Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite 
 
 在「设置 → 第三方插件 → 浏览」中搜索 **PageInk**，安装并启用。已有用户可在第三方插件设置中检查更新。也可从[官方插件目录](https://community.obsidian.md/plugins/pageink)打开安装页。
 
-手动安装：从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.5.zip`，将其中的 `pageink` 文件夹解压至笔记库的 `.obsidian/plugins/`，重启并启用。也可将同一版本的 `main.js`、`manifest.json` 和 `styles.css` 放入 `.obsidian/plugins/pageink/`。
+手动安装：从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.6.zip`，将其中的 `pageink` 文件夹解压至笔记库的 `.obsidian/plugins/`，重启并启用。也可将同一版本的 `main.js`、`manifest.json` 和 `styles.css` 放入 `.obsidian/plugins/pageink/`。
 
 ## 开始使用
 

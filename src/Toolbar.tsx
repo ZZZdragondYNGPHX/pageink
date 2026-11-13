@@ -35,10 +35,10 @@ export function ToolButtons({ tool, onTool, onImage, capture }: { tool: ToolId; 
   }, [tool]);
   const button = (t: ToolDef) => <IconButton key={t.id} icon={t.icon} label={t.label} shortcut={t.key} tabIndex={tool === t.id ? 0 : -1} aria-pressed={tool === t.id} className="ink-tool" onClick={event => onTool(t.id, event.currentTarget)}><span>{t.label}</span></IconButton>;
   return <div ref={tools} className="ink-tools" role="toolbar" aria-label="书写工具" onKeyDown={event => {
-    if (event.nativeEvent.isComposing || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (event.nativeEvent.isComposing || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault(); event.stopPropagation();
-    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')], index = buttons.indexOf(event.target as HTMLButtonElement);
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.getClientRects().length), index = buttons.indexOf(event.target as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + buttons.length) % buttons.length;
     buttons[next]?.focus();
   }}>
     <div className="ink-tool-group">{WRITING_TOOLS.map(button)}</div>
@@ -79,7 +79,7 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store }: {
     </Popover>}
     {configurable && <div className="ink-quick-style" role="group" aria-label={`${definition.label}快捷设置`}>
       <button type="button" className="ink-style-trigger" aria-label={`${definition.label}设置`} aria-expanded={pop.open === 'options'} onClick={event => pop.toggle('options', event.currentTarget)}>
-        <InkIcon name={definition.icon}/><span>{tool === 'eraser' || tool === 'capture' ? detail : definition.label}</span><InkIcon name="down"/>
+        {colored ? <span className="ink-style-dot" style={{ background: color }} aria-hidden="true"/> : <InkIcon name={definition.icon}/>}<span>{tool === 'eraser' || tool === 'capture' ? detail : definition.label}</span><InkIcon name="down"/>
       </button>
       {tool === 'pen' && <Widths values={PEN_WIDTHS.slice(0, 3)} value={prefs.pen.width} color="var(--ink-text)" onChange={width => store.update({ pen: { width } })} label="快捷粗细"/>}
       {tool === 'highlighter' && <Widths values={HIGHLIGHTER_WIDTHS} value={prefs.highlighter.width} color="var(--ink-text)" onChange={width => store.update({ highlighter: { width } })} label="快捷粗细"/>}
