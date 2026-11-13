@@ -5,6 +5,8 @@ import { History } from './history';
 import { snapshotElement } from './element-snapshot';
 
 export type SaveState = 'saved' | 'pending' | 'saving' | 'failed';
+export const SAVE_IDLE_MS = 180000;
+export const SAVE_MAX_WAIT_MS = 900000;
 interface Applied { surface: string; before: readonly Element[]; after: readonly Element[] }
 
 export class Session {
@@ -19,6 +21,8 @@ export class Session {
   timer?: ReturnType<typeof setTimeout>;
   private pending?: Promise<void>;
   private generation = 0;
+  private dirtySince?: number;
+  private writing = new Set<string>();
   /** Editors that hold unflushed kernel state, keyed by owner (e.g. body, scratch). */
   flushers = new Map<string, () => Promise<void>>();
   /** Predicates for surfaces that mounted editors keep in memory. */
@@ -100,7 +104,19 @@ export class Session {
   }
   schedule() {
     this.generation++; if (this.saveState !== 'failed') this.saveState = 'pending'; this.notify();
-    clearTimeout(this.timer); this.timer = setTimeout(() => void this.save().catch(() => {}), 350);
+    this.dirtySince ??= Date.now();
+    this.armSave();
+  }
+  /** Disk writes wait for pen-up; history and in-memory snapshots remain immediate. */
+  setWriting(owner: string, active: boolean) {
+    if (active) { this.writing.add(owner); clearTimeout(this.timer); }
+    else { this.writing.delete(owner); this.armSave(); }
+  }
+  private armSave() {
+    clearTimeout(this.timer);
+    if (this.dirtySince === undefined || this.writing.size || this.conflictPath) return;
+    const delay = Math.min(SAVE_IDLE_MS, Math.max(0, SAVE_MAX_WAIT_MS - (Date.now() - this.dirtySince)));
+    this.timer = setTimeout(() => void this.save().catch(() => {}), delay);
   }
   async loadFiles(elements?: readonly Element[]) {
     const wanted = elements ? new Set(elements.filter(e => e.type === 'image').map(e => (e as any).fileId)) : null;
@@ -146,6 +162,7 @@ export class Session {
     if (this.pending) { await this.pending; if (this.dirty.size || this.metadataDirty) return this.save(); return; }
     if (!this.dirty.size && !this.metadataDirty) { if (this.saveState !== 'saved') { this.saveState = 'saved'; this.saveError = ''; this.notify(); } return; }
     const batch = new Map(this.dirty), generation = this.generation;
+    this.dirtySince = undefined;
     const metadata = structuredClone(this.manifest);
     this.saveState = 'saving'; this.notify();
     this.pending = (async () => {

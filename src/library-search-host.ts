@@ -3,14 +3,52 @@ import type { NoteEntry } from './notes';
 import type { SearchSegment } from './library-search';
 import type { FileIO } from './storage';
 import { DocumentStore } from './storage';
-import type { Session } from './session';
-import { newPage, Page } from './model';
+import { Session } from './session';
+import { newPage, Page, pageRect } from './model';
 import { PdfService } from './pdf';
 import { bounds } from './geometry';
+import { renderArea } from './preview';
 
 /** Read-only, bounded by one drawing page / PDF at a time; current native editor text wins. */
 export class LibrarySources {
   constructor(private app: App, private io: FileIO, private live: (path: string) => Session | undefined) {}
+  private previews = 0;
+  private waiting: (() => void)[] = [];
+  async preview(entry: NoteEntry, signal: AbortSignal): Promise<{ image?: string; text?: string }> {
+    if (this.previews >= 2) await new Promise<void>(resolve => this.waiting.push(resolve));
+    else this.previews++;
+    let pdf: PdfService | undefined;
+    let canvas: HTMLCanvasElement | undefined;
+    try {
+      signal.throwIfAborted();
+      const file = this.app.vault.getAbstractFileByPath(entry.path);
+      if (!(file instanceof TFile)) throw Error('文件已移动');
+      if (file.extension === 'md') {
+        const view = this.app.workspace.getLeavesOfType('markdown').map(leaf => leaf.view).find((view): view is MarkdownView => view instanceof MarkdownView && view.file === file);
+        return { text: (view?.editor.getValue() ?? await this.app.vault.cachedRead(file)).replace(/^---\n[\s\S]*?\n---\n/, '').slice(0, 700) || '空白笔记' };
+      }
+      if (file.extension === 'pdf') {
+        pdf = await PdfService.fromBytes(await this.app.vault.readBinary(file));
+        const page = await pdf.document.getPage(1), size = page.getViewport({ scale: 1 });
+        page.cleanup(); signal.throwIfAborted();
+        canvas = document.createElement('canvas');
+        await pdf.render({ ...newPage(), pdfPage: 1 }, canvas, Math.min(360 / size.width, 420 / size.height), undefined, signal);
+      } else {
+        const session = this.live(file.path) ?? new Session(await DocumentStore.open(this.io, file.path));
+        const page = session.manifest.pages[0];
+        if (page.pdfPage && session.manifest.pdf) pdf = await PdfService.open(this.io, session.manifest.pdf);
+        const rect = session.manifest.mode === 'pages' ? pageRect(page) : bounds(await session.read(page.id)) ?? { x: 0, y: 0, width: 600, height: 400 };
+        canvas = await renderArea(session, page, rect, Math.min(360 / Math.max(1, rect.width), 420 / Math.max(1, rect.height), 1), pdf, signal);
+      }
+      signal.throwIfAborted();
+      return { image: canvas.toDataURL('image/png') };
+    } finally {
+      if (canvas) { canvas.width = 0; canvas.height = 0; }
+      try { await pdf?.destroy(); } finally {
+        const next = this.waiting.shift(); if (next) next(); else this.previews--;
+      }
+    }
+  }
   async *segments(entry: NoteEntry, signal: AbortSignal): AsyncGenerator<SearchSegment> {
     signal.throwIfAborted();
     const file = this.app.vault.getAbstractFileByPath(entry.path);

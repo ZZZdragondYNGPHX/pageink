@@ -26,7 +26,6 @@ import type { SourceParagraph } from './mixed-host';
 import { cardReference, cardText } from './cards';
 import { connectCards, inkCard, refreshTextCards, textCard } from './cards-render';
 import { CardEditor, CardsPanel } from './CardsPanel';
-import { NOTE_TYPES } from './notes';
 
 export interface WorkspaceProps { session: Session; pdf?: PdfService; host: WorkspaceHost }
 type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-export' | 'pdf-text' | 'mixed' | 'cards';
@@ -36,7 +35,7 @@ function canvasTool(tool: ToolId, prefs: Preferences, marquee: CanvasTool['marqu
   const base: CanvasTool = { kernel: 'selection', color: prefs.pen.color, width: prefs.pen.width, opacity: 100, fontSize: prefs.text.size, pressure: false };
   if (marquee) return { ...base, kernel: 'hand', marquee };
   switch (tool) {
-    case 'pen': return { ...base, kernel: 'freedraw', pressure: prefs.pen.pressure };
+    case 'pen': return { ...base, kernel: 'freedraw', pressure: prefs.pen.pressure, scribble: prefs.pen.scribble };
     case 'highlighter': return { ...base, kernel: 'freedraw', color: prefs.highlighter.color, width: prefs.highlighter.width, opacity: 35 };
     case 'eraser': return { ...base, kernel: 'hand', erase: { whole: prefs.eraser.mode === 'stroke', radius: prefs.eraser.size } };
     case 'lasso': return { ...base, marquee: { shape: 'lasso', purpose: 'select' } };
@@ -60,6 +59,13 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const prefs = useSyncExternalStore(host.prefs.subscribe, host.prefs.get), store = host.prefs;
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   useEffect(() => { session.listeners.add(rerender); return () => { session.listeners.delete(rerender); }; }, []);
+  useEffect(() => {
+    const doc = area.current!.ownerDocument, win = doc.defaultView!;
+    const save = () => { void session.flush().catch(() => {}); };
+    const hidden = () => { if (doc.visibilityState === 'hidden') save(); };
+    doc.addEventListener('visibilitychange', hidden); win.addEventListener('pagehide', save);
+    return () => { doc.removeEventListener('visibilitychange', hidden); win.removeEventListener('pagehide', save); };
+  }, [session]);
   const manifest = session.manifest, paged = manifest.mode === 'pages';
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
   const area = useRef<HTMLDivElement>(null), [areaSize, setAreaSize] = useState({ width: 800, height: 600 });
@@ -592,12 +598,14 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
 
   const topbar = <header className="ink-topbar">
     <div className="ink-topbar-start">
-      {!focus && <IconButton icon="notebook" label="笔记库" onClick={() => run(() => host.openLibrary())}/>}
       {!focus && <IconButton icon="sidebar" label={sidebar ? '隐藏侧栏' : '显示侧栏'} aria-expanded={sidebarVisible} aria-controls={sidebarId} onClick={toggleSidebar}/>}
-      <div className="ink-document-heading"><strong title={host.fileName()}>{host.fileName()}</strong><span title={NOTE_TYPES[manifest.mode].description}>{manifest.pdf ? 'PDF 批注' : `${NOTE_TYPES[manifest.mode].label} · ${NOTE_TYPES[manifest.mode].detail}`}</span></div>
+      {!reading && <div className="ink-history-tools" role="group" aria-label="编辑历史">
+        <IconButton icon="undo" label="撤销" shortcut="Ctrl+Z" disabled={!session.bodyHistory.canUndo} onClick={() => undo()}/>
+        <IconButton icon="redo" label="重做" shortcut="Ctrl+Shift+Z" disabled={!session.bodyHistory.canRedo} onClick={() => redo()}/>
+      </div>}
+      {status}
     </div>
     <div className="ink-topbar-end">
-      {status}
       {paged && <IconButton icon={reading ? 'pen' : 'read'} label={reading ? '继续书写' : '阅读模式'} aria-pressed={reading} className="ink-labelled ink-reading-toggle" onClick={toggleReading}><span>{reading ? '书写' : '阅读'}</span></IconButton>}
       <IconButton icon="scratch" label="草稿纸" aria-pressed={scratchOpen} className="ink-labelled" onClick={() => setScratchOpen(v => !v)}><span>草稿纸</span></IconButton>
       {focus ? <IconButton icon="focus" label="退出专注" className="ink-labelled" aria-pressed onClick={() => setFocus(false)}><span>退出专注</span></IconButton> : <>
@@ -607,11 +615,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       </>}
     </div>
   </header>;
-  const tools = !reading && <div className="ink-writing-bar">
-    <div className="ink-history-tools" role="group" aria-label="编辑历史">
-      <IconButton icon="undo" label="撤销" shortcut="Ctrl+Z" disabled={!session.bodyHistory.canUndo} onClick={() => undo()}/>
-      <IconButton icon="redo" label="重做" shortcut="Ctrl+Shift+Z" disabled={!session.bodyHistory.canRedo} onClick={() => redo()}/>
-    </div>
+  const tools = (!reading || scratchOpen) && <div className="ink-writing-bar">
     <ToolShelf tool={tool} onTool={setTool} onImage={chooseImage} capture={!!pdf} prefs={prefs} store={store}/>
     <IconButton icon="docText" label="文字段落" aria-expanded={pop.open === 'mixed'} onClick={event => pop.toggle('mixed', event.currentTarget)}/>
     {!paged && <IconButton icon="canvas" label="画布卡片" aria-expanded={pop.open === 'cards'} disabled={!!editingCard} onClick={event => pop.toggle('cards', event.currentTarget)}/>}
@@ -620,12 +624,12 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   return <LayerContext.Provider value={layer}>
     <div ref={setLayer} className={`ink-workspace ink-mode-${manifest.mode}${focus ? ' is-focus' : ''}${reading ? ' is-reading' : ''}${sidebarVisible ? ' has-sidebar' : ''}`} onKeyDownCapture={onKeyDown}>
       {topbar}
-      {paged && tools}
+      {tools}
       {session.conflictPath && <div className="ink-banner is-warning" role="alert"><InkIcon name="warning"/><span><strong>这个笔记在别处被修改过。</strong>你的内容已安全保留，自动保存已暂停。两种选择都不会丢失任何一方的内容。</span>
         <span className="ink-banner-actions">{([[true, '继续编辑我的版本（副本）'], [false, '打开外部版本']] as const).map(([copy, label]) =>
           <button key={label} type="button" disabled={resolving} onClick={() => run(async () => { setResolving(true); try { await host.resolveConflict(copy); } finally { setResolving(false); } })}>{label}</button>)}</span></div>}
       {session.sourceIssue && <div className="ink-banner" role="status"><InkIcon name="warning"/><span>原 PDF 暂不可用：{session.sourceIssue} 笔迹不受影响。</span><span className="ink-banner-actions"><button type="button" onClick={() => host.relinkSource()}>重新关联…</button></span></div>}
-      <div className="ink-body">
+      <div className={`ink-body${scratchOpen && prefs.scratchPlacement === "docked" ? " has-docked-scratch" : ""}`}>
         {sidebarVisible && <>
         {compact && <button type="button" className="ink-sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebar(false)}/>}
         <aside className="ink-sidebar" id={sidebarId} aria-label="侧栏">
@@ -639,13 +643,14 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
             renaming={renaming} onRename={renameRegion}/>}
           {tab === 'search' && <SearchPanel session={session} pdf={pdf} paged={paged} onOpen={(hit: SearchHit) => body.current?.reveal(hit.page, hit.rect, !!hit.rect)}/>}
         </aside></>}
-        <main className="ink-canvas-area" ref={area}>
-          {!paged && tools}
+        <div className="ink-surfaces" ref={area}>
+        <main className="ink-canvas-area">
           <InkCanvas session={session} pdf={pdf} kind={paged ? 'pages' : 'canvas'} pagesKey={pagesKey} tool={bodyTool} fingerDraws={prefs.fingerDraws} theme={theme} readOnly={reading || !!editingCard}
             initialView={host.loadView()} ref={body}
             onReady={handle => { body.current = handle; setViews(handle.views); }}
             onError={message => toast.show({ kind: 'error', message })}
             onSelection={setSelection} onMarquee={onMarquee} onGesture={gesture => gesture === 'undo' ? undo() : redo()}
+            onScribble={() => toast.show({ kind: 'info', message: '已涂划擦除', action: { label: '撤销', run: () => undo() } })}
             onCardEdit={!paged ? editCard : undefined}
             onAddPage={paged && !reading ? () => addPage() : undefined}
             onViewChange={() => { if (body.current) host.saveView(body.current.memory()); }}/>
@@ -660,17 +665,19 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
             onStep={delta => { const page = manifest.pages[currentIndex + delta]; if (page) goToPage(page.id); }}
             onFit={() => body.current?.zoom(paged ? 'fitWidth' : 'fitAll')} onBookmark={bookmarkView}
             onAdd={() => addPage(currentPageId)} reading={reading}/>
-          <ScratchWindow open={scratchOpen} frame={prefs.scratch} area={areaSize} onClose={() => setScratchOpen(false)}
+          <Toasts toasts={toast.toasts} dismiss={toast.dismiss}/>
+        </main>
+          <ScratchWindow docked={prefs.scratchPlacement === 'docked'} onDock={() => store.update({ scratchPlacement: prefs.scratchPlacement === 'docked' ? 'floating' : 'docked' })} open={scratchOpen} frame={prefs.scratch} area={areaSize} onClose={() => setScratchOpen(false)}
             onFrame={(frame, done) => { store.update({ scratch: frame }); if (done) scratch.current?.api.refresh(); }}
             history={{ canUndo: session.scratchHistory.canUndo, canRedo: session.scratchHistory.canRedo, undo: () => undo('scratch'), redo: () => redo('scratch'),
               clear: () => run(async () => { const h = scratch.current; if (!h) return; await h.flush(); h.api.updateScene({ elements: [] }); await h.flush(); toast.show({ kind: 'info', message: '草稿纸已清空', action: { label: '撤销', run: () => undo('scratch') } }); }) }}
             selection={scratchSelection && !scratchSelection.busy ? { toBody: () => run(toBody), destination: paged ? '当前页' : '画布', remove: () => run(() => scratch.current?.replaceSelected(() => null)), source: scratchSelection.source ? () => selectionActions.source(scratchSelection) : undefined } : null}>
             <InkCanvas session={session} kind="scratch" pagesKey="scratch" tool={scratchTool} fingerDraws={prefs.fingerDraws} theme={theme} ref={scratch}
+              onScribble={() => toast.show({ kind: 'info', message: '已涂划擦除', action: { label: '撤销', run: () => undo('scratch') } })}
               onReady={handle => { scratch.current = handle; for (const resolve of scratchWaiters.current.splice(0)) resolve(handle); }}
               onError={message => toast.show({ kind: 'error', message })} onSelection={setScratchSelection} onGesture={gesture => gesture === 'undo' ? undo('scratch') : redo('scratch')}/>
           </ScratchWindow>
-          <Toasts toasts={toast.toasts} dismiss={toast.dismiss}/>
-        </main>
+        </div>
       </div>
       {resolving && <div className="ink-cover" role="status"><span className="ink-spinner"/>正在保存独立副本…</div>}
 

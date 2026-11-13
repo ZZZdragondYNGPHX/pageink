@@ -11,7 +11,7 @@ export function MixedPanel({ elements, busy, selectionCount, readOnly, paged, on
   const paragraphs = elements.filter(e => !e.isDeleted && textReference(e) && !(e.type === 'text' && e.containerId)).sort((a, b) => a.y - b.y);
   return <div className="ink-mixed-panel" aria-busy={busy}>
     <div className="ink-popover-title">{paged ? '本页文字段落' : '画布文字段落'}</div>
-    <p className="ink-popover-note">从文笺摘入文字，在旁边写下想法。绑定的笔迹会随段落一起移动。</p>
+    <p className="ink-popover-note">从文字笔记摘入文字，在旁边写下想法。绑定的笔迹会随段落一起移动。</p>
     <div className="ink-mixed-actions">
       <button type="button" className="mod-cta" disabled={busy || readOnly} onClick={onInsert}><InkIcon name="plus"/>插入文字段落</button>
       <button type="button" disabled={busy || readOnly || !paragraphs.length} onClick={onRefresh}>{paged ? '更新本页文字' : '更新画布文字'}</button>

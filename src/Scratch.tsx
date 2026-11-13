@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
 import type { ScratchFrame } from './preferences';
 
@@ -9,42 +9,73 @@ export function containFrame(frame: ScratchFrame, area: { width: number; height:
   return { width, height, right: Math.max(8, Math.min(frame.right, area.width - width - 8)), top: Math.max(8, Math.min(frame.top, area.height - height - 8)) };
 }
 
-export function ScratchWindow({ open, frame, area, onFrame, onClose, history, selection, children }: {
+export function ScratchWindow({ open, frame, area, onFrame, onClose, docked, onDock, history, selection, children }: {
   open: boolean; frame: ScratchFrame; area: { width: number; height: number }; onFrame: (frame: ScratchFrame, done: boolean) => void; onClose: () => void;
+  docked: boolean; onDock: () => void;
   history: { canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; clear: () => void };
   selection: { toBody: () => void; destination: string; remove: () => void; source?: () => void } | null;
   children: React.ReactNode;
 }) {
   const drag = useRef<{ id: number; x: number; y: number; frame: ScratchFrame; resize: boolean } | null>(null);
+  const root = useRef<HTMLElement>(null);
+  const pending = useRef<ScratchFrame>();
   const shown = containFrame(frame, area);
   const latest = useRef(shown); latest.current = shown;
-  useEffect(() => { if (open && (shown.right !== frame.right || shown.top !== frame.top || shown.width !== frame.width || shown.height !== frame.height)) onFrame(shown, false); }, [open, area.width, area.height]);
+  useEffect(() => {
+    const element = root.current!;
+    // Obsidian's mobile drawers listen for TouchEvents as well as PointerEvents.
+    // Native listeners avoid React's passive touchmove delegation; taps still click.
+    const isolate = (event: TouchEvent) => { event.stopPropagation(); if (event.type === 'touchmove' && event.cancelable) event.preventDefault(); };
+    const events = ['touchstart', 'touchmove', 'touchend', 'touchcancel'] as const;
+    for (const type of events) element.addEventListener(type, isolate, { passive: false });
+    return () => { for (const type of events) element.removeEventListener(type, isolate); };
+  }, []);
+  useLayoutEffect(() => {
+    if (drag.current) return;
+    if (docked) { for (const key of ["transform", "right", "top", "width", "height"]) root.current!.style.removeProperty(key); return; }
+    Object.assign(root.current!.style, { transform: '', right: `${shown.right}px`, top: `${shown.top}px`, width: `${shown.width}px`, height: `${shown.height}px` });
+  });
+  useEffect(() => { if (open && !docked && (shown.right !== frame.right || shown.top !== frame.top || shown.width !== frame.width || shown.height !== frame.height)) onFrame(shown, false); }, [open, docked, area.width, area.height]);
   const start = (resize: boolean) => (event: React.PointerEvent<HTMLElement>) => {
-    if (drag.current || event.button !== 0) return;
+    if (docked || drag.current || event.button !== 0) return;
     if (!resize && (event.target as HTMLElement).closest('button')) return;
-    event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
+    event.stopPropagation(); event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, frame: latest.current, resize };
+    pending.current = latest.current;
   };
   const move = (event: React.PointerEvent) => {
     const d = drag.current; if (d?.id !== event.pointerId) return;
+    event.stopPropagation();
     const dx = event.clientX - d.x, dy = event.clientY - d.y;
-    onFrame(containFrame(d.resize ? { ...d.frame, width: d.frame.width - dx, height: d.frame.height + dy } : { ...d.frame, right: d.frame.right - dx, top: d.frame.top + dy }, area), false);
+    const next = containFrame(d.resize ? { ...d.frame, width: d.frame.width - dx, height: d.frame.height + dy } : { ...d.frame, right: d.frame.right - dx, top: d.frame.top + dy }, area);
+    pending.current = next;
+    if (d.resize) Object.assign(root.current!.style, { width: `${next.width}px`, height: `${next.height}px` });
+    else root.current!.style.transform = `translate(${d.frame.right - next.right}px, ${next.top - d.frame.top}px)`;
   };
-  const end = (event: React.PointerEvent) => { if (drag.current?.id === event.pointerId) { drag.current = null; onFrame(latest.current, true); } };
+  const end = (event: React.PointerEvent) => {
+    if (drag.current?.id !== event.pointerId) return;
+    event.stopPropagation();
+    const next = pending.current ?? latest.current;
+    drag.current = null; pending.current = undefined;
+    Object.assign(root.current!.style, { transform: '', right: `${next.right}px`, top: `${next.top}px` });
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    onFrame(next, true);
+  };
   const nudge = (event: React.KeyboardEvent) => {
     const step = event.shiftKey ? 40 : 16, f = latest.current;
     const moves: Record<string, Partial<ScratchFrame>> = { ArrowLeft: { right: f.right + step }, ArrowRight: { right: f.right - step }, ArrowUp: { top: f.top - step }, ArrowDown: { top: f.top + step } };
-    if (event.target === event.currentTarget && moves[event.key]) { event.preventDefault(); onFrame(containFrame({ ...f, ...moves[event.key] }, area), true); }
+    if (!docked && event.target === event.currentTarget && moves[event.key]) { event.preventDefault(); onFrame(containFrame({ ...f, ...moves[event.key] }, area), true); }
   };
   const resizeWithKeys = (event: React.KeyboardEvent) => {
     const step = event.shiftKey ? 40 : 16, f = latest.current;
     const sizes: Record<string, Partial<ScratchFrame>> = { ArrowLeft: { width: f.width + step }, ArrowRight: { width: f.width - step }, ArrowUp: { height: f.height - step }, ArrowDown: { height: f.height + step } };
     if (sizes[event.key]) { event.preventDefault(); onFrame(containFrame({ ...f, ...sizes[event.key] }, area), true); }
   };
-  return <section className="ink-scratch" aria-label="草稿纸" hidden={!open} style={{ right: shown.right, top: shown.top, width: shown.width, height: shown.height }}>
-    <header className="ink-scratch-bar" tabIndex={0} aria-label="草稿纸窗口，可拖动；聚焦后用方向键移动" onPointerDown={start(false)} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onKeyDown={nudge}>
+  return <section ref={root} className={`ink-scratch${docked ? " is-docked" : ""}`} aria-label="草稿纸" hidden={!open} style={docked ? undefined : { right: shown.right, top: shown.top, width: shown.width, height: shown.height }}>
+    <header className="ink-scratch-bar" tabIndex={docked ? -1 : 0} aria-label={docked ? "草稿纸" : "草稿纸窗口，可拖动；聚焦后用方向键移动"} onPointerDown={start(false)} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} onKeyDown={nudge}>
       <span className="ink-scratch-title"><InkIcon name="scratch"/>草稿纸</span>
       <span className="ink-scratch-actions">
+        <IconButton icon={docked ? "float" : "dock"} label={docked ? "浮动草稿纸" : "停靠草稿纸"} onClick={onDock}/>
         <IconButton icon="undo" label="撤销草稿纸" disabled={!history.canUndo} onClick={history.undo}/>
         <IconButton icon="redo" label="重做草稿纸" disabled={!history.canRedo} onClick={history.redo}/>
         <IconButton icon="trash" label="清空草稿纸（可撤销）" onClick={history.clear}/>
@@ -58,6 +89,6 @@ export function ScratchWindow({ open, frame, area, onFrame, onClose, history, se
         <IconButton icon="trash" label="删除" onClick={selection.remove}/>
       </div>}
     </div>
-    <div className="ink-scratch-resize" role="button" tabIndex={0} aria-label="调整草稿纸大小，用方向键调整" onKeyDown={resizeWithKeys} onPointerDown={start(true)} onPointerMove={move} onPointerUp={end} onPointerCancel={end}/>
+    {!docked && <div className="ink-scratch-resize" role="button" tabIndex={0} aria-label="调整草稿纸大小，用方向键调整" onKeyDown={resizeWithKeys} onPointerDown={start(true)} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end}/>}
   </section>;
 }

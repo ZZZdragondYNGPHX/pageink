@@ -77,7 +77,7 @@ try {
   checks.push('Real mouse stroke, selection and explicit paragraph binding preserve exact raw points, pressure and terminal point');
 
   await panel().locator('li').filter({ hasText: first }).getByRole('button', { name: '编辑原文' }).click();
-  await page.locator('.workspace-leaf.mod-active .ink-native-tools').waitFor();
+  await page.locator('.workspace-leaf.mod-active .markdown-source-view').waitFor();
   // Source selection excludes the stable ID, so replacing the paragraph leaves the anchor intact.
   const expanded = '第一段：' + '在这里补充观察、推理和验证条件。'.repeat(65);
   await page.keyboard.insertText(expanded);
@@ -145,7 +145,7 @@ try {
   assert.ok(restoredRef.path.endsWith('.md')); assert.notEqual(restoredRef.path, '混合来源改名.md');
   assert.notEqual(restoredRef.path, restored.manifest.assets[restoredRef.snapshotAsset].path);
   await openPanel(); await panel().locator('li').filter({ hasText: second }).getByRole('button', { name: '编辑原文' }).click();
-  await page.locator('.workspace-leaf.mod-active .ink-native-tools').waitFor();
+  await page.locator('.workspace-leaf.mod-active .markdown-source-view').waitFor();
   await page.keyboard.insertText('恢复后继续编辑。'); await app(app => app.workspace.activeLeaf.view.save());
   const immutable = await readFile(join(vault, restored.manifest.assets[restoredRef.snapshotAsset].path), 'utf8');
   assert.ok(immutable.includes(second)); assert.ok(!immutable.includes('恢复后继续编辑。'));

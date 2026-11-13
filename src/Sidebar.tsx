@@ -35,7 +35,7 @@ function Thumbnail({ session, page, pdf, version, root }: { session: Session; pa
       const target = canvas.current; if (!target || abort.signal.aborted) return;
       target.width = rendered.width; target.height = rendered.height; target.getContext('2d')!.drawImage(rendered, 0, 0);
       rendered.width = rendered.height = 0; drawn.current = version;
-    }).catch(() => {}), drawn.current ? 900 : 30);
+    }).catch(() => {}), drawn.current ? 5000 : 30);
     return () => { clearTimeout(timer); abort.abort(); };
   }, [visible, version, pdf]);
   useEffect(() => () => { if (canvas.current) canvas.current.width = canvas.current.height = 0; }, []);

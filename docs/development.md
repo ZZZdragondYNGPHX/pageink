@@ -20,11 +20,13 @@ npm run build
 | `src/main.tsx`、`src/host.ts` | 插件注册、文件操作和宿主适配。 |
 | `src/Workspace.tsx`、`src/InkCanvas.tsx` | 绘写工作区、输入与编辑内核集成。 |
 | `src/session.ts`、`src/storage.ts`、`src/history.ts` | 保存、冲突处理、跨页历史与独立草稿纸历史。 |
-| `src/notes-host.tsx`、`src/Library.tsx`、`src/library-search*.ts` | 原生 Markdown 集成、笔记库与搜索。 |
+| `src/notes-host.tsx`、`src/Library.tsx`、`src/library-search*.ts` | 原生工作台集成、文件夹浏览、内容预览与搜索。 |
 | `src/mixed*.ts`、`src/cards*.ts` | 段落引用、笔迹绑定、卡片与来源备份。 |
 | `src/properties*.ts` | 属性验证、表单与并发保存。 |
 | `src/archive.ts`、`src/export*.ts`、`src/pdf.ts` | 完整备份、导出及 PDF 处理。 |
 | `scripts/kernel-patch.mjs` | 集中管理 Excalidraw 修改，详见[内核补丁](kernel-patches.md)。 |
+
+文件树工具栏暂无公开扩展 API；`notes-host.tsx` 将 DOM 适配集中在 `mountExplorers`，卸载恢复原始按钮与事件，核心能力通过宿主命令、文件/编辑器菜单和原生标签页复用。文件夹浏览状态使用 `ItemView` 状态，绘写注册为原生文件视图。
 
 Markdown 正文与撤销由原生编辑器负责。绘写数据保存完整对象与采样，视口只影响显示；导出读取完整内容。段落和卡片使用稳定引用与不可变来源快照，恢复时另存可编辑原件。
 
@@ -36,6 +38,7 @@ Markdown 正文与撤销由原生编辑器负责。绘写数据保存完整对�
 
 ```sh
 node dev/ui-polish.mjs
+node dev/writing-workflows.mjs
 node dev/library-workflows.mjs
 node dev/notes-workflows.mjs
 node dev/mixed-workflows.mjs

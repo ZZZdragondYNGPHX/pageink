@@ -37,7 +37,7 @@ export class BoardSources implements CardsHost {
     for (const file of this.app.vault.getFiles().filter(f => f.extension === 'inknote')) {
       try { if (parseManifest(await this.services.io.read(file.path)).mode === 'pages') files.push(file); } catch { /* unrelated damaged document */ }
     }
-    const file = await this.choose('选择手札或 PDF 批注', files, file => file.path); if (!file) return;
+    const file = await this.choose('选择手写笔记或 PDF 批注', files, file => file.path); if (!file) return;
     const session = await this.snapshot(file.path);
     if (!session.manifest.regions.length) throw Error('这份笔记还没有区域书签。先圈选内容并加书签，再来插入手写卡片。');
     const region = await this.choose('选择手写区域', session.manifest.regions, r => r.title); if (!region) return;

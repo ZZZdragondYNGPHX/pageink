@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { blockInsertion, drawingRegionCode, filterNotes, NoteEntry } from '../src/notes';
+import { blockInsertion, drawingRegionCode, filterNotes, folderNotes, NoteEntry } from '../src/notes';
 
 test('inserting a drawing reference keeps paragraph boundaries and exact reference identity', () => {
   const reference = { document: 'doc-1', file: '课程/引号"与中文.inknote', region: 'region-1' };
@@ -22,4 +22,12 @@ test('catalogue searches name and path without hiding damaged documents or chang
   assert.deepEqual(filterNotes(entries, 'text', 'PHYSICS 课堂').map(entry => entry.path), ['Physics/课堂.md']);
   assert.equal(filterNotes(entries, 'canvas', '').length, 0);
   assert.equal(entries[0].modified, 1);
+});
+
+test('folder browsing and recursive search share exact vault paths', () => {
+  const entries: NoteEntry[] = ['课程.md', '学习/课堂.md', '学习/阅读/摘录.md', '学习笔记/其他.md'].map(path => ({ path, name: path, kind: 'text', modified: 1 }));
+  assert.deepEqual(folderNotes(entries, '/').map(e => e.path), ['课程.md']);
+  assert.deepEqual(folderNotes(entries, '学习').map(e => e.path), ['学习/课堂.md']);
+  assert.deepEqual(folderNotes(entries, '学习', true).map(e => e.path), ['学习/课堂.md', '学习/阅读/摘录.md']);
+  assert.equal(folderNotes(entries, '/', true).length, 4);
 });

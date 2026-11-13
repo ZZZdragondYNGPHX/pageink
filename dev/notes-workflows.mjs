@@ -10,7 +10,7 @@ const unchangedHistorySteps = { undo: 0, redo: 0 };
 page.on('pageerror', e => errors.push(e.message));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text().slice(0, 600)); });
 const activeRoot = () => page.locator('.workspace-leaf.mod-active');
-const nativeTools = () => activeRoot().locator('.ink-native-tools');
+const nativeTools = () => activeRoot().locator('.workspace-leaf-content[data-type=markdown]');
 const app = (fn, arg) => page.evaluate(([source, argument]) => new Function('app', 'plugin', 'arg', `return (${source})(app, plugin, arg)`)(window.app, window.app.plugins.plugins.pageink, argument), [fn.toString(), arg]);
 const command = id => app((app, _plugin, id) => app.commands.executeCommandById(`pageink:${id}`), id);
 const text = () => app(app => app.workspace.activeLeaf.view.editor.getValue());
@@ -36,7 +36,7 @@ async function pick(name) {
 async function endOfText() {
   await app(app => { const editor = app.workspace.activeLeaf.view.editor; editor.setCursor(editor.offsetToPos(editor.getValue().length)); editor.focus(); });
 }
-async function library() { await command('open-library'); await activeRoot().locator('.ink-library').waitFor(); }
+async function library() { await command('search-library'); await activeRoot().locator('.ink-library').waitFor(); }
 async function openFromLibrary(name) {
   await library();
   await activeRoot().getByRole('searchbox', { name: '搜索笔记', exact: true }).fill(name);
@@ -48,11 +48,11 @@ try {
   await app(app => app.vault.setConfig('alwaysUpdateLinks', true));
   await library();
   await waitFor(() => activeRoot().locator('.ink-library-note').count().then(n => n >= 3), 'Library did not load files');
-  await activeRoot().getByRole('button', { name: '新建与导入', exact: true }).click();
+  await command('new-drawing');
   await page.locator('.ink-create-options summary').click();
   await page.locator('.ink-create-name').fill('课堂记录');
   await shot(page, 'notes-create');
-  await page.locator('.ink-create-modal').getByRole('button', { name: '新建文笺', exact: true }).click();
+  await page.locator('.ink-create-modal').getByRole('button', { name: '新建文字笔记', exact: true }).click();
   await nativeTools().waitFor();
   assert.equal(await app(app => app.workspace.activeLeaf.getViewState().type), 'markdown');
   const editor = activeRoot().locator('.cm-content[contenteditable=true]');
@@ -71,7 +71,7 @@ try {
   checks.push('Create Markdown from PageInk, real native view, Chinese/English input, native undo/redo and exact disk save');
 
   await endOfText();
-  await nativeTools().getByRole('button', { name: '插入笔记链接' }).click(); await pick('基础.md');
+  await command('insert-note-link'); await pick('基础.md');
   await waitFor(async () => (await text()).includes('[[基础]]'), 'Native link not inserted');
   await waitFor(() => app(app => !!app.metadataCache.resolvedLinks['课堂记录.md']?.['基础.md']), 'Native metadata did not index link');
   await app(app => app.fileManager.renameFile(app.vault.getAbstractFileByPath('基础.md'), '概念基础.md'));
@@ -89,13 +89,13 @@ try {
   await drawing.getByRole('textbox', { name: '书签名称' }).press('Enter');
   const originalInk = await app(async app => { const s = app.workspace.activeLeaf.view.session; await s.flush(); return { manifest: structuredClone(s.manifest), ink: await s.read(s.manifest.pages[0].id) }; });
   assert.ok(originalInk.ink.some(e => e.type === 'freedraw' && e.points.length > 10));
-  await drawing.getByRole('button', { name: '笔记库', exact: true }).click();
-  await activeRoot().getByRole('button', { name: '长卷', exact: true }).click();
+  await library();
+  await activeRoot().getByRole('button', { name: '无边画布', exact: true }).click();
   await waitFor(() => activeRoot().locator('.ink-library-note').count().then(n => n === 1), 'Canvas catalogue filter failed');
   await activeRoot().getByRole('button', { name: '全部', exact: true }).click();
   await openFromLibrary('课堂记录'); await nativeTools().waitFor(); await endOfText();
   const beforeReference = await text();
-  await nativeTools().getByRole('button', { name: '插入手写区域' }).click(); await pick('推导画布.inknote'); await pick('推导过程');
+  await command('insert-drawing-region'); await pick('推导画布.inknote'); await pick('推导过程');
   await waitFor(async () => (await text()).includes('```drawing-region'), 'Region reference not inserted');
   const withReference = await text();
   const reference = JSON.parse(withReference.match(/```drawing-region\n([^\n]+)\n```/)[1]);
@@ -107,7 +107,7 @@ try {
   await page.locator('.modal-container').waitFor({ state: 'detached' });
   await documentHistory('Control+z', withReference, beforeReference, 'undo');
   await documentHistory('Control+y', beforeReference, withReference, 'redo');
-  await nativeTools().getByRole('button', { name: '阅读模式', exact: true }).click();
+  await app(app => app.commands.executeCommandById('markdown:toggle-preview'));
   await activeRoot().locator('.ink-embed canvas:visible').waitFor();
   await shot(page, 'notes-reading-reference');
   await activeRoot().getByRole('button', { name: '推导过程 · 推导画布', exact: true }).click();
@@ -123,13 +123,13 @@ try {
   // Old code-block path deliberately stays unchanged; stable document ID resolves the new location.
   await app(async app => { await app.workspace.activeLeaf.view.save(); app.workspace.activeLeaf.detach(); });
   await openFromLibrary('课堂记录'); await nativeTools().waitFor();
-  if (await nativeTools().getByRole('button', { name: '阅读模式', exact: true }).count()) await nativeTools().getByRole('button', { name: '阅读模式', exact: true }).click();
+  if (await app(app => app.workspace.activeLeaf.view.getMode()) === 'source') await app(app => app.commands.executeCommandById('markdown:toggle-preview'));
   await activeRoot().locator('.ink-embed canvas:visible').waitFor();
   checks.push('Renamed drawing native link updates; stable region ID resolves old path after closing and reopening Markdown');
 
-  await nativeTools().getByRole('button', { name: '继续编辑', exact: true }).click();
+  await app(app => app.commands.executeCommandById('markdown:toggle-preview'));
   await endOfText();
-  await nativeTools().getByRole('button', { name: '插入笔记链接' }).click();
+  await command('insert-note-link');
   const changed = await app(app => { const e = app.workspace.activeLeaf.view.editor; e.replaceRange('插入窗口打开后的新内容', e.offsetToPos(e.getValue().length)); return e.getValue(); });
   await pick('概念基础.md');
   await page.getByText('笔记或正文已变化，请回到需要插入的位置再试一次。', { exact: true }).waitFor();
@@ -143,16 +143,10 @@ try {
   await page.evaluate(() => window.app.commands.executeCommandById('theme:toggle-light-dark'));
   await shot(page, 'notes-library-narrow-dark');
   await openFromLibrary('课堂记录'); await nativeTools().waitFor();
-  for (const el of await nativeTools().getByRole('button').all()) {
-    const bounds = await el.boundingBox(), container = await nativeTools().boundingBox();
-    assert.ok(bounds.x >= container.x && bounds.x + bounds.width <= container.x + container.width + 1, 'Native controls overflow narrow view');
-  }
-  // Exercise keyboard access; actual Chinese IME and Pencil remain device checks.
-  await nativeTools().getByRole('button', { name: '笔记库', exact: true }).focus();
-  await page.keyboard.press('Enter'); await activeRoot().locator('.ink-library').waitFor();
-  await openFromLibrary('课堂记录'); await nativeTools().waitFor();
+  assert.equal(await page.locator('.ink-native-tools').count(), 0);
+  await library(); await openFromLibrary('课堂记录'); await nativeTools().waitFor();
   await shot(page, 'notes-native-narrow-dark');
-  checks.push('Narrow/dark library and native controls, keyboard activation and return to same file');
+  checks.push('Narrow/dark folder browser and native Markdown, return to the same file');
 
   await app(app => app.workspace.activeLeaf.view.save());
   const beforeDisable = await readVaultFile('课堂记录.md');
@@ -163,8 +157,8 @@ try {
   await app(app => app.workspace.activeLeaf.view.save());
   assert.equal(await readVaultFile('课堂记录.md'), beforeDisable + '\n插件关闭后继续编辑。');
   await app(app => app.plugins.enablePlugin('pageink'));
-  await nativeTools().waitFor(); assert.equal(await nativeTools().count(), 1);
-  checks.push('Disable removes all added native controls; Markdown continues editing/saving; re-enable attaches once');
+  await nativeTools().waitFor(); assert.equal(await page.locator('.ink-native-tools').count(), 0);
+  checks.push('Disable leaves Markdown editing/saving intact; re-enable does not add a duplicate toolbar');
 
   assert.deepEqual(errors, []);
   const sha256 = createHash('sha256').update(await readFile(new URL('../dist/main.js', import.meta.url))).digest('hex');

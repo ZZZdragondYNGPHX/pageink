@@ -46,7 +46,7 @@ async function create(mode, name) {
   await command('new-drawing');
   await page.locator('.ink-create-options summary').click();
   await page.locator('.ink-create-name').fill(name);
-  if (mode === '手札') await page.getByRole('radio', { name: '横线', exact: true }).click();
+  if (mode === '手写笔记') await page.getByRole('radio', { name: '横线', exact: true }).click();
   await page.getByRole('button', { name: `新建${mode}`, exact: true }).click();
   await workspace.waitFor(); await page.waitForTimeout(700);
 }
@@ -62,7 +62,7 @@ async function exportItem(label, extension) {
 }
 try {
   const environment = await page.evaluate(() => ({ obsidian: navigator.userAgent.match(/obsidian\/([\d.]+)/i)?.[1] ?? null, userAgent: navigator.userAgent }));
-  await create('手札', '流程笔记');
+  await create('手写笔记', '流程笔记');
   const box = await workspace.locator('.ink-canvas-area').boundingBox();
   await drag([[box.x + 200, box.y + 140], [box.x + 250, box.y + 120], [box.x + 300, box.y + 160], [box.x + 340, box.y + 140]]);
   const written = await snapshot();
@@ -104,6 +104,7 @@ try {
   const copied = await snapshot();
   assert.notEqual(copied.body[0][0].id, copied.scratch[0].id);
   assert.equal(copied.body[0][0].fileId, copied.scratch[0].fileId);
+  await button('浮动草稿纸').click();
   const scratchBox = await workspace.locator('.ink-scratch').boundingBox();
   await workspace.getByRole('button', { name: '调整草稿纸大小，用方向键调整' }).focus();
   await page.keyboard.press('ArrowLeft');
@@ -139,7 +140,7 @@ try {
   assert.equal(Object.keys(restored.manifest.assets).length, Object.keys(backedUp.manifest.assets).length);
   checks.push('Six-page PDF export, full backup export and restore with scratch, images, source PDF and remapped source link');
 
-  await create('长卷', '想法画布');
+  await create('无边画布', '想法画布');
   const board = await workspace.locator('.ink-canvas-area').boundingBox();
   await button('笔').click();
   await drag([[board.x + 250, board.y + 220], [board.x + 320, board.y + 260], [board.x + 420, board.y + 200]]);

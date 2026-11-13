@@ -10,12 +10,14 @@ import { GridLayer, PageOverlay, PaperLayer } from './PaperLayer';
 import { View, ViewStore, clampToDocument, clampZoom, fitRect, sceneViewport, toScene, zoomAround } from './view';
 import type { ViewMemory } from './host';
 import { cardReference } from './cards';
+import { scribbleRegion, scribbleHits } from './scribble';
 
 export type KernelTool = 'freedraw' | 'selection' | 'hand' | 'text' | 'rectangle' | 'ellipse' | 'diamond' | 'line' | 'arrow';
 export type MarqueePurpose = 'select' | 'capture' | 'bookmark';
 export interface CanvasTool {
   kernel: KernelTool; color: string; width: number; opacity: number; fontSize: number; pressure: boolean;
   erase?: { whole: boolean; radius: number };
+  scribble?: boolean;
   marquee?: { shape: 'rect' | 'lasso'; purpose: MarqueePurpose };
 }
 export interface SelectionInfo { ids: string[]; rect: Rect; busy: boolean; source?: { document: string; page: string; polygon: ScenePoint[] } }
@@ -56,6 +58,7 @@ interface Props {
   onAddPage?: () => void;
   onViewChange?: () => void;
   onCardEdit?: (element: Element) => void;
+  onScribble?: () => void;
 }
 const SCRATCH_PAGE: Page = { id: 'scratch', width: 1, height: 1, margins: { top: 0, right: 0, bottom: 0, left: 0 }, template: 'blank' };
 const NEVER = CaptureUpdateAction.NEVER;
@@ -108,10 +111,21 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     const element = root.current!;
     const status = (event: Event) => setRenderPending((event as CustomEvent<boolean>).detail);
     element.addEventListener('ink-render-status', status);
-    const observer = new ResizeObserver(entries => views.set({ width: entries[0].contentRect.width, height: entries[0].contentRect.height }));
+    let frame = 0;
+    const observer = new ResizeObserver(entries => {
+      const { width, height } = entries[0].contentRect, previous = views.get();
+      const fit = Math.min(1.25, (previous.width - 48) / layoutRef.current.maxWidth);
+      const followsWidth = kind === 'pages' && ready.current && previous.width > 48 && Math.abs(previous.zoom - fit) < 0.02;
+      views.set({ width, height });
+      cancelAnimationFrame(frame);
+      if (api && followsWidth && width > 48 && Math.abs(width - previous.width) > 1) frame = requestAnimationFrame(() => {
+        const v = views.get(), zoom = clampZoom(Math.min(1.25, (v.width - 48) / layoutRef.current.maxWidth), 0.1);
+        setView({ ...zoomAround(v, zoom), scrollX: -(layoutRef.current.bounds.x + layoutRef.current.bounds.width / 2 - v.width / zoom / 2) });
+      });
+    });
     observer.observe(element);
-    return () => { element.removeEventListener('ink-render-status', status); observer.disconnect(); };
-  }, []);
+    return () => { element.removeEventListener('ink-render-status', status); observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [api]);
 
   function initialViewport(elements: readonly Element[]): Partial<AppState> {
     const width = root.current?.clientWidth || 800, height = root.current?.clientHeight || 600;
@@ -172,19 +186,23 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       api.addFiles(Object.values(session.files));
       scene.current!.settle(api.getSceneElements());
       absorb();
-      session.flushers.set(owner, () => flush());
+      session.flushers.set(owner, () => { finishScribble(); return flush(); });
       const s = api.getAppState();
       views.set({ scrollX: s.scrollX, scrollY: s.scrollY, zoom: s.zoom.value });
       setIsReady(true);
       latest.current.onReady(handle);
     };
     const unsubscribe = api.onChange(check); check();
-    const fallback = setInterval(check, 300);
+    const fallback = setInterval(() => { check(); if (done) clearInterval(fallback); }, 300);
     let frame = 0;
-    const pointerUp = api.onPointerUp(() => { clearTimeout(timer.current); cancelAnimationFrame(frame); frame = requestAnimationFrame(() => { clearTimeout(timer.current); void flush().catch(() => {}); }); });
+    const pointerUp = api.onPointerUp((_tool, _state, event) => {
+      if (scribble.current?.id === event.pointerId) scribble.current.finished = true;
+      clearTimeout(timer.current); cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => { finishScribble(); clearTimeout(timer.current); session.setWriting(owner, false); void flush().catch(() => {}); });
+    });
     // The parent flushes before closing. Reading an already-unmounted engine here can return an
     // empty scene and must never be persisted as a deletion.
-    return () => { unsubscribe(); pointerUp(); clearInterval(fallback); clearTimeout(timer.current); cancelAnimationFrame(frame); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
+    return () => { unsubscribe(); pointerUp(); clearInterval(fallback); clearTimeout(timer.current); cancelAnimationFrame(frame); session.setWriting(owner, false); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
   }, [api, initial]);
 
   // ---------- tool ----------
@@ -312,11 +330,29 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const gesture = useRef<{ fingers: number; started: number; travel: number; samples: { t: number; x: number; y: number }[] } | null>(null);
   const inertia = useRef(0);
   const penDown = useRef(false), erasing = useRef(false), lastErase = useRef<ScenePoint>();
+  const scribble = useRef<{ id: number; started: number; points: ScenePoint[]; zoom: number; finished: boolean; previous?: string } | null>(null);
   const marquee = useRef<{ id: number; points: ScenePoint[] } | null>(null);
   const eraserCursor = useRef<HTMLDivElement>(null);
   const local = (event: React.PointerEvent): ScenePoint => { const box = root.current!.getBoundingClientRect(); return [event.clientX - box.left, event.clientY - box.top]; };
   const scenePoint = (event: React.PointerEvent): ScenePoint => { const s = api!.getAppState(), [x, y] = local(event); return [x / s.zoom.value - s.scrollX, y / s.zoom.value - s.scrollY]; };
   const drawsWith = (event: React.PointerEvent) => event.pointerType !== 'touch' || props.fingerDraws;
+
+  function finishScribble() {
+    const gesture = scribble.current;
+    if (!api || !gesture?.finished) return;
+    scribble.current = null;
+    const region = scribbleRegion(gesture.points, gesture.zoom, performance.now() - gesture.started);
+    if (!region) return;
+    const elements = api.getSceneElements(), stroke = elements[elements.length - 1];
+    if (!stroke || stroke.type !== 'freedraw' || stroke.id === gesture.previous) return;
+    const candidates = (api as any).inkQuery(polygonBounds(region)) as Element[];
+    const patches = new Map<string, Element[]>();
+    for (const e of candidates) if (e.id !== stroke.id && scribbleHits(e, region)) patches.set(e.id, []);
+    if (!patches.size) return; // An ordinary mark on blank paper remains ink.
+    // Remove the gesture itself before recording: undo restores only the original handwriting.
+    patches.set(stroke.id, []); (api as any).inkErase(patches);
+    latest.current.onScribble?.();
+  }
 
   function erase(event: React.PointerEvent) {
     if (!api || !tool.erase) return;
@@ -390,6 +426,13 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     penDown.current = event.pointerType === 'pen';
     if (penDown.current) { touches.current.clear(); gesture.current = null; }
     if (!api || !drawsWith(event) || event.button > 0) return;
+    if (props.readOnly) return;
+    finishScribble();
+    session.setWriting(owner, true);
+    if (tool.scribble && tool.kernel === 'freedraw' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const elements = api.getSceneElements();
+      scribble.current = { id: event.pointerId, started: performance.now(), points: [scenePoint(event)], zoom: api.getAppState().zoom.value, finished: false, previous: elements[elements.length - 1]?.id };
+    }
     if (tool.erase) {
       event.stopPropagation(); event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
       erasing.current = true; lastErase.current = undefined; erase(event); return;
@@ -402,6 +445,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     }
   };
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const stroke = scribble.current;
+    if (stroke?.id === event.pointerId && !stroke.finished) {
+      const p = scenePoint(event), previous = stroke.points[stroke.points.length - 1];
+      if (Math.hypot(p[0] - previous[0], p[1] - previous[1]) * stroke.zoom >= 2) stroke.points.push(p);
+      if (performance.now() - stroke.started > 2500) scribble.current = null;
+    }
     if (tool.erase && event.pointerType !== 'touch' && eraserCursor.current) {
       const [x, y] = local(event), r = tool.erase.radius;
       Object.assign(eraserCursor.current.style, { display: 'block', width: `${r * 2}px`, height: `${r * 2}px`, transform: `translate(${x - r}px, ${y - r}px)` });
@@ -447,6 +496,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     if (touches.current.has(event.pointerId)) return finishTouch(event);
     if (event.pointerType === 'pen') penDown.current = false;
+    session.setWriting(owner, false);
     if (erasing.current) { event.stopPropagation(); erasing.current = false; void flush().catch(() => {}); return; }
     const m = marquee.current;
     if (m?.id === event.pointerId) {
@@ -463,6 +513,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const onPointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
     if (touches.current.has(event.pointerId)) return finishTouch(event);
     penDown.current = false;
+    scribble.current = null; session.setWriting(owner, false);
     if (erasing.current) { erasing.current = false; void flush().catch(() => {}); }
     if (marquee.current?.id === event.pointerId) { marquee.current = null; setMarqueePath(null); }
   };
@@ -497,7 +548,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     {tool.erase && <div ref={eraserCursor} className="ink-eraser-cursor" aria-hidden="true"/>}
   </div>;
 }), (a, b) => a.session === b.session && a.pdf === b.pdf && a.kind === b.kind && a.pagesKey === b.pagesKey && a.fingerDraws === b.fingerDraws && a.theme === b.theme && a.readOnly === b.readOnly &&
-  a.tool.kernel === b.tool.kernel && a.tool.color === b.tool.color && a.tool.width === b.tool.width && a.tool.opacity === b.tool.opacity && a.tool.fontSize === b.tool.fontSize && a.tool.pressure === b.tool.pressure &&
+  a.tool.kernel === b.tool.kernel && a.tool.color === b.tool.color && a.tool.width === b.tool.width && a.tool.opacity === b.tool.opacity && a.tool.fontSize === b.tool.fontSize && a.tool.pressure === b.tool.pressure && a.tool.scribble === b.tool.scribble &&
   a.tool.erase?.whole === b.tool.erase?.whole && a.tool.erase?.radius === b.tool.erase?.radius && a.tool.marquee?.shape === b.tool.marquee?.shape && a.tool.marquee?.purpose === b.tool.marquee?.purpose && !!a.onAddPage === !!b.onAddPage);
 
 const rectPath = (a: ScenePoint, b: ScenePoint): ScenePoint[] => [a, [b[0], a[1]], b, [a[0], b[1]]];

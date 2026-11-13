@@ -32,3 +32,80 @@ test('scratch and body timelines stay independent; body history preserves page i
   assert.equal(session.bodyHistory.undo()?.surface, 'page-a');
   assert.equal(session.scratchHistory.undo()?.surface, 'scratch');
 });
+
+function autosaveSession() {
+  const store = new DocumentStore({} as FileIO, 'x', newManifest('Test', 'pages'));
+  const session = new Session(store), commits: Map<string, readonly Element[]>[] = [];
+  session.keepers.add(() => true);
+  store.commit = async (batch, metadata) => { commits.push(new Map(batch)); return metadata!; };
+  return { session, store, commits };
+}
+const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('autosave waits three idle minutes, batches strokes and leaves undo immediate', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const { session, commits } = autosaveSession();
+  for (let i = 1; i <= 10; i++) {
+    session.change('p', [{ id: 'a', version: i, type: 'rectangle' } as Element]);
+    t.mock.timers.tick(1000); await settle();
+  }
+  assert.equal(commits.length, 0); assert.equal(session.bodyHistory.canUndo, true);
+  t.mock.timers.tick(178999); await settle(); assert.equal(commits.length, 0);
+  t.mock.timers.tick(1); await settle(); assert.equal(commits.length, 1);
+  assert.equal(commits[0].get('p/000000')?.[0].version, 10);
+  assert.equal(session.saveState, 'saved');
+});
+test('continuous writing saves after fifteen minutes at pen-up, then starts a new window', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const { session, commits } = autosaveSession();
+  for (let i = 1; i <= 15; i++) {
+    session.setWriting('body', true);
+    session.change('p', [{ id: 'a', version: i, type: 'rectangle' } as Element]);
+    t.mock.timers.tick(59900); await settle();
+    assert.equal(commits.length, 0);
+    session.setWriting('body', false); t.mock.timers.tick(100); await settle();
+  }
+  assert.equal(commits.length, 1);
+  session.change('p', [{ id: 'a', version: 16, type: 'rectangle' } as Element]);
+  t.mock.timers.tick(179999); await settle(); assert.equal(commits.length, 1);
+  t.mock.timers.tick(1); await settle(); assert.equal(commits.length, 2);
+});
+test('explicit flush persists immediately and a slow commit preserves subsequent edits', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const { session, store, commits } = autosaveSession();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const commit = store.commit.bind(store);
+  store.commit = async (...args) => { await gate; return commit(...args); };
+  session.change('p', [{ id: 'a', version: 1, type: 'rectangle' } as Element]);
+  const saving = session.flush(); await settle();
+  session.change('p', [{ id: 'a', version: 2, type: 'rectangle' } as Element]);
+  release(); await saving;
+  assert.equal(session.saveState, 'pending'); assert.equal(session.dirty.size, 1);
+  await session.flush(); assert.equal(commits.length, 2);
+  assert.equal(commits[1].get('p/000000')?.[0].version, 2); assert.equal(session.saveState, 'saved');
+  t.mock.timers.tick(900000); await settle(); assert.equal(commits.length, 2);
+});
+test('failed autosave retains dirty data and manual retry succeeds', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const { session, store } = autosaveSession(), commit = store.commit.bind(store);
+  store.commit = async () => { throw Error('disk full'); };
+  session.metadataChanged(); t.mock.timers.tick(180000); await settle();
+  assert.equal(session.saveState, 'failed'); assert.equal(session.metadataDirty, true);
+  store.commit = commit; await session.flush(); assert.equal(session.saveState, 'saved');
+});
+
+test('a stroke crossing the fifteen-minute limit waits for both body and scratch pen-up', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const { session, commits } = autosaveSession();
+  session.change('p', [{ id: 'a', version: 1, type: 'rectangle' } as Element]);
+  session.setWriting('body', true); session.setWriting('scratch', true);
+  t.mock.timers.tick(900001); await settle(); assert.equal(commits.length, 0);
+  session.setWriting('body', false);
+  t.mock.timers.tick(1000); await settle(); assert.equal(commits.length, 0);
+  session.change('scratch', [{ id: 's', version: 1, type: 'rectangle' } as Element]);
+  session.setWriting('scratch', false);
+  t.mock.timers.tick(0); await settle(); assert.equal(commits.length, 1);
+  assert.equal(commits[0].get('p/000000')?.[0].id, 'a');
+  assert.equal(commits[0].get('scratch/000000')?.[0].id, 's');
+});

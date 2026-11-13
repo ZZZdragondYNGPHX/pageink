@@ -8,7 +8,7 @@ export interface ScratchFrame { right: number; top: number; width: number; heigh
 /** Device-independent writing preferences, remembered between documents. */
 export interface Preferences {
   tool: ToolId;
-  pen: { color: string; width: number; pressure: boolean };
+  pen: { color: string; width: number; pressure: boolean; scribble: boolean };
   highlighter: { color: string; width: number };
   eraser: { mode: 'partial' | 'stroke'; size: number };
   shape: { kind: ShapeKind; color: string; width: number };
@@ -17,6 +17,7 @@ export interface Preferences {
   fingerDraws: boolean;
   sidebar: { pages: boolean; canvas: boolean; tab: SidebarTab };
   scratch: ScratchFrame;
+  scratchPlacement: 'docked' | 'floating';
   newTemplate: PageTemplate;
 }
 
@@ -30,15 +31,16 @@ export const ERASER_SIZES = [{ size: 6, label: '小' }, { size: 12, label: '中'
 
 export const DEFAULT_PREFERENCES: Preferences = {
   tool: 'pen',
-  pen: { color: PEN_COLORS[0], width: 1, pressure: false },
+  pen: { color: PEN_COLORS[0], width: 1, pressure: false, scribble: true },
   highlighter: { color: HIGHLIGHTER_COLORS[0], width: 4 },
   eraser: { mode: 'partial', size: 12 },
   shape: { kind: 'rectangle', color: PEN_COLORS[1], width: 2 },
   text: { color: PEN_COLORS[0], size: 20 },
   capture: { shape: 'rect', annotations: false },
   fingerDraws: false,
-  sidebar: { pages: true, canvas: false, tab: 'pages' },
+  sidebar: { pages: false, canvas: false, tab: 'pages' },
   scratch: { right: 24, top: 24, width: 420, height: 340 },
+  scratchPlacement: 'docked',
   newTemplate: 'blank',
 };
 
@@ -53,7 +55,7 @@ export function normalizePreferences(raw: unknown): Preferences {
   const pick = <T>(candidate: unknown, fallback: T, valid: (v: unknown) => boolean): T => valid(candidate) ? candidate as T : fallback;
   return {
     tool: pick(value.tool, d.tool, v => TOOLS.includes(v as ToolId) && v !== 'capture'),
-    pen: { color: pick(value.pen?.color, d.pen.color, isColor), width: pick(value.pen?.width, d.pen.width, v => isNumber(v, 0.25, 16)), pressure: pick(value.pen?.pressure, d.pen.pressure, v => typeof v === 'boolean') },
+    pen: { color: pick(value.pen?.color, d.pen.color, isColor), width: pick(value.pen?.width, d.pen.width, v => isNumber(v, 0.25, 16)), pressure: pick(value.pen?.pressure, d.pen.pressure, v => typeof v === 'boolean'), scribble: pick(value.pen?.scribble, d.pen.scribble, v => typeof v === 'boolean') },
     highlighter: { color: pick(value.highlighter?.color, d.highlighter.color, isColor), width: pick(value.highlighter?.width, d.highlighter.width, v => isNumber(v, 1, 16)) },
     eraser: { mode: pick(value.eraser?.mode, d.eraser.mode, v => v === 'partial' || v === 'stroke'), size: pick(value.eraser?.size, d.eraser.size, v => isNumber(v, 2, 64)) },
     shape: { kind: pick(value.shape?.kind, d.shape.kind, v => ['rectangle', 'ellipse', 'diamond', 'line', 'arrow'].includes(v as string)), color: pick(value.shape?.color, d.shape.color, isColor), width: pick(value.shape?.width, d.shape.width, v => isNumber(v, 0.5, 16)) },
@@ -62,6 +64,7 @@ export function normalizePreferences(raw: unknown): Preferences {
     fingerDraws: pick(value.fingerDraws, d.fingerDraws, v => typeof v === 'boolean'),
     sidebar: { pages: pick(value.sidebar?.pages, d.sidebar.pages, v => typeof v === 'boolean'), canvas: pick(value.sidebar?.canvas, d.sidebar.canvas, v => typeof v === 'boolean'), tab: pick(value.sidebar?.tab, d.sidebar.tab, v => ['pages', 'bookmarks', 'search'].includes(v as string)) },
     scratch: { right: pick(value.scratch?.right, d.scratch.right, v => isNumber(v, 0, 10000)), top: pick(value.scratch?.top, d.scratch.top, v => isNumber(v, 0, 10000)), width: pick(value.scratch?.width, d.scratch.width, v => isNumber(v, 260, 4000)), height: pick(value.scratch?.height, d.scratch.height, v => isNumber(v, 200, 4000)) },
+    scratchPlacement: pick(value.scratchPlacement, d.scratchPlacement, v => v === 'docked' || v === 'floating'),
     newTemplate: pick(value.newTemplate, d.newTemplate, v => ['blank', 'ruled', 'grid', 'dotted'].includes(v as string)),
   };
 }

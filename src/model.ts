@@ -55,7 +55,7 @@ export function parseManifest(text: string): Manifest {
     if (typeof page.id !== 'string' || !page.id || ids.has(page.id) || !Number.isFinite(page.width) || page.width <= 0 || !Number.isFinite(page.height) || page.height <= 0 || !page.margins || ['top','right','bottom','left'].some(key => !Number.isFinite(page.margins[key as keyof Margins]) || page.margins[key as keyof Margins] < 0)) throw Error('文档页面参数损坏；原文件未修改。');
     ids.add(page.id);
   }
-  if (value.mode === 'canvas' && value.pages.length !== 1) throw Error('长卷只能包含一张无边画布。');
+  if (value.mode === 'canvas' && value.pages.length !== 1) throw Error('无边画布只能包含一张无边画布。');
   for (const region of value.regions) if (!region.id || typeof region.title !== 'string' || ![region.x,region.y,region.width,region.height].every(Number.isFinite) || region.width <= 0 || region.height <= 0) throw Error('文档区域参数损坏；原文件未修改。');
   safePath(value.resourceDir);
   for (const path of Object.values(value.chunks)) safePath(path);

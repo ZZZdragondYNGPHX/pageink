@@ -52,7 +52,7 @@ class CreateModal extends Modal {
     this.modalEl.addClass('ink-host-modal', 'ink-create-modal');
     this.titleEl.setText('新建笔记');
     const content = this.contentEl;
-    content.createEl('p', { cls: 'ink-create-intro', text: '把所见所思，留在纸间。' });
+    content.createEl('p', { cls: 'ink-create-intro', text: `保存到 ${this.plugin.newFolder(this.folder) || this.app.vault.getName()}` });
     const options = content.createEl('details', { cls: 'ink-create-options' });
     options.createEl('summary', { text: '名称与纸张（可选）' });
     const nameLabel = options.createEl('label', { cls: 'ink-create-name-label', text: '笔记名称' });
@@ -149,6 +149,9 @@ class DrawingView extends FileView implements WorkspaceHost {
   async onLoadFile(file: TFile) {
     const generation = ++this.generation;
     await this.unloading;
+    // A detached leaf unloads asynchronously. A new leaf must wait for that file's
+    // final save and React cleanup before reading it or recovering its failed session.
+    await this.plugin.closingViews.get(file.path);
     if (generation !== this.generation) return;
     this.contentEl.empty(); this.contentEl.addClass('ink-view');
     this.contentEl.createDiv({ cls: 'ink-view-loading' }).createSpan({ cls: 'ink-spinner' });
@@ -192,8 +195,15 @@ class DrawingView extends FileView implements WorkspaceHost {
         new Notice(`关闭时保存失败，未保存的内容暂存在本次 Obsidian 会话中。请重新打开该笔记重试保存，不要退出 Obsidian。${(error as Error).message}`, 15000);
       } finally { root?.unmount(); await pdf?.destroy(); }
     })();
-    this.unloading = operation;
-    try { await operation; } finally { if (this.unloading === operation) this.unloading = undefined; }
+    const path = session?.store.path;
+    const previous = path ? this.plugin.closingViews.get(path) : undefined;
+    const closing = previous ? Promise.all([previous, operation]).then(() => {}) : operation;
+    if (path) this.plugin.closingViews.set(path, closing);
+    this.unloading = closing;
+    try { await closing; } finally {
+      if (this.unloading === closing) this.unloading = undefined;
+      if (path && this.plugin.closingViews.get(path) === closing) this.plugin.closingViews.delete(path);
+    }
   }
   async reload() { const file = this.file; if (!file) return; await this.onUnloadFile(); await this.onLoadFile(file); }
 
@@ -257,6 +267,7 @@ export default class DrawingPlugin extends Plugin {
   private dailyTask?: Promise<void>;
   io = new VaultIO(this);
   unsavedSessions = new Map<string, Session>();
+  closingViews = new Map<string, Promise<void>>();
   previewCache = new Map<string, HTMLCanvasElement>();
   prefs!: PreferenceStore;
   async onload() {
@@ -271,14 +282,15 @@ export default class DrawingPlugin extends Plugin {
     this.properties = new NoteProperties(this.app, this.io, live);
     this.register(() => this.properties.dispose());
     this.notes = this.addChild(new NotesHost(this, {
-      create: async kind => {
-        if (kind === 'text') await this.createText('');
-        else if (kind) await this.create(kind);
-        else new CreateModal(this).open();
+      create: async (kind, folder) => {
+        if (kind === 'text') await this.createText('', folder);
+        else if (kind) await this.create(kind, { folder });
+        else new CreateModal(this, folder).open();
       },
       createText: () => void this.createText('').catch(e => new Notice((e as Error).message)),
       daily: () => this.openDaily(),
       properties: path => this.properties.open(path),
+      preview: (entry, signal) => sources.preview(entry, signal),
       segments: (entry, signal) => sources.segments(entry, signal),
       reveal: (path, target) => this.reveal(path, target.page, target.region, target.rect),
       flushDrawing: async path => {
@@ -286,12 +298,11 @@ export default class DrawingPlugin extends Plugin {
         await session?.flush();
       },
     }));
-    this.addRibbonIcon('pencil', '新建笔记', () => new CreateModal(this).open());
     const active = () => this.app.workspace.getActiveViewOfType(DrawingView);
     const withView = (run: (view: DrawingView) => void) => (checking: boolean) => { const view = active(); if (!view?.session) return false; if (!checking) run(view); return true; };
     this.addCommand({ id: 'new-drawing', name: '新建笔记…', callback: () => new CreateModal(this).open() });
-    this.addCommand({ id: 'new-notebook', name: `新建${NOTE_TYPES.pages.label}（分页绘写）`, callback: () => void this.create('pages').catch(e => new Notice(e.message)) });
-    this.addCommand({ id: 'new-canvas', name: `新建${NOTE_TYPES.canvas.label}（无边画布）`, callback: () => void this.create('canvas').catch(e => new Notice(e.message)) });
+    this.addCommand({ id: 'new-notebook', name: `新建${NOTE_TYPES.pages.label}`, callback: () => void this.create('pages').catch(e => new Notice(e.message)) });
+    this.addCommand({ id: 'new-canvas', name: `新建${NOTE_TYPES.canvas.label}`, callback: () => void this.create('canvas').catch(e => new Notice(e.message)) });
     this.addCommand({ id: 'annotate-pdf', name: '批注库中的 PDF…', callback: () => this.pickVaultPdf() });
     this.addCommand({ id: 'import-pdf', name: '导入 PDF 并批注…', callback: () => this.chooseFile('.pdf', async file => this.importPdf(file.name, await file.arrayBuffer())) });
     this.addCommand({ id: 'restore-package', name: '从备份恢复（.inkpack）…', callback: () => this.chooseFile('.inkpack,.zip', file => this.restorePackage(file)) });
@@ -304,9 +315,9 @@ export default class DrawingPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (file instanceof TFile && file.extension === 'pdf') menu.addItem(item => item.setTitle('创建批注笔记').setIcon('pencil').onClick(() => { void this.importPdf(file.basename, undefined, file).catch(e => new Notice(e.message)); }));
       if (file instanceof TFolder) {
-        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.text.label}（Markdown）`).setIcon(NOTE_TYPES.text.hostIcon).onClick(() => void this.createText('', file.path).catch(e => new Notice(e.message))));
-        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.pages.label}（分页绘写）`).setIcon(NOTE_TYPES.pages.hostIcon).onClick(() => void this.create('pages', { folder: file.path }).catch(e => new Notice(e.message))));
-        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.canvas.label}（无边画布）`).setIcon(NOTE_TYPES.canvas.hostIcon).onClick(() => void this.create('canvas', { folder: file.path }).catch(e => new Notice(e.message))));
+        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.text.label}`).setIcon(NOTE_TYPES.text.hostIcon).onClick(() => void this.createText('', file.path).catch(e => new Notice(e.message))));
+        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.pages.label}`).setIcon(NOTE_TYPES.pages.hostIcon).onClick(() => void this.create('pages', { folder: file.path }).catch(e => new Notice(e.message))));
+        menu.addItem(item => item.setTitle(`新建${NOTE_TYPES.canvas.label}`).setIcon(NOTE_TYPES.canvas.hostIcon).onClick(() => void this.create('canvas', { folder: file.path }).catch(e => new Notice(e.message))));
       }
     }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { void this.maintainPdfPath(oldPath, file.path).catch(e => new Notice(e.message)); }));
@@ -447,18 +458,20 @@ export default class DrawingPlugin extends Plugin {
   async createText(title: string, folder?: string) {
     const path = await this.uniquePath(title.trim() || `未命名${NOTE_TYPES.text.label}`, 'md', this.newFolder(folder));
     const file = await this.app.vault.create(path, '');
-    const leaf = this.app.workspace.getLeaf('tab');
+    const leaf = this.app.workspace.getLeaf(false);
     await leaf.openFile(file, { active: true, state: { mode: 'source' } });
     await this.app.workspace.revealLeaf(leaf);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
   }
   openDaily(): Promise<void> {
+    if ((this.app as any).commands.executeCommandById('daily-notes')) return Promise.resolve();
     if (this.dailyTask) return this.dailyTask;
     this.dailyTask = (async () => {
-      const path = dailyNotePath(new Date()), folder = path.slice(0, path.lastIndexOf('/'));
-      if (!this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+      const legacy = dailyNotePath(new Date()), name = legacy.slice(legacy.lastIndexOf('/') + 1);
+      const folder = this.newFolder();
+      const path = this.app.vault.getAbstractFileByPath(legacy) ? legacy : (folder ? `${folder}/` : '') + name;
       if (!this.app.vault.getAbstractFileByPath(path)) {
-        try { await this.app.vault.create(path, `# ${path.slice(folder.length + 1, -3)}\n\n`); }
+        try { await this.app.vault.create(path, `# ${path.slice(path.lastIndexOf('/') + 1, -3)}\n\n`); }
         catch (error) { if (!(this.app.vault.getAbstractFileByPath(path) instanceof TFile)) throw error; }
       }
       await this.notes.open(path);

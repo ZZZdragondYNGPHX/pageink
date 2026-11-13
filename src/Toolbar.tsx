@@ -77,11 +77,15 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store }: {
         { icon: 'image', label: '插入图片', onSelect: onImage },
       ]}/>
     </Popover>}
-    {configurable && <div className="ink-quick-style">
-      {colored && <div className="ink-quick-colors"><Swatches colors={colors.slice(0, 3)} value={color} onChange={setColor} label="常用颜色" custom={false}/></div>}
+    {configurable && <div className="ink-quick-style" role="group" aria-label={`${definition.label}快捷设置`}>
       <button type="button" className="ink-style-trigger" aria-label={`${definition.label}设置`} aria-expanded={pop.open === 'options'} onClick={event => pop.toggle('options', event.currentTarget)}>
-        {colored ? <span className="ink-style-dot" style={{ background: color }}/> : <InkIcon name="sliders"/>}<span>{detail}</span><InkIcon name="down"/>
+        <InkIcon name={definition.icon}/><span>{tool === 'eraser' || tool === 'capture' ? detail : definition.label}</span><InkIcon name="down"/>
       </button>
+      {tool === 'pen' && <Widths values={PEN_WIDTHS.slice(0, 3)} value={prefs.pen.width} color="var(--ink-text)" onChange={width => store.update({ pen: { width } })} label="快捷粗细"/>}
+      {tool === 'highlighter' && <Widths values={HIGHLIGHTER_WIDTHS} value={prefs.highlighter.width} color="var(--ink-text)" onChange={width => store.update({ highlighter: { width } })} label="快捷粗细"/>}
+      {tool === 'shape' && <Widths values={SHAPE_WIDTHS} value={prefs.shape.width} color="var(--ink-text)" onChange={width => store.update({ shape: { width } })} label="快捷线宽"/>}
+      {tool === 'eraser' && <EraserSizes prefs={prefs} store={store}/>}
+      {colored && <div className="ink-quick-colors"><Swatches colors={colors.slice(0, 4)} value={color} onChange={setColor} label="常用颜色" custom={false}/></div>}
     </div>}
     {pop.open === 'options' && <Popover anchor={pop.anchor} onClose={pop.close} label={`${definition.label}设置`} align="end" className="ink-tool-popover">
       <div className="ink-popover-title">{definition.label}</div>
@@ -97,27 +101,28 @@ function Widths({ values, value, color, onChange, scale = 1, label }: { values: 
     </button>)}</div>;
 }
 
-/** Options for the active tool, shown inline beside the tools (GoodNotes-style). */
+/** Full options for the active tool, opened from its button or contextual settings. */
 export function ToolOptions({ tool, prefs, store }: { tool: ToolId; prefs: Preferences; store: PreferenceStore }) {
   const divider = <span className="ink-divider" aria-hidden="true"/>;
   switch (tool) {
     case 'pen': return <>
       <Swatches colors={PEN_COLORS} value={prefs.pen.color} onChange={color => store.update({ pen: { color } })} label="笔颜色"/>{divider}
-      <Widths values={PEN_WIDTHS} value={prefs.pen.width} color={prefs.pen.color} onChange={width => store.update({ pen: { width } })} label="粗细"/>{divider}
+      <Widths values={PEN_WIDTHS} value={prefs.pen.width} color="var(--ink-text)" onChange={width => store.update({ pen: { width } })} label="粗细"/>{divider}
       <IconButton icon="pressure" label={prefs.pen.pressure ? '压感已开启' : '压感已关闭（等宽）'} aria-pressed={prefs.pen.pressure} className="ink-toggle" onClick={() => store.update({ pen: { pressure: !prefs.pen.pressure } })}><span>压感</span></IconButton>
+      {divider}<label className="ink-option-switch"><span><strong>涂划擦除</strong><small>在笔迹上快速来回涂划，即可擦除</small></span><input type="checkbox" role="switch" aria-label="涂划擦除" checked={prefs.pen.scribble} onChange={event => store.update({ pen: { scribble: event.target.checked } })}/></label>
     </>;
     case 'highlighter': return <>
       <Swatches colors={HIGHLIGHTER_COLORS} value={prefs.highlighter.color} onChange={color => store.update({ highlighter: { color } })} label="荧光笔颜色"/>{divider}
-      <Widths values={HIGHLIGHTER_WIDTHS} value={prefs.highlighter.width} color={prefs.highlighter.color} onChange={width => store.update({ highlighter: { width } })} label="粗细"/>
+      <Widths values={HIGHLIGHTER_WIDTHS} value={prefs.highlighter.width} color="var(--ink-text)" onChange={width => store.update({ highlighter: { width } })} label="粗细"/>
     </>;
     case 'eraser': return <>
       <Segmented label="擦除方式" value={prefs.eraser.mode} onChange={mode => store.update({ eraser: { mode } })} options={[{ value: 'partial', label: '局部擦除' }, { value: 'stroke', label: '整笔擦除' }]}/>{divider}
-      <div className="ink-widths" role="radiogroup" aria-label="橡皮大小" onKeyDown={radioKeys}>{ERASER_SIZES.map(s => <button key={s.size} type="button" role="radio" tabIndex={prefs.eraser.size === s.size ? 0 : -1} aria-checked={prefs.eraser.size === s.size} title={`橡皮${s.label}`} aria-label={`橡皮${s.label}`} onClick={() => store.update({ eraser: { size: s.size } })}><span className="is-ring" style={{ width: 6 + s.size * 0.6, height: 6 + s.size * 0.6 }}/></button>)}</div>
+      <EraserSizes prefs={prefs} store={store}/>
     </>;
     case 'shape': return <>
       <Segmented label="形状" value={prefs.shape.kind} onChange={kind => store.update({ shape: { kind } })} options={SHAPES}/>{divider}
       <Swatches colors={PEN_COLORS} value={prefs.shape.color} onChange={color => store.update({ shape: { color } })} label="形状颜色"/>{divider}
-      <Widths values={SHAPE_WIDTHS} value={prefs.shape.width} color={prefs.shape.color} onChange={width => store.update({ shape: { width } })} label="线宽"/>
+      <Widths values={SHAPE_WIDTHS} value={prefs.shape.width} color="var(--ink-text)" onChange={width => store.update({ shape: { width } })} label="线宽"/>
     </>;
     case 'text': return <>
       <Swatches colors={PEN_COLORS} value={prefs.text.color} onChange={color => store.update({ text: { color } })} label="文字颜色"/>{divider}
@@ -132,4 +137,8 @@ export function ToolOptions({ tool, prefs, store }: { tool: ToolId; prefs: Prefe
     case 'select': return <span className="ink-hint">点选或拖框选择对象，双击文字可编辑</span>;
     case 'hand': return <span className="ink-hint">拖动以移动画面</span>;
   }
+}
+
+function EraserSizes({ prefs, store }: { prefs: Preferences; store: PreferenceStore }) {
+  return <div className="ink-widths" role="radiogroup" aria-label="橡皮大小" onKeyDown={radioKeys}>{ERASER_SIZES.map(s => <button key={s.size} type="button" role="radio" tabIndex={prefs.eraser.size === s.size ? 0 : -1} aria-checked={prefs.eraser.size === s.size} title={`橡皮${s.label}`} aria-label={`橡皮${s.label}`} onClick={() => store.update({ eraser: { size: s.size } })}><span className="is-ring" style={{ width: 6 + s.size * 0.6, height: 6 + s.size * 0.6 }}/></button>)}</div>;
 }
