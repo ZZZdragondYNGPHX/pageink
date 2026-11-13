@@ -28,7 +28,7 @@ function Thumbnail({ session, page, pdf, version, root }: { session: Session; pa
   useEffect(() => {
     if (!visible || drawn.current === version) return;
     const abort = new AbortController();
-    const timer = setTimeout(() => void queue.run(async () => {
+    const timer = window.setTimeout(() => void queue.run(async () => {
       abort.signal.throwIfAborted();
       const rect = pageRect(page), scale = Math.min(1, 132 * devicePixelRatio / rect.width);
       const rendered = await renderArea(session, page, rect, scale, pdf, abort.signal);
@@ -36,7 +36,7 @@ function Thumbnail({ session, page, pdf, version, root }: { session: Session; pa
       target.width = rendered.width; target.height = rendered.height; target.getContext('2d')!.drawImage(rendered, 0, 0);
       rendered.width = rendered.height = 0; drawn.current = version;
     }).catch(() => {}), drawn.current ? 5000 : 30);
-    return () => { clearTimeout(timer); abort.abort(); };
+    return () => { window.clearTimeout(timer); abort.abort(); };
   }, [visible, version, pdf]);
   useEffect(() => () => { if (canvas.current) canvas.current.width = canvas.current.height = 0; }, []);
   const rect = pageRect(page);
@@ -94,12 +94,12 @@ export function SearchPanel({ session, pdf, paged, onOpen, initial }: { session:
     if (!query.trim()) { setHits(null); setProgress(''); return; }
     setProgress('正在搜索…');
     const controller = new AbortController(); task.current = controller;
-    const timer = setTimeout(() => void (async () => {
+    const timer = window.setTimeout(() => void (async () => {
       await session.flush().catch(() => {});
       const found = await searchDocument(session, pdf, query, controller.signal, (done, total) => { if (!controller.signal.aborted) setProgress(total > 1 && done < total ? `正在查找 ${done + 1}/${total}` : '正在搜索…'); });
       if (!controller.signal.aborted) { setHits(found); setActive(-1); setProgress(''); }
     })().catch(error => { if (!controller.signal.aborted) setProgress((error as Error).message); }), 250);
-    return () => { clearTimeout(timer); controller.abort(); };
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [query, composing]);
   const term = query.trim();
   return <div className="ink-search">

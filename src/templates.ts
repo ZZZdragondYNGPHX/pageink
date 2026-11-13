@@ -12,9 +12,10 @@ export function templateSpec(template: PageTemplate) {
 }
 
 /** CSS background for a paper whose top-left corner is the paper rect origin. */
-export function paperStyle(template: PageTemplate): Record<string, string> {
+export function paperStyle(template: PageTemplate, miniature = false): Record<string, string> {
   if (template === 'blank' || !TEMPLATES.some(t => t.id === template)) return {};
-  const { step, color } = templateSpec(template);
+  const { step: fullStep, color } = templateSpec(template);
+  const step = miniature ? 5 : fullStep;
   if (template === 'ruled') return { backgroundImage: `repeating-linear-gradient(transparent 0 ${step - 1}px, ${color} ${step - 1}px ${step}px)` };
   if (template === 'dotted') return { backgroundImage: `radial-gradient(circle at ${step / 2}px ${step / 2}px, ${color} 1.15px, transparent 1.6px)`, backgroundSize: `${step}px ${step}px`, backgroundPosition: `${-step / 2}px ${-step / 2}px` };
   return { backgroundImage: `linear-gradient(${color} 1px, transparent 1px), linear-gradient(90deg, ${color} 1px, transparent 1px)`, backgroundSize: `${step}px ${step}px` };

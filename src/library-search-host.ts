@@ -31,7 +31,7 @@ export class LibrarySources {
         pdf = await PdfService.fromBytes(await this.app.vault.readBinary(file));
         const page = await pdf.document.getPage(1), size = page.getViewport({ scale: 1 });
         page.cleanup(); signal.throwIfAborted();
-        canvas = document.createElement('canvas');
+        canvas = createEl('canvas');
         await pdf.render({ ...newPage(), pdfPage: 1 }, canvas, Math.min(360 / size.width, 420 / size.height), undefined, signal);
       } else {
         const session = this.live(file.path) ?? new Session(await DocumentStore.open(this.io, file.path));
@@ -62,7 +62,7 @@ export class LibrarySources {
       for (let line = 0; line < lines.length; line++) {
         signal.throwIfAborted();
         yield { text: lines[line], label: `正文 / 属性 · 第 ${line + 1} 行`, target: { line } };
-        if (line % 128 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+        if (line % 128 === 0) await new Promise(resolve => window.setTimeout(resolve, 0));
       }
       return;
     }
@@ -88,7 +88,7 @@ export class LibrarySources {
         yield { text: element.originalText ?? element.text, label: manifest.mode === 'pages' ? `画面文字 · 第 ${index + 1} 页` : '画布文字',
           target: { page: page.id, rect: bounds([element]) ?? undefined } };
       }
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => window.setTimeout(resolve, 0));
     }
     if (manifest.pdf) {
       signal.throwIfAborted();
@@ -106,6 +106,6 @@ export class LibrarySources {
     // CJK PDFs often put each character in a separate run. Also cover phrases split across runs.
     yield { text: runs.map(run => run.text).join(''), label: `PDF 文本 · 第 ${page.pdfPage} 页`, target };
     yield { text: runs.map(run => run.text).join(' '), label: `PDF 文本 · 第 ${page.pdfPage} 页`, target };
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
   }
 }

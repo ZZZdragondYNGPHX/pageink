@@ -5,8 +5,8 @@ import { ViewStore, useView, toScreen } from './view';
 
 export function CardsPanel({ elements, selected, busy, onInsertText, onInsertInk, onEdit, onRefresh, onRecover, onReveal, onConnect, onGroup, onUngroup }: {
   elements: readonly Element[]; selected: readonly Element[]; busy: boolean;
-  onInsertText(): void; onInsertInk(): void; onEdit(e: Element): void; onRefresh(e: Element): void; onRecover(e: Element): void; onReveal(e: Element): void;
-  onConnect(): void; onGroup(): void; onUngroup(): void;
+  onInsertText: () => void; onInsertInk: () => void; onEdit: (e: Element) => void; onRefresh: (e: Element) => void; onRecover: (e: Element) => void; onReveal: (e: Element) => void;
+  onConnect: () => void; onGroup: () => void; onUngroup: () => void;
 }) {
   const cards = elements.filter(e => !e.isDeleted && cardReference(e)), selectedCards = selected.filter(e => cardReference(e));
   return <div className="ink-cards-panel" aria-busy={busy}>
@@ -38,8 +38,8 @@ export function CardsPanel({ elements, selected, busy, onInsertText, onInsertInk
 
 /** A temporary paragraph draft; the native Markdown editor applies the final transaction. */
 export function CardEditor({ root, source, text, views, onSave, onClose, bindKeys }: {
-  root: Element; source: string; text: string; views: ViewStore; onSave(text: string): Promise<void>; onClose(): void;
-  bindKeys(element: HTMLElement, submit: () => void): () => void;
+  root: Element; source: string; text: string; views: ViewStore; onSave: (text: string) => Promise<void>; onClose: () => void;
+  bindKeys: (element: HTMLElement, submit: () => void) => () => void;
 }) {
   const [draft, setDraft] = useState(text), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const input = useRef<HTMLTextAreaElement>(null), submitting = useRef(false);

@@ -1,11 +1,11 @@
 import { exportToSvg, getCommonBounds } from '@excalidraw/excalidraw';
 import { Session } from './session';
-import { Page, Rect, Element, pageRect } from './model';
+import { Page, Rect, pageRect } from './model';
 import { PdfService } from './pdf';
 import { templateSpec, templateLines, templateDots } from './templates';
 export async function renderArea(session: Session, page: Page, area: Rect, scale: number, pdf?: PdfService, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  const canvas = document.createElement('canvas'); canvas.width = Math.ceil(area.width * scale); canvas.height = Math.ceil(area.height * scale);
+  const canvas = createEl('canvas'); canvas.width = Math.ceil(area.width * scale); canvas.height = Math.ceil(area.height * scale);
   const ctx = canvas.getContext('2d')!; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (page.pdfPage && !pdf) throw Error('PDF 原件不可用，不能生成缺少底稿的预览。');
   if (pdf && page.pdfPage) await pdf.render(page, canvas, scale, area, signal);

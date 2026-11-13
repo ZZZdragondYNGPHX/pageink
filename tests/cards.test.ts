@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { paragraphEdit } from '../src/mixed';
-import { cardReference, cardText, INK_PACK_MIME, validateCards } from '../src/cards';
+import { cardReference, cardText, INK_PACK_MIME, validateCards, type CardReference } from '../src/cards';
 import { Element, newManifest } from '../src/model';
 import { cloneElements, removeElements } from '../src/geometry';
 import { PageScene, layoutPages } from '../src/layout';
@@ -46,6 +46,6 @@ test('ink cards require typed full source archive and preview assets before open
   validateCards([root, image], manifest);
   const copy = structuredClone(manifest); delete copy.assets.pack; assert.throws(() => validateCards([image], copy), /完整原件/);
   copy.assets.pack = { ...manifest.assets.pack, mimeType: 'image/png' }; assert.throws(() => validateCards([image], copy));
-  assert.throws(() => validateCards([{ ...image, customData: { pageinkCard: { ...image.customData?.pageinkCard, path: '../source.inknote' } } }], manifest), /不安全/);
-  assert.throws(() => validateCards([{ ...root, customData: { pageinkCard: { version: 2, kind: 'text' } } }], manifest));
+  assert.throws(() => validateCards([{ ...image, customData: { pageinkCard: { ...image.customData!.pageinkCard! as Extract<CardReference, { kind: 'ink' }>, path: '../source.inknote' } } }], manifest), /不安全/);
+  assert.throws(() => validateCards([{ ...root, customData: { pageinkCard: { version: 2, kind: 'text' } } } as unknown as Element], manifest));
 });

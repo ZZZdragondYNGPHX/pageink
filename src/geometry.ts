@@ -1,4 +1,5 @@
-import { Element, Rect, Margins, Page, uid } from './model';
+import { Element, Rect, Margins, Page, uid, MutableElement } from './model';
+import type { LocalPoint, Radians } from '@excalidraw/math';
 import { retargetAnchors } from './mixed';
 type Point = readonly [number, number];
 export type ScenePoint = [number, number];
@@ -77,30 +78,30 @@ export function eraseStroke(element: Element, center: Point, radius: number, who
     const origin = points[0];
     let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
     for (const [x, y] of points) { left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y); }
-    return { ...element, id: uid(), x: origin[0], y: origin[1], angle: 0, points: points.map(p => [p[0] - origin[0], p[1] - origin[1]]),
+    return { ...element, id: uid(), x: origin[0], y: origin[1], angle: 0 as Radians, points: points.map(p => [p[0] - origin[0], p[1] - origin[1]] as LocalPoint),
       width: right - left, height: bottom - top,
-      pressures: element.simulatePressure ? [] : piece.pressures, version: 1, versionNonce: Math.floor(Math.random() * 2 ** 30), updated: Date.now() } as Element;
+      pressures: element.simulatePressure ? [] : piece.pressures, version: 1, versionNonce: Math.floor(Math.random() * 2 ** 30), updated: Date.now() };
   });
 }
 export function cloneElements(elements: readonly Element[], dx = 24, dy = 24): Element[] {
   const ids = new Map(elements.map(e => [e.id, uid()]));
   const groups = new Map<string, string>();
   return elements.map(e => {
-    const copy = structuredClone(e) as any;
-    copy.id = ids.get(e.id); copy.x += dx; copy.y += dy; copy.version = 1;
-    copy.groupIds = e.groupIds.map(g => { if (!groups.has(g)) groups.set(g, uid()); return groups.get(g); });
-    copy.boundElements = e.boundElements?.filter(b => ids.has(b.id)).map(b => ({ ...b, id: ids.get(b.id) })) ?? null;
-    if (copy.containerId) copy.containerId = ids.get(copy.containerId) ?? null;
-    for (const key of ['startBinding', 'endBinding']) if (copy[key]) copy[key] = ids.has(copy[key].elementId) ? { ...copy[key], elementId: ids.get(copy[key].elementId) } : null;
+    const copy = structuredClone(e) as MutableElement;
+    copy.id = ids.get(e.id)!; copy.x += dx; copy.y += dy; copy.version = 1;
+    copy.groupIds = e.groupIds.map(g => { if (!groups.has(g)) groups.set(g, uid()); return groups.get(g)!; });
+    copy.boundElements = e.boundElements?.filter(b => ids.has(b.id)).map(b => ({ ...b, id: ids.get(b.id)! })) ?? null;
+    if ('containerId' in copy && copy.containerId) copy.containerId = ids.get(copy.containerId) ?? null;
+    if ('startBinding' in copy) for (const key of ['startBinding', 'endBinding'] as const) if (copy[key]) copy[key] = ids.has(copy[key].elementId) ? { ...copy[key], elementId: ids.get(copy[key].elementId)! } : null;
     return retargetAnchors(copy, ids);
   });
 }
 export function removeElements(elements: readonly Element[], ids: Set<string>): Element[] {
   for (const e of elements) if (e.type === 'text' && e.containerId && ids.has(e.containerId)) ids.add(e.id);
   return elements.filter(e => !ids.has(e.id)).map(e => {
-    const copy = { ...e } as any; let changed = false;
+    const copy: MutableElement = { ...e }; let changed = false;
     if (e.boundElements?.some(b => ids.has(b.id))) { copy.boundElements = e.boundElements.filter(b => !ids.has(b.id)); changed = true; }
-    for (const key of ['startBinding', 'endBinding']) if (copy[key] && ids.has(copy[key].elementId)) { copy[key] = null; changed = true; }
+    if ('startBinding' in copy) for (const key of ['startBinding', 'endBinding'] as const) if (copy[key] && ids.has(copy[key].elementId)) { copy[key] = null; changed = true; }
     if (!changed) return e;
     return { ...copy, version: e.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 30), updated: Date.now() };
   });

@@ -60,7 +60,7 @@ export class NoteProperties {
       await this.saveMarkdown(file, path);
       const info = getFrontMatterInfo(await this.app.vault.read(file));
       this.checkFile(path, file);
-      const value = info.exists && !info.frontmatter.split('\n').every(line => /^\s*(?:#.*)?$/.test(line)) ? parseYaml(info.frontmatter) : {};
+      const value: unknown = info.exists && !info.frontmatter.split('\n').every(line => /^\s*(?:#.*)?$/.test(line)) ? parseYaml(info.frontmatter) : {};
       snapshot = propertiesSnapshot(path, 'markdown', value);
     } else if (file.extension.toLowerCase() === 'inknote') {
       const live = this.session(path);
@@ -84,7 +84,7 @@ export class NoteProperties {
       this.checkActive();
       if (snapshot.kind === 'pdf') throw Error('PDF 只读，不支持编辑属性。');
       edits = propertyChanges(snapshot.properties, changes);
-    } catch (error) { return Promise.reject(error); }
+    } catch (error) { return Promise.reject(error instanceof Error ? error : Error(String(error))); }
     const operation = (this.writes.get(snapshot.path) ?? Promise.resolve()).catch(() => {}).then(() => this.persist(snapshot, edits));
     this.writes.set(snapshot.path, operation);
     void operation.finally(() => { if (this.writes.get(snapshot.path) === operation) this.writes.delete(snapshot.path); }).catch(() => {});
@@ -100,7 +100,7 @@ export class NoteProperties {
       await this.saveMarkdown(file, snapshot.path);
       await this.app.fileManager.processFrontMatter(file, current => {
         this.checkFile(snapshot.path, file);
-        applyPropertyChanges(current, snapshot.properties, edits);
+        applyPropertyChanges(current as Record<string, unknown>, snapshot.properties, edits);
       });
       this.checkActive();
       return;
@@ -145,7 +145,7 @@ export class NoteProperties {
     applyPropertyChanges(current, snapshot.properties, edits);
     // Check the disk too, including writers that changed properties without a new revision.
     applyPropertyChanges(copyProperties(disk.properties ?? {}), snapshot.properties, edits);
-    live.manifest.properties = current as JsonProperties;
+    live.manifest.properties = current;
     try {
       live.metadataChanged();
       this.checkActive();
@@ -165,7 +165,7 @@ export class NoteProperties {
       }
       if (previous === undefined && !Object.keys(restored).length) delete live.manifest.properties;
       else live.manifest.properties = restored as JsonProperties;
-      clearTimeout(live.timer);
+      window.clearTimeout(live.timer);
       live.metadataDirty = true;
       live.notify();
       throw error;

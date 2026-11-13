@@ -46,7 +46,7 @@ class LibraryView extends ItemView {
   private display: 'grid' | 'list' = 'grid';
   private search = false;
   getState() { return { folder: this.folder, display: this.display, search: this.search }; }
-  async setState(state: any, result: ViewStateResult) {
+  async setState(state: Record<string, unknown>, result: ViewStateResult) {
     const path = typeof state.folder === 'string' && state.folder ? state.folder : '/';
     this.folder = this.app.vault.getAbstractFileByPath(path) instanceof TFolder ? path : '/';
     if (state.display === 'list' || state.display === 'grid') this.display = state.display;
@@ -105,7 +105,7 @@ export class NotesHost extends Component implements LibraryHost {
   search = (entries: NoteEntry[], query: string, signal: AbortSignal, progress: (state: LibrarySearchState) => void) =>
     scanLibrary(entries, query, signal, (entry, task) => this.actions.segments(entry, task), progress);
   quickOpen = () => this.run(async () => {
-    if ((this.app as any).commands.executeCommandById("switcher:open")) return;
+    if ((this.app as App & { commands: { executeCommandById(id: string): boolean } }).commands.executeCommandById("switcher:open")) return;
     const entries = await this.list(new AbortController().signal);
     if (this.disposed) return;
     new Picker(this.app, '查找文字笔记、手写笔记、无边画布或 PDF', entries.sort((a, b) => b.modified - a.modified), entry => entry.path, entry => this.open(entry.path)).open();
@@ -231,8 +231,8 @@ export class NotesHost extends Component implements LibraryHost {
     if (this.disposed || navigation !== this.navigation) return;
     this.contentLeaf = leaf;
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    if (search) requestAnimationFrame(() => {
-      if (!this.disposed && navigation === this.navigation && this.app.workspace.activeLeaf === leaf)
+    if (search) window.requestAnimationFrame(() => {
+      if (!this.disposed && navigation === this.navigation && this.app.workspace.getMostRecentLeaf() === leaf)
         leaf.view.containerEl.querySelector<HTMLInputElement>('.ink-library-search input')?.focus();
     });
   }
@@ -255,8 +255,8 @@ export class NotesHost extends Component implements LibraryHost {
       if (leaf.view.getMode() !== 'source') {
         const state = leaf.getViewState(); await leaf.setViewState({ ...state, state: { ...state.state, mode: 'source' } });
       }
-      if (this.disposed || navigation !== this.navigation || this.app.workspace.activeLeaf !== leaf) return;
-      const editor = (leaf.view as MarkdownView).editor, line = Math.min(target.line, editor.lastLine());
+      if (this.disposed || navigation !== this.navigation || this.app.workspace.getMostRecentLeaf() !== leaf) return;
+      const editor = (leaf.view).editor, line = Math.min(target.line, editor.lastLine());
       const from = { line, ch: 0 }, to = { line, ch: editor.getLine(line).length };
       editor.setSelection(from, to); editor.scrollIntoView({ from, to }, true); editor.focus();
     }

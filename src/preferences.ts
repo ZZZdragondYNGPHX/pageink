@@ -50,20 +50,22 @@ const isNumber = (value: unknown, min: number, max: number): value is number => 
 
 /** Accepts stored data from any earlier version; unknown or invalid values fall back to defaults. */
 export function normalizePreferences(raw: unknown): Preferences {
-  const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  const record = (item: unknown): Record<string, unknown> => item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {};
+  const value = record(raw);
+  const pen = record(value.pen), highlighter = record(value.highlighter), eraser = record(value.eraser), shape = record(value.shape), text = record(value.text), capture = record(value.capture), sidebar = record(value.sidebar), scratch = record(value.scratch);
   const d = DEFAULT_PREFERENCES;
   const pick = <T>(candidate: unknown, fallback: T, valid: (v: unknown) => boolean): T => valid(candidate) ? candidate as T : fallback;
   return {
     tool: pick(value.tool, d.tool, v => TOOLS.includes(v as ToolId) && v !== 'capture'),
-    pen: { color: pick(value.pen?.color, d.pen.color, isColor), width: pick(value.pen?.width, d.pen.width, v => isNumber(v, 0.25, 16)), pressure: pick(value.pen?.pressure, d.pen.pressure, v => typeof v === 'boolean'), scribble: pick(value.pen?.scribble, d.pen.scribble, v => typeof v === 'boolean') },
-    highlighter: { color: pick(value.highlighter?.color, d.highlighter.color, isColor), width: pick(value.highlighter?.width, d.highlighter.width, v => isNumber(v, 1, 16)) },
-    eraser: { mode: pick(value.eraser?.mode, d.eraser.mode, v => v === 'partial' || v === 'stroke'), size: pick(value.eraser?.size, d.eraser.size, v => isNumber(v, 2, 64)) },
-    shape: { kind: pick(value.shape?.kind, d.shape.kind, v => ['rectangle', 'ellipse', 'diamond', 'line', 'arrow'].includes(v as string)), color: pick(value.shape?.color, d.shape.color, isColor), width: pick(value.shape?.width, d.shape.width, v => isNumber(v, 0.5, 16)) },
-    text: { color: pick(value.text?.color, d.text.color, isColor), size: pick(value.text?.size, d.text.size, v => isNumber(v, 8, 120)) },
-    capture: { shape: pick(value.capture?.shape, d.capture.shape, v => v === 'rect' || v === 'lasso'), annotations: pick(value.capture?.annotations, d.capture.annotations, v => typeof v === 'boolean') },
+    pen: { color: pick(pen.color, d.pen.color, isColor), width: pick(pen.width, d.pen.width, v => isNumber(v, 0.25, 16)), pressure: pick(pen.pressure, d.pen.pressure, v => typeof v === 'boolean'), scribble: pick(pen.scribble, d.pen.scribble, v => typeof v === 'boolean') },
+    highlighter: { color: pick(highlighter.color, d.highlighter.color, isColor), width: pick(highlighter.width, d.highlighter.width, v => isNumber(v, 1, 16)) },
+    eraser: { mode: pick(eraser.mode, d.eraser.mode, v => v === 'partial' || v === 'stroke'), size: pick(eraser.size, d.eraser.size, v => isNumber(v, 2, 64)) },
+    shape: { kind: pick(shape.kind, d.shape.kind, v => ['rectangle', 'ellipse', 'diamond', 'line', 'arrow'].includes(v as string)), color: pick(shape.color, d.shape.color, isColor), width: pick(shape.width, d.shape.width, v => isNumber(v, 0.5, 16)) },
+    text: { color: pick(text.color, d.text.color, isColor), size: pick(text.size, d.text.size, v => isNumber(v, 8, 120)) },
+    capture: { shape: pick(capture.shape, d.capture.shape, v => v === 'rect' || v === 'lasso'), annotations: pick(capture.annotations, d.capture.annotations, v => typeof v === 'boolean') },
     fingerDraws: pick(value.fingerDraws, d.fingerDraws, v => typeof v === 'boolean'),
-    sidebar: { pages: pick(value.sidebar?.pages, d.sidebar.pages, v => typeof v === 'boolean'), canvas: pick(value.sidebar?.canvas, d.sidebar.canvas, v => typeof v === 'boolean'), tab: pick(value.sidebar?.tab, d.sidebar.tab, v => ['pages', 'bookmarks', 'search'].includes(v as string)) },
-    scratch: { right: pick(value.scratch?.right, d.scratch.right, v => isNumber(v, 0, 10000)), top: pick(value.scratch?.top, d.scratch.top, v => isNumber(v, 0, 10000)), width: pick(value.scratch?.width, d.scratch.width, v => isNumber(v, 260, 4000)), height: pick(value.scratch?.height, d.scratch.height, v => isNumber(v, 200, 4000)) },
+    sidebar: { pages: pick(sidebar.pages, d.sidebar.pages, v => typeof v === 'boolean'), canvas: pick(sidebar.canvas, d.sidebar.canvas, v => typeof v === 'boolean'), tab: pick(sidebar.tab, d.sidebar.tab, v => ['pages', 'bookmarks', 'search'].includes(v as string)) },
+    scratch: { right: pick(scratch.right, d.scratch.right, v => isNumber(v, 0, 10000)), top: pick(scratch.top, d.scratch.top, v => isNumber(v, 0, 10000)), width: pick(scratch.width, d.scratch.width, v => isNumber(v, 260, 4000)), height: pick(scratch.height, d.scratch.height, v => isNumber(v, 200, 4000)) },
     scratchPlacement: pick(value.scratchPlacement, d.scratchPlacement, v => v === 'docked' || v === 'floating'),
     newTemplate: pick(value.newTemplate, d.newTemplate, v => ['blank', 'ruled', 'grid', 'dotted'].includes(v as string)),
   };
@@ -74,16 +76,21 @@ type Patch = { [K in keyof Preferences]?: Preferences[K] extends object ? Partia
 /** Observable preferences with debounced persistence supplied by the host. */
 export class PreferenceStore {
   private listeners = new Set<() => void>();
-  private timer?: ReturnType<typeof setTimeout>;
+  private timer?: number;
   constructor(private value: Preferences, private persist: (value: Preferences) => Promise<void> | void = () => {}) {}
   get = () => this.value;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   update(patch: Patch) {
-    const next = { ...this.value } as any;
-    for (const [key, part] of Object.entries(patch)) next[key] = part && typeof part === 'object' && !Array.isArray(part) ? { ...(this.value as any)[key], ...part } : part;
+    const next = { ...this.value };
+    const merge = <K extends keyof Preferences>(key: K) => {
+      const part = patch[key];
+      if (part === undefined) return;
+      next[key] = (part && typeof part === 'object' ? { ...this.value[key] as object, ...part } : part) as Preferences[K];
+    };
+    for (const key of Object.keys(patch) as (keyof Preferences)[]) merge(key);
     this.value = next;
     for (const listener of this.listeners) listener();
-    clearTimeout(this.timer); this.timer = setTimeout(() => void this.persist(this.value), 400);
+    window.clearTimeout(this.timer); this.timer = window.setTimeout(() => void this.persist(this.value), 400);
   }
-  flush() { if (this.timer) { clearTimeout(this.timer); this.timer = undefined; void this.persist(this.value); } }
+  flush() { if (this.timer) { window.clearTimeout(this.timer); this.timer = undefined; void this.persist(this.value); } }
 }

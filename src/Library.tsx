@@ -48,7 +48,7 @@ export function Library({ host, folder, onFolder, initialSearch, display, onDisp
   const searching = !!searchQuery.trim() && fullText, searchTask = useRef<AbortController>();
   const searchKey = `${wholeVault}:${filter}:${searchQuery}:${searchRetry}`;
   useEffect(() => {
-    let controller: AbortController | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined, timer: number | undefined;
     const refresh = async () => {
       controller?.abort(); const task = new AbortController(); controller = task;
       try { const next = await host.list(task.signal); if (!task.signal.aborted) { setEntries(next); setListError(''); } }
@@ -56,8 +56,8 @@ export function Library({ host, folder, onFolder, initialSearch, display, onDisp
       finally { if (!task.signal.aborted) setLoading(false); }
     };
     void refresh();
-    const unsubscribe = host.subscribe(() => { clearTimeout(timer); timer = setTimeout(() => void refresh(), 250); });
-    return () => { unsubscribe(); controller?.abort(); clearTimeout(timer); };
+    const unsubscribe = host.subscribe(() => { window.clearTimeout(timer); timer = window.setTimeout(() => void refresh(), 250); });
+    return () => { unsubscribe(); controller?.abort(); window.clearTimeout(timer); };
   }, [host, retry]);
   useEffect(() => { setLimit(60); list.current?.parentElement?.scrollTo({ top: 0 }); }, [searchQuery, filter, fullText]);
   const scoped = useMemo(() => wholeVault ? entries : folderNotes(entries, folder, !!searchQuery.trim()), [entries, wholeVault, folder, searchQuery]);
@@ -67,12 +67,12 @@ export function Library({ host, folder, onFolder, initialSearch, display, onDisp
     if (!searching) return;
     const task = new AbortController(); searchTask.current = task;
     setSearchState({ key: searchKey, matches: [], issues: [], done: 0, total: candidates.length }); setSearchStatus('running');
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       void host.search(candidates, searchQuery, task.signal, state => { if (!task.signal.aborted) setSearchState({ ...state, key: searchKey }); }).then(state => {
         if (!task.signal.aborted) { setSearchState({ ...state, key: searchKey }); setSearchStatus('done'); }
       }).catch(e => { if (!task.signal.aborted) { setSearchError((e as Error).message); setSearchStatus('canceled'); } });
     }, 250);
-    return () => { clearTimeout(timer); task.abort(); };
+    return () => { window.clearTimeout(timer); task.abort(); };
   }, [host, candidates, searchQuery, searching, searchKey]);
   const currentSearch = searchState.key === searchKey;
   const running = searching && (!currentSearch || searchStatus === 'running');

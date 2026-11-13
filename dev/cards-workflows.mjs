@@ -30,7 +30,8 @@ async function insert(text) {
 }
 async function point(e, dx = 20, dy = 10) {
   await page.waitForTimeout(450); const { memory } = await snapshot(); const box = await drawing().locator('.ink-editor-canvas').boundingBox();
-  return { x: box.x + (e.x + dx - memory.dx) * memory.zoom, y: box.y + (e.y + dy - memory.dy) * memory.zoom };
+  return { x: Math.max(box.x + 8, Math.min(box.x + box.width - 8, box.x + (e.x + dx - memory.dx) * memory.zoom)),
+    y: Math.max(box.y + 8, Math.min(box.y + box.height - 8, box.y + (e.y + dy - memory.dy) * memory.zoom)) };
 }
 async function selectCard(e, shift = false) {
   await button('选择').click(); const p = await point(e); if (shift) await page.keyboard.down('Shift'); await page.mouse.click(p.x, p.y); if (shift) await page.keyboard.up('Shift');

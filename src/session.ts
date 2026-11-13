@@ -3,6 +3,7 @@ import { Element, Rect, uid } from './model';
 import { DocumentStore, SurfaceBlocks, ensureDir, Conflict } from './storage';
 import { History } from './history';
 import { snapshotElement } from './element-snapshot';
+import { dataUrlBytes, imageFile, readDataURL } from './binary';
 
 export type SaveState = 'saved' | 'pending' | 'saving' | 'failed';
 export const SAVE_IDLE_MS = 180000;
@@ -18,7 +19,7 @@ export class Session {
   saveState: SaveState = 'saved';
   saveError = '';
   listeners = new Set<() => void>();
-  timer?: ReturnType<typeof setTimeout>;
+  timer?: number;
   private pending?: Promise<void>;
   private generation = 0;
   private dirtySince?: number;
@@ -109,26 +110,23 @@ export class Session {
   }
   /** Disk writes wait for pen-up; history and in-memory snapshots remain immediate. */
   setWriting(owner: string, active: boolean) {
-    if (active) { this.writing.add(owner); clearTimeout(this.timer); }
+    if (active) { this.writing.add(owner); window.clearTimeout(this.timer); }
     else { this.writing.delete(owner); this.armSave(); }
   }
   private armSave() {
-    clearTimeout(this.timer);
+    window.clearTimeout(this.timer);
     if (this.dirtySince === undefined || this.writing.size || this.conflictPath) return;
     const delay = Math.min(SAVE_IDLE_MS, Math.max(0, SAVE_MAX_WAIT_MS - (Date.now() - this.dirtySince)));
-    this.timer = setTimeout(() => void this.save().catch(() => {}), delay);
+    this.timer = window.setTimeout(() => void this.save().catch(() => {}), delay);
   }
   async loadFiles(elements?: readonly Element[]) {
-    const wanted = elements ? new Set(elements.filter(e => e.type === 'image').map(e => (e as any).fileId)) : null;
+    const wanted = elements ? new Set<string>(elements.flatMap(e => e.type === 'image' && e.fileId ? [e.fileId] : [])) : null;
     for (const [id, asset] of Object.entries(this.manifest.assets)) {
       if (!asset.mimeType.startsWith('image/')) continue;
       if (this.files[id] || wanted && !wanted.has(id)) continue;
       const bytes = await this.store.io.readBinary(asset.path);
-      const dataURL = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject;
-        reader.readAsDataURL(new Blob([bytes], { type: asset.mimeType }));
-      });
-      this.files[id] = { id: id as any, dataURL: dataURL as any, mimeType: asset.mimeType as any, created: asset.created };
+      const dataURL = await readDataURL(new Blob([bytes], { type: asset.mimeType }));
+      this.files[id] = imageFile(id, dataURL, asset.mimeType, asset.created);
     }
     this.pruneFiles(wanted ?? new Set(Object.keys(this.files)));
   }
@@ -151,13 +149,13 @@ export class Session {
       if (this.manifest.assets[id]) continue;
       const dir = `${this.manifest.resourceDir}/assets`; await ensureDir(this.store.io, dir);
       const path = `${dir}/${uid()}.bin`;
-      const response = await fetch(file.dataURL); await this.store.io.writeBinary(path, await response.arrayBuffer());
+      await this.store.io.writeBinary(path, dataUrlBytes(file.dataURL));
       this.manifest.assets[id] = { path, mimeType: file.mimeType, created: file.created }; this.files[id] = file;
       this.metadataChanged();
     }
   }
   async save(): Promise<void> {
-    clearTimeout(this.timer);
+    window.clearTimeout(this.timer);
     if (this.conflictPath) { if (this.conflictResolved) return; throw new Conflict(this.conflictPath); }
     if (this.pending) { await this.pending; if (this.dirty.size || this.metadataDirty) return this.save(); return; }
     if (!this.dirty.size && !this.metadataDirty) { if (this.saveState !== 'saved') { this.saveState = 'saved'; this.saveError = ''; this.notify(); } return; }
@@ -180,7 +178,7 @@ export class Session {
   }
   async preserveConflict() {
     await Promise.all([...this.flushers.values()].map(flush => flush()));
-    clearTimeout(this.timer);
+    window.clearTimeout(this.timer);
     this.conflictPath = await this.store.conflictCopy(this.dirty, structuredClone(this.manifest));
     return this.conflictPath;
   }

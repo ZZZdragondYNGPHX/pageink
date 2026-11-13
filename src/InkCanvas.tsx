@@ -1,7 +1,8 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Excalidraw, CaptureUpdateAction } from '@excalidraw/excalidraw';
 import type { ExcalidrawImperativeAPI, AppState } from '@excalidraw/excalidraw/types';
-import { Element, Page, Rect } from './model';
+import { Element, Page, Rect, MutableElement } from './model';
+import type { InkApi } from './kernel-api';
 import { bounds, cloneElements, eraseStroke, lassoHits, polygonBounds, ScenePoint } from './geometry';
 import { Session } from './session';
 import { PdfService } from './pdf';
@@ -62,9 +63,10 @@ interface Props {
 }
 const SCRATCH_PAGE: Page = { id: 'scratch', width: 1, height: 1, margins: { top: 0, right: 0, bottom: 0, left: 0 }, template: 'blank' };
 const NEVER = CaptureUpdateAction.NEVER;
-export const selectedContent = (api: ExcalidrawImperativeAPI) => {
+export const selectedContent = (api: ExcalidrawImperativeAPI): Element[] => {
   const ids = api.getAppState().selectedElementIds;
-  return api.getSceneElements().filter(e => ids[e.id] || e.type === 'text' && e.containerId && ids[e.containerId]);
+  const elements: readonly Element[] = api.getSceneElements();
+  return elements.filter(e => ids[e.id] || e.type === 'text' && e.containerId && ids[e.containerId]);
 };
 
 export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(function InkCanvas(props, forwarded) {
@@ -85,7 +87,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const [renderPending, setRenderPending] = useState(false);
   const [flash, setFlash] = useState<{ rect: Rect; token: string } | null>(null);
   const [marqueePath, setMarqueePath] = useState<ScenePoint[] | null>(null);
-  const busy = useRef(false), timer = useRef<ReturnType<typeof setTimeout>>();
+  const busy = useRef(false), timer = useRef<number>();
   const owner = kind === 'scratch' ? 'scratch' : 'body';
 
   // ---------- loading ----------
@@ -117,14 +119,14 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       const fit = Math.min(1.25, (previous.width - 48) / layoutRef.current.maxWidth);
       const followsWidth = kind === 'pages' && ready.current && previous.width > 48 && Math.abs(previous.zoom - fit) < 0.02;
       views.set({ width, height });
-      cancelAnimationFrame(frame);
-      if (api && followsWidth && width > 48 && Math.abs(width - previous.width) > 1) frame = requestAnimationFrame(() => {
+      window.cancelAnimationFrame(frame);
+      if (api && followsWidth && width > 48 && Math.abs(width - previous.width) > 1) frame = window.requestAnimationFrame(() => {
         const v = views.get(), zoom = clampZoom(Math.min(1.25, (v.width - 48) / layoutRef.current.maxWidth), 0.1);
         setView({ ...zoomAround(v, zoom), scrollX: -(layoutRef.current.bounds.x + layoutRef.current.bounds.width / 2 - v.width / zoom / 2) });
       });
     });
     observer.observe(element);
-    return () => { element.removeEventListener('ink-render-status', status); observer.disconnect(); cancelAnimationFrame(frame); };
+    return () => { element.removeEventListener('ink-render-status', status); observer.disconnect(); window.cancelAnimationFrame(frame); };
   }, [api]);
 
   function initialViewport(elements: readonly Element[]): Partial<AppState> {
@@ -144,7 +146,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (content) return state(fitRect(view, content, 48, 1));
     return state(kind === 'scratch' ? { zoom: 1, scrollX: 24, scrollY: 24 } : { zoom: 1, scrollX: width / 2, scrollY: height / 2 });
   }
-  const state = (v: Pick<View, 'zoom' | 'scrollX' | 'scrollY'>): Partial<AppState> => ({ zoom: { value: v.zoom as any }, scrollX: v.scrollX, scrollY: v.scrollY });
+  const state = (v: Pick<View, 'zoom' | 'scrollX' | 'scrollY'>): Pick<AppState, 'zoom' | 'scrollX' | 'scrollY'> => ({ zoom: { value: v.zoom as AppState['zoom']['value'] }, scrollX: v.scrollX, scrollY: v.scrollY });
 
   // ---------- persistence ----------
   async function flush(record = true) {
@@ -193,22 +195,22 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       latest.current.onReady(handle);
     };
     const unsubscribe = api.onChange(check); check();
-    const fallback = setInterval(() => { check(); if (done) clearInterval(fallback); }, 300);
+    const fallback = window.setInterval(() => { check(); if (done) window.clearInterval(fallback); }, 300);
     let frame = 0;
     const pointerUp = api.onPointerUp((_tool, _state, event) => {
       if (scribble.current?.id === event.pointerId) scribble.current.finished = true;
-      clearTimeout(timer.current); cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => { finishScribble(); clearTimeout(timer.current); session.setWriting(owner, false); void flush().catch(() => {}); });
+      window.clearTimeout(timer.current); window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => { finishScribble(); window.clearTimeout(timer.current); session.setWriting(owner, false); void flush().catch(() => {}); });
     });
     // The parent flushes before closing. Reading an already-unmounted engine here can return an
     // empty scene and must never be persisted as a deletion.
-    return () => { unsubscribe(); pointerUp(); clearInterval(fallback); clearTimeout(timer.current); cancelAnimationFrame(frame); session.setWriting(owner, false); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
+    return () => { unsubscribe(); pointerUp(); window.clearInterval(fallback); window.clearTimeout(timer.current); window.cancelAnimationFrame(frame); session.setWriting(owner, false); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
   }, [api, initial]);
 
   // ---------- tool ----------
   const tool = props.tool;
   useEffect(() => {
-    if (api && isReady) api.setActiveTool({ type: tool.kernel, locked: tool.kernel !== 'selection' && tool.kernel !== 'hand' } as any);
+    if (api && isReady) api.setActiveTool({ type: tool.kernel, locked: tool.kernel !== 'selection' && tool.kernel !== 'hand' });
   }, [api, isReady, tool.kernel]);
   useEffect(() => {
     if (!api || !isReady) return;
@@ -227,7 +229,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   }
   function setView(next: Pick<View, 'zoom' | 'scrollX' | 'scrollY'>) {
     if (!api) return;
-    api.updateScene({ appState: state(next) as any, captureUpdate: NEVER });
+    api.updateScene({ appState: state(next), captureUpdate: NEVER });
     clampView();
   }
   const onScroll = (scrollX: number, scrollY: number, zoom: { value: number }) => {
@@ -257,20 +259,20 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       if (highlight) setFlash({ rect: area, token: String(performance.now()) });
     } else setView({ zoom: v.zoom, scrollX: v.scrollX, scrollY: -(target.paper.y - 20 / v.zoom) });
   }
-  useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 1600); return () => clearTimeout(t); }, [flash]);
+  useEffect(() => { if (!flash) return; const t = window.setTimeout(() => setFlash(null), 1600); return () => window.clearTimeout(t); }, [flash]);
 
   // ---------- selection reporting ----------
   const selectionFrame = useRef(0), lastSelection = useRef<unknown>(null), hadSelection = useRef(false);
   const onKernelChange = (_elements: readonly unknown[], appState: AppState) => {
     if (!ready.current) return;
     if (!appState.editingTextElement && !appState.newElement && !appState.isResizing && !appState.isRotating && !appState.selectedElementsAreBeingDragged) {
-      clearTimeout(timer.current); timer.current = setTimeout(() => void flush().catch(() => {}), 500);
+      window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void flush().catch(() => {}), 500);
     }
     const any = Object.values(appState.selectedElementIds).some(Boolean);
     if (!any && !hadSelection.current && lastSelection.current === appState.selectedElementIds) return;
     lastSelection.current = appState.selectedElementIds;
-    cancelAnimationFrame(selectionFrame.current);
-    selectionFrame.current = requestAnimationFrame(reportSelection);
+    window.cancelAnimationFrame(selectionFrame.current);
+    selectionFrame.current = window.requestAnimationFrame(reportSelection);
   };
   function reportSelection() {
     if (!api) return;
@@ -278,17 +280,17 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     hadSelection.current = !!rect;
     if (!rect) { latest.current.onSelection?.(null); return; }
     const source = selected.length === 1 && selected[0].type === 'image' ? selected[0].customData?.source : undefined;
-    latest.current.onSelection?.({ ids: selected.map(e => e.id), rect, busy: !!(s.selectedElementsAreBeingDragged || s.isResizing || s.isRotating), source });
+    latest.current.onSelection?.({ ids: selected.map(e => e.id), rect, busy: !!(s.selectedElementsAreBeingDragged || s.isResizing || s.isRotating), source: source?.polygon ? { ...source, polygon: source.polygon } : undefined });
   }
-  useEffect(() => () => cancelAnimationFrame(selectionFrame.current), []);
+  useEffect(() => () => window.cancelAnimationFrame(selectionFrame.current), []);
 
   // ---------- editing helpers ----------
   async function insert(elements: readonly Element[], at?: ScenePoint) {
     if (!api || !elements.length) return;
     const box = bounds(elements)!, [cx, cy] = at ?? center();
-    const copies = cloneElements(elements, cx - (box.x + box.width / 2), cy - (box.y + box.height / 2)).map(e => ({ ...e, index: null }) as unknown as Element);
+    const copies = cloneElements(elements, cx - (box.x + box.width / 2), cy - (box.y + box.height / 2)).map(e => ({ ...e, index: null }));
     api.addFiles(Object.values(session.files));
-    api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted(), ...copies], appState: { selectedElementIds: Object.fromEntries(copies.filter(e => !(e.type === 'text' && e.containerId)).map(e => [e.id, true])) as any }, captureUpdate: NEVER });
+    api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted(), ...copies], appState: { selectedElementIds: Object.fromEntries(copies.filter(e => !(e.type === 'text' && e.containerId)).map(e => [e.id, true])) }, captureUpdate: NEVER });
     await flush();
   }
   async function replaceSelected(update: (element: Element) => Element | null) {
@@ -298,17 +300,17 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     for (const e of api.getSceneElementsIncludingDeleted()) {
       if (!ids.has(e.id)) { next.push(e); continue; }
       const result = update(e);
-      if (result) next.push(result === e ? e : { ...result, version: e.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 30), updated: Date.now() } as Element);
+      if (result) next.push(result === e ? e : { ...result, version: e.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 30), updated: Date.now() });
     }
     const kept = new Set(next.map(e => e.id));
     // Detach bindings to removed elements so the remaining scene stays consistent.
     const consistent = next.map(e => {
-      const copy = e as any; let changed = false; const patch: any = {};
-      if (copy.boundElements?.some((b: any) => !kept.has(b.id))) { patch.boundElements = copy.boundElements.filter((b: any) => kept.has(b.id)); changed = true; }
-      for (const key of ['startBinding', 'endBinding']) if (copy[key] && !kept.has(copy[key].elementId)) { patch[key] = null; changed = true; }
-      return changed ? { ...e, ...patch, version: e.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 30) } as Element : e;
+      const copy: MutableElement = { ...e }; let changed = false;
+      if (copy.boundElements?.some(b => !kept.has(b.id))) { copy.boundElements = copy.boundElements.filter(b => kept.has(b.id)); changed = true; }
+      if ('startBinding' in copy) for (const key of ['startBinding', 'endBinding'] as const) if (copy[key] && !kept.has(copy[key].elementId)) { copy[key] = null; changed = true; }
+      return changed ? { ...copy, version: e.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 30) } : e;
     });
-    api.updateScene({ elements: consistent, appState: kept.size === next.length && [...ids].every(id => kept.has(id)) ? undefined : { selectedElementIds: {} as any }, captureUpdate: NEVER });
+    api.updateScene({ elements: consistent, appState: kept.size === next.length && [...ids].every(id => kept.has(id)) ? undefined : { selectedElementIds: {} }, captureUpdate: NEVER });
     await flush();
   }
   function center(): ScenePoint { const v = views.get(); return toScene(v, v.width / 2, v.height / 2); }
@@ -321,7 +323,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const handle: CanvasHandle = {
     get api() { return api!; }, views, flush: () => flush(), rebuild, layout: () => layoutRef.current, currentPage, reveal, zoom, center, insert,
     selected: () => api ? selectedContent(api) : [], replaceSelected, memory,
-    clearSelection: () => api?.updateScene({ appState: { selectedElementIds: {} as any }, captureUpdate: NEVER }),
+    clearSelection: () => api?.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: NEVER }),
   };
   useImperativeHandle(forwarded, () => handle);
 
@@ -345,12 +347,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (!region) return;
     const elements = api.getSceneElements(), stroke = elements[elements.length - 1];
     if (!stroke || stroke.type !== 'freedraw' || stroke.id === gesture.previous) return;
-    const candidates = (api as any).inkQuery(polygonBounds(region)) as Element[];
+    const candidates = (api as InkApi).inkQuery(polygonBounds(region));
     const patches = new Map<string, Element[]>();
     for (const e of candidates) if (e.id !== stroke.id && scribbleHits(e, region)) patches.set(e.id, []);
     if (!patches.size) return; // An ordinary mark on blank paper remains ink.
     // Remove the gesture itself before recording: undo restores only the original handwriting.
-    patches.set(stroke.id, []); (api as any).inkErase(patches);
+    patches.set(stroke.id, []); (api as InkApi).inkErase(patches);
     latest.current.onScribble?.();
   }
 
@@ -359,7 +361,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     const point = scenePoint(event), radius = tool.erase.radius / api.getAppState().zoom.value;
     const from = lastErase.current ?? point; lastErase.current = point;
     const steps = Math.max(1, Math.ceil(Math.hypot(point[0] - from[0], point[1] - from[1]) / (radius / 2)));
-    const candidates = (api as any).inkQuery({ x: Math.min(from[0], point[0]) - radius, y: Math.min(from[1], point[1]) - radius, width: Math.abs(point[0] - from[0]) + radius * 2, height: Math.abs(point[1] - from[1]) + radius * 2 }) as Element[];
+    const candidates = (api as InkApi).inkQuery({ x: Math.min(from[0], point[0]) - radius, y: Math.min(from[1], point[1]) - radius, width: Math.abs(point[0] - from[0]) + radius * 2, height: Math.abs(point[1] - from[1]) + radius * 2 });
     const patches = new Map<string, Element[]>();
     for (const e of candidates) {
       if (e.type !== 'freedraw') continue;
@@ -370,12 +372,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       }
       if (pieces.length !== 1 || pieces[0] !== e) patches.set(e.id, pieces);
     }
-    if (patches.size) (api as any).inkErase(patches);
+    if (patches.size) (api as InkApi).inkErase(patches);
   }
   function lassoSelect(points: ScenePoint[]) {
     if (!api) return;
     const selected: Record<string, true> = {};
-    const candidates = (api as any).inkQuery(polygonBounds(points)) as Element[];
+    const candidates = (api as InkApi).inkQuery(polygonBounds(points));
     for (const e of candidates) if (lassoHits(e, points)) selected[e.id] = true;
     // Bring grouped and bound objects into the same operation, preserving editing relationships.
     const groups = new Set(candidates.filter(e => selected[e.id]).flatMap(e => e.groupIds));
@@ -383,7 +385,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       if (e.groupIds.some(g => groups.has(g))) selected[e.id] = true;
       if (e.type === 'text' && e.containerId && selected[e.id]) selected[e.containerId] = true;
     }
-    api.updateScene({ appState: { selectedElementIds: selected as any }, captureUpdate: NEVER });
+    api.updateScene({ appState: { selectedElementIds: selected }, captureUpdate: NEVER });
   }
   function insideSelection(event: React.PointerEvent) {
     if (!api) return false;
@@ -397,7 +399,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     api.updateScene({ appState: { scrollX: s.scrollX + dx / s.zoom.value, scrollY: s.scrollY + dy / s.zoom.value }, captureUpdate: NEVER });
   }
   function startInertia(vx: number, vy: number) {
-    cancelAnimationFrame(inertia.current);
+    window.cancelAnimationFrame(inertia.current);
     let last = performance.now();
     const step = (now: number) => {
       const dt = Math.min(32, now - last); last = now;
@@ -405,12 +407,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       vx *= decay; vy *= decay;
       if (Math.hypot(vx, vy) < 0.03) return;
       panBy(vx * dt, vy * dt);
-      inertia.current = requestAnimationFrame(step);
+      inertia.current = window.requestAnimationFrame(step);
     };
-    inertia.current = requestAnimationFrame(step);
+    inertia.current = window.requestAnimationFrame(step);
   }
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    cancelAnimationFrame(inertia.current);
+    window.cancelAnimationFrame(inertia.current);
     if (busy.current) { event.stopPropagation(); event.preventDefault(); return; }
     if (event.pointerType === 'touch' && !props.fingerDraws) {
       // Fingers navigate (Pencil writes); with finger drawing on, the kernel handles touch itself.
@@ -453,7 +455,8 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     }
     if (tool.erase && event.pointerType !== 'touch' && eraserCursor.current) {
       const [x, y] = local(event), r = tool.erase.radius;
-      Object.assign(eraserCursor.current.style, { display: 'block', width: `${r * 2}px`, height: `${r * 2}px`, transform: `translate(${x - r}px, ${y - r}px)` });
+      eraserCursor.current.classList.add('is-visible');
+      Object.assign(eraserCursor.current.style, { width: `${r * 2}px`, height: `${r * 2}px`, transform: `translate(${x - r}px, ${y - r}px)` });
     }
     const old = touches.current.get(event.pointerId);
     if (old) {
@@ -466,7 +469,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
         const zoomValue = clampZoom(s.zoom.value * nextDistance / Math.max(1, distance), kind === 'pages' ? 0.1 : undefined);
         const box = root.current!.getBoundingClientRect();
         const ox = (old.x + other.x) / 2 - box.left, oy = (old.y + other.y) / 2 - box.top, nx = (event.clientX + other.x) / 2 - box.left, ny = (event.clientY + other.y) / 2 - box.top;
-        api.updateScene({ appState: { zoom: { value: zoomValue as any }, scrollX: s.scrollX + nx / zoomValue - ox / s.zoom.value, scrollY: s.scrollY + ny / zoomValue - oy / s.zoom.value }, captureUpdate: NEVER });
+        api.updateScene({ appState: { zoom: { value: zoomValue as AppState['zoom']['value'] }, scrollX: s.scrollX + nx / zoomValue - ox / s.zoom.value, scrollY: s.scrollY + ny / zoomValue - oy / s.zoom.value }, captureUpdate: NEVER });
       } else {
         panBy(event.clientX - old.x, event.clientY - old.y);
         g.samples.push({ t: performance.now(), x: event.clientX, y: event.clientY }); if (g.samples.length > 6) g.samples.shift();
@@ -517,7 +520,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (erasing.current) { erasing.current = false; void flush().catch(() => {}); }
     if (marquee.current?.id === event.pointerId) { marquee.current = null; setMarqueePath(null); }
   };
-  useEffect(() => () => cancelAnimationFrame(inertia.current), []);
+  useEffect(() => () => window.cancelAnimationFrame(inertia.current), []);
 
   const dark = props.theme === 'dark' && kind !== 'pages';
   const marqueeMode = tool.marquee ? ` is-marquee` : '';
@@ -532,7 +535,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       });
       if (card) { event.stopPropagation(); event.preventDefault(); latest.current.onCardEdit(card); }
     }}
-    onPointerLeave={() => { eraserCursor.current?.setCssStyles({ display: 'none' }); }}
+    onPointerLeave={() => { eraserCursor.current?.classList.remove('is-visible'); }}
     onPointerDownCapture={onPointerDown} onPointerMoveCapture={onPointerMove} onPointerUpCapture={onPointerUp} onPointerCancelCapture={onPointerCancel}>
     {kind === 'pages' ? <PaperLayer layout={layout} views={views} pdf={pdf} sourceIssue={session.sourceIssue}/> : <GridLayer views={views} template={kind === 'canvas' ? session.manifest.pages[0].template : 'blank'} dark={dark}/>}
     {initial ? <Excalidraw langCode="zh-CN" excalidrawAPI={setApi} theme={dark ? 'dark' : 'light'} viewModeEnabled={props.readOnly ?? false}

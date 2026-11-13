@@ -13,7 +13,7 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
   const [dock, setDock] = useState<Dock | null>(null), [dragging, setDragging] = useState(false);
   const latest = useRef(dock); latest.current = dock;
   const drag = useRef<Drag | null>(null), suppressClick = useRef(false);
-  const idleTimer = useRef<ReturnType<typeof setTimeout>>(), pressed = useRef(false);
+  const idleTimer = useRef<number>(), pressed = useRef(false);
   const keyboardActive = useRef(false);
   const position = (): Dock | null => {
     if (latest.current) return latest.current;
@@ -25,11 +25,11 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
     const value = position();
     if (value) setDock({ ...value, collapsed: true });
   };
-  const stopIdle = () => clearTimeout(idleTimer.current);
+  const stopIdle = () => window.clearTimeout(idleTimer.current);
   const armIdle = () => {
     stopIdle();
     if (!visible || latest.current?.collapsed) return;
-    idleTimer.current = setTimeout(() => {
+    idleTimer.current = window.setTimeout(() => {
       const doc = root.current?.ownerDocument;
       const keyboardFocus = root.current?.contains(doc?.activeElement ?? null) && (keyboardActive.current || doc?.activeElement?.matches(':focus-visible'));
       if (drag.current || pressed.current || keyboardFocus || doc?.visibilityState !== 'visible' || layer?.querySelector('.ink-popover, .ink-card-editor')) { armIdle(); return; }
@@ -152,7 +152,7 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
     data-edge={dock?.edge ?? 'none'} style={dock ? { left: dock.x, top: dock.y } : undefined}
     onPointerEnter={armIdle} onPointerLeave={armIdle}
     onPointerMoveCapture={armIdle} onWheelCapture={armIdle} onScrollCapture={armIdle}
-    onFocusCapture={stopIdle} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) keyboardActive.current = false; armIdle(); }}
+    onFocusCapture={stopIdle} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) keyboardActive.current = false; armIdle(); }}
     onKeyDownCapture={() => { keyboardActive.current = true; stopIdle(); }}
     onPointerDownCapture={() => { keyboardActive.current = false; pressed.current = true; stopIdle(); if (!drag.current) suppressClick.current = false; }}
     onPointerUpCapture={() => { pressed.current = false; armIdle(); }} onPointerCancelCapture={() => { pressed.current = false; armIdle(); }}

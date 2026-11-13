@@ -1,4 +1,4 @@
-import type { Element, Page, Rect } from './model';
+import type { Element, Page, Rect, MutableElement } from './model';
 import { pageRect, uid } from './model';
 import { bounds } from './geometry';
 import { inkAnchor } from './mixed';
@@ -48,8 +48,7 @@ export const toSceneRect = (rect: Rect, p: PagePlacement): Rect => ({ ...rect, x
  * structures are cloned because the kernel may edit them in place. */
 export function sceneCopy(e: Element, dx = 0, dy = 0): Element {
   const copy = e.type === 'freedraw' ? { ...e } : structuredClone(e);
-  (copy as any).x = e.x + dx; (copy as any).y = e.y + dy;
-  return copy as Element;
+  return { ...copy, x: e.x + dx, y: e.y + dy };
 }
 
 const signature = (e: Element) => `${e.x},${e.y},${e.width},${e.height},${e.angle}`;
@@ -137,13 +136,13 @@ function reidentify(elements: readonly Element[], taken: ReadonlySet<string>): E
   const ids = new Map(elements.filter(e => taken.has(e.id)).map(e => [e.id, uid()]));
   const map = (id: string) => ids.get(id) ?? id;
   return elements.map(e => {
-    const copy = structuredClone(e) as any;
+    const copy = structuredClone(e) as MutableElement;
     copy.id = map(e.id);
-    if (copy.containerId) copy.containerId = map(copy.containerId);
-    if (copy.boundElements) copy.boundElements = copy.boundElements.map((b: any) => ({ ...b, id: map(b.id) }));
-    for (const key of ['startBinding', 'endBinding']) if (copy[key]) copy[key] = { ...copy[key], elementId: map(copy[key].elementId) };
+    if ('containerId' in copy && copy.containerId) copy.containerId = map(copy.containerId);
+    if (copy.boundElements) copy.boundElements = copy.boundElements.map(b => ({ ...b, id: map(b.id) }));
+    if ('startBinding' in copy) for (const key of ['startBinding', 'endBinding'] as const) if (copy[key]) copy[key] = { ...copy[key], elementId: map(copy[key].elementId) };
     if (ids.has(e.id)) { copy.version = (e.version ?? 1) + 1; copy.versionNonce = Math.floor(Math.random() * 2 ** 30); }
     if (copy.customData?.pageinkAnchor && ids.has(copy.customData.pageinkAnchor.elementId)) copy.customData.pageinkAnchor.elementId = map(copy.customData.pageinkAnchor.elementId);
-    return copy as Element;
+    return copy;
   });
 }

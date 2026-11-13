@@ -40,7 +40,7 @@ export async function searchDocument(session: Session, pdf: PdfService | undefin
         if (at >= 0) { const s = snippet(joined, at, term.length); hits.push({ page: page.id, pageIndex: index, kind: 'pdf', snippet: s.text, at: s.at }); }
       }
     }
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
   }
   onProgress(pages.length, pages.length);
   return hits.sort((a, b) => a.pageIndex - b.pageIndex);

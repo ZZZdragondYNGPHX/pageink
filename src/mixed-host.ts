@@ -18,7 +18,7 @@ export class Choice<T> extends FuzzySuggestModal<T> {
   getItemText(item: T) { return this.display(item); }
   onChooseItem(item: T) { this.chosen = true; this.resolve(item); }
   // Obsidian closes the modal before dispatching onChooseItem.
-  onClose() { setTimeout(() => { if (!this.chosen) this.resolve(); }, 0); }
+  onClose() { window.setTimeout(() => { if (!this.chosen) this.resolve(); }, 0); }
 }
 
 /** Native Markdown owns editing/history. Block IDs are added only when the user inserts a paragraph. */

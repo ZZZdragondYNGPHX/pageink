@@ -7,6 +7,8 @@ import type { SourceParagraph } from './mixed-host';
 import type { InkCardSource } from './cards-host';
 import type { Session } from './session';
 import { ensureDir } from './storage';
+import { imageFile } from './binary';
+import type { LocalPoint } from '@excalidraw/math';
 
 export function textCard(source: SourceParagraph, asset: string, root?: Element, prior?: Element): Element[] {
   const width = root?.width ?? 400, text = projectParagraph(source, asset, Math.max(100, width - 32), prior);
@@ -40,10 +42,10 @@ export async function inkCard(session: Session, source: InkCardSource, root?: El
     session.manifest.assets[archiveAsset] = { path, mimeType: INK_PACK_MIME, created: Date.now() }; session.metadataChanged();
   }
   const imageId = uid();
-  await session.acceptFiles({ [imageId]: { id: imageId as any, dataURL: source.preview as any, mimeType: 'image/png', created: Date.now() } });
+  await session.acceptFiles({ [imageId]: imageFile(imageId, source.preview, 'image/png') });
   const width = root?.width ?? Math.min(480, source.width);
   const image = convertToExcalidrawElements([{ type: 'image', x: root?.x ?? 0, y: root?.y ?? 0, width,
-    height: width * source.height / source.width, fileId: imageId as any }])[0];
+    height: width * source.height / source.width, fileId: imageId as NonNullable<Extract<Element, { type: 'image' }>['fileId']> }])[0];
   const customData = { ...root?.customData, pageinkCard: { ...source.reference, archiveAsset } };
   return root ? revised(root, { fileId: imageId, height: image.height, customData } as Partial<Element>) : { ...image, customData } as Element;
 }
@@ -52,7 +54,7 @@ export async function inkCard(session: Session, source: InkCardSource, root?: El
 export function connectCards(elements: readonly Element[], start: Element, end: Element): Element[] {
   if (start.id === end.id) return [...elements];
   const a = [start.x + start.width + 8, start.y + start.height / 2], b = [end.x - 8, end.y + end.height / 2];
-  const skeleton = convertToExcalidrawElements([{ type: 'arrow', x: a[0], y: a[1], points: [[0, 0], [b[0] - a[0], b[1] - a[1]]],
+  const skeleton = convertToExcalidrawElements([{ type: 'arrow', x: a[0], y: a[1], points: [[0, 0] as LocalPoint, [b[0] - a[0], b[1] - a[1]] as LocalPoint],
     width: Math.abs(b[0] - a[0]), height: Math.abs(b[1] - a[1]), roughness: 0, strokeColor: '#587b92', strokeWidth: 2,
     endArrowhead: 'arrow' }])[0];
   // The skeleton converter resets bindings; attach to the existing scene only after conversion.

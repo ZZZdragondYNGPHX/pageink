@@ -29,17 +29,17 @@ export function Popover({ anchor, onClose, label, align = 'start', className = '
     return () => { observer.disconnect(); doc?.removeEventListener('scroll', place, true); };
   }, [anchor, layer, align]);
   useLayoutEffect(() => {
-    const pop = ref.current, doc = anchor?.ownerDocument ?? document, win = doc.defaultView!;
+    const pop = ref.current, doc = anchor?.ownerDocument ?? activeDocument, win = doc.defaultView!;
     const previous = anchor ?? doc.activeElement as HTMLElement | null;
     let restoreFocus = true;
-    const frame = focus ? requestAnimationFrame(() => pop?.querySelector<HTMLElement>('[data-autofocus], [aria-checked="true"], input, button:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true })) : 0;
+    const frame = focus ? window.requestAnimationFrame(() => pop?.querySelector<HTMLElement>('[data-autofocus], [aria-checked="true"], input, button:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true })) : 0;
     const down = (event: PointerEvent) => { const target = event.target as Node; if (pop?.contains(target) || anchor?.contains(target)) return; restoreFocus = false; close.current(); };
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing) { event.stopPropagation(); event.preventDefault(); if (focus && previous?.isConnected) previous.focus({ preventScroll: true }); close.current(); } };
     const leave = (event: FocusEvent) => { if (!focus || pop?.contains(event.target as Node) || anchor?.contains(event.target as Node)) return; restoreFocus = false; close.current(); };
     // Escape belongs to the floating layer before the host's document-level shortcuts.
     doc.addEventListener('pointerdown', down, true); win.addEventListener('keydown', key, true); doc.addEventListener('focusin', leave);
     return () => {
-      cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(frame);
       doc.removeEventListener('pointerdown', down, true); win.removeEventListener('keydown', key, true); doc.removeEventListener('focusin', leave);
       if (focus && restoreFocus && previous?.isConnected && (pop?.contains(doc.activeElement) || doc.activeElement === doc.body)) previous.focus({ preventScroll: true });
     };
@@ -63,7 +63,7 @@ export function Menu({ items, onDone }: { items: readonly (MenuEntry | false | n
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const buttons = [...ref.current!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const index = buttons.indexOf(activeDocument.activeElement as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
     buttons[next]?.focus();
   };
@@ -122,12 +122,12 @@ export function Swatches({ colors, value, onChange, label, custom = true }: { co
 export interface Toast { id: number; kind: 'info' | 'success' | 'error' | 'progress'; message: string; detail?: string; action?: { label: string; run: () => void }; cancel?: () => void }
 export function useToasts() {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const timers = useRef(new Map<number, number>());
   const next = useRef(0);
-  const dismiss = useCallback((id: number) => { clearTimeout(timers.current.get(id)); timers.current.delete(id); setToasts(list => list.filter(t => t.id !== id)); }, []);
+  const dismiss = useCallback((id: number) => { window.clearTimeout(timers.current.get(id)); timers.current.delete(id); setToasts(list => list.filter(t => t.id !== id)); }, []);
   const arm = useCallback((toast: Toast) => {
-    clearTimeout(timers.current.get(toast.id));
-    if (toast.kind === 'info' || toast.kind === 'success') timers.current.set(toast.id, setTimeout(() => dismiss(toast.id), toast.action ? 7000 : 3500));
+    window.clearTimeout(timers.current.get(toast.id));
+    if (toast.kind === 'info' || toast.kind === 'success') timers.current.set(toast.id, window.setTimeout(() => dismiss(toast.id), toast.action ? 7000 : 3500));
   }, [dismiss]);
   const show = useCallback((toast: Omit<Toast, 'id'>) => {
     const item = { ...toast, id: ++next.current };
@@ -137,7 +137,7 @@ export function useToasts() {
   const update = useCallback((id: number, patch: Partial<Omit<Toast, 'id'>>) => {
     setToasts(list => list.map(t => { if (t.id !== id) return t; const item = { ...t, ...patch }; arm(item); return item; }));
   }, [arm]);
-  useEffect(() => () => { for (const timer of timers.current.values()) clearTimeout(timer); }, []);
+  useEffect(() => () => { for (const timer of timers.current.values()) window.clearTimeout(timer); }, []);
   return { toasts, show, update, dismiss };
 }
 export function Toasts({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {

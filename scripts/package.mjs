@@ -7,7 +7,7 @@ async function collect(root,prefix,target){for(const item of await readdir(root,
 for(const name of ['main.js','manifest.json','styles.css','LICENSE','THIRD_PARTY_NOTICES.md'])files[`${manifest.id}/${name}`]=new Uint8Array(await readFile(`dist/${name}`));
 await collect('dist/licenses',`${manifest.id}/licenses`,files);
 for(const folder of ['src','scripts','tests','dev','docs','vendor'])await collect(folder,folder,source);
-for(const file of ['README.md','CHANGELOG.md','LICENSE','THIRD_PARTY_NOTICES.md','.gitignore','manifest.json','versions.json','package.json','package-lock.json','tsconfig.json'])source[file]=new Uint8Array(await readFile(file));
+for(const file of ['README.md','CHANGELOG.md','LICENSE','THIRD_PARTY_NOTICES.md','.gitignore','manifest.json','versions.json','package.json','package-lock.json','tsconfig.json','eslint.config.mjs'])source[file]=new Uint8Array(await readFile(file));
 await mkdir('artifacts',{recursive:true});
 const outputs=[];
 for(const[name,contents]of [[`${manifest.id}-${manifest.version}.zip`,files],[`${manifest.id}-${manifest.version}-source.zip`,source]]){

@@ -1,7 +1,18 @@
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 import { validateProperties, type JsonProperties } from './properties';
+import type { TextReference, InkAnchor } from './mixed';
+import type { CardReference } from './cards';
 
-export type Element = ExcalidrawElement;
+export interface InkCustomData extends Record<string, unknown> {
+  pageinkText?: TextReference;
+  pageinkAnchor?: InkAnchor;
+  pageinkCard?: CardReference;
+  source?: { document: string; page: string; polygon?: [number, number][]; region?: string; annotations?: boolean };
+}
+type WithInkData<T> = T extends ExcalidrawElement ? Omit<T, 'customData'> & { customData?: InkCustomData } : never;
+export type Element = WithInkData<ExcalidrawElement>;
+export type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+export type MutableElement = Mutable<Element>;
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Margins = { top: number; right: number; bottom: number; left: number };
 export type PageTemplate = 'blank' | 'ruled' | 'grid' | 'dotted';
@@ -65,7 +76,7 @@ export function parseManifest(text: string): Manifest {
   return value;
 }
 export function safePath(path: string): string {
-  if (typeof path !== 'string' || !path || path.startsWith('/') || /[\\:\x00-\x1f]/.test(path) || path.split('/').some(p => p === '..' || p === '.')) {
+  if (typeof path !== 'string' || !path || path.startsWith('/') || /[\\:]/.test(path) || [...path].some(c => c.charCodeAt(0) < 32) || path.split('/').some(p => p === '..' || p === '.')) {
     throw new Error(`不安全的资源路径：${path}`);
   }
   return path;
@@ -79,7 +90,7 @@ export async function digest(bytes: ArrayBuffer): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
 }
 export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer as ArrayBuffer;
+  return bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;
 }
 export function retargetInternalSources(elements: Element[], previous: string, next: string): Element[] {
   return elements.map(e => { const source = e.customData?.source; return source?.document === previous ? { ...e, customData: { ...e.customData, source: { ...source, document: next } } } : e; });

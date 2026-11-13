@@ -12,6 +12,8 @@ import { IconButton, InkIcon } from './InkIcon';
 import { Popover, Menu, MenuEntry, Segmented, Swatches, Toasts, useAnchor, useToasts, LayerContext } from './ui';
 import { ToolShelf, SHORTCUTS } from './Toolbar';
 import { ToolDock } from './ToolDock';
+import type { InkApi } from './kernel-api';
+import { imageFile, readDataURL } from './binary';
 import { BookmarkList, PageList, SearchPanel, SidebarTabs } from './Sidebar';
 import { ScratchWindow } from './Scratch';
 import { PEN_COLORS, Preferences, SidebarTab, ToolId } from './preferences';
@@ -50,7 +52,7 @@ function canvasTool(tool: ToolId, prefs: Preferences, marquee: CanvasTool['marqu
 
 function useDelayed(value: boolean, delay: number) {
   const [shown, setShown] = useState(false);
-  useEffect(() => { if (!value) { setShown(false); return; } const t = setTimeout(() => setShown(true), delay); return () => clearTimeout(t); }, [value]);
+  useEffect(() => { if (!value) { setShown(false); return; } const t = window.setTimeout(() => setShown(true), delay); return () => window.clearTimeout(t); }, [value]);
   return shown;
 }
 const EMPTY_VIEWS = new ViewStore();
@@ -202,7 +204,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       const old = previousCards.get(e.id);
       return old && (old.width !== e.width || old.height !== e.height || old.x !== e.x || old.y !== e.y || old.angle !== e.angle);
     });
-    if (resized.length) elements = (handle.api as any).inkRebind(elements, resized.map(e => e.id));
+    if (resized.length) elements = (handle.api as InkApi).inkRebind(elements, resized.map(e => e.id));
     session.editContent(new Map([[pageId, elements]]), () => {
       // Grow the page's writable margin; following pages move as a whole. Never clip the new text or ink.
       if (paged) { const box = bounds(elements); if (box) page.margins.bottom = Math.max(page.margins.bottom, box.y + box.height + 24 - page.height); }
@@ -224,7 +226,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         const last = elements.filter(e => textReference(e) && !(e.type === 'text' && e.containerId)).sort((a, b) => b.y + b.height - a.y - a.height)[0];
         const centre = body.current!.center();
         const placement = body.current!.layout().byId.get(pageId)!;
-        placed = { ...paragraph, x: last?.x ?? (paged ? 48 : centre[0] - placement.x - width / 2), y: last ? last.y + last.height + 40 : paged ? 64 : centre[1] - placement.y - paragraph.height / 2 } as Element;
+        placed = { ...paragraph, x: last?.x ?? (paged ? 48 : centre[0] - placement.x - width / 2), y: last ? last.y + last.height + 40 : paged ? 64 : centre[1] - placement.y - paragraph.height / 2 };
         return [...elements, placed];
       });
       body.current?.reveal(pageId, { x: placed.x, y: placed.y, width, height: placed.height });
@@ -368,7 +370,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     runText(() => applyMixed(manifest.pages[0].id, elements => {
       const roots = selected.map(e => elements.find(now => now.id === e.id && !now.isDeleted));
       if (!roots[0] || !roots[1]) throw Error('卡片已移除，请重新选择。');
-      return (body.current!.api as any).inkRebind(connectCards(elements, roots[0], roots[1]), roots.map(e => e!.id));
+      return (body.current!.api as InkApi).inkRebind(connectCards(elements, roots[0], roots[1]), roots.map(e => e!.id));
     }));
   }
 
@@ -439,15 +441,15 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
 
   // ---------- images ----------
   function chooseImage() {
-    const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp,image/gif';
+    const input = createEl('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp,image/gif';
     input.onchange = () => run(async () => {
       const file = input.files?.[0], handle = body.current; if (!file || !handle) return;
-      const dataURL = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); });
+      const dataURL = await readDataURL(file);
       const image = new Image(); image.src = dataURL; await image.decode();
       const v = handle.views.get(), fit = Math.min(1, (v.width / v.zoom) * 0.6 / image.naturalWidth, (v.height / v.zoom) * 0.6 / image.naturalHeight);
       const id = uid();
-      await session.acceptFiles({ [id]: { id: id as any, dataURL: dataURL as any, mimeType: file.type as any, created: Date.now() } });
-      await handle.insert(convertToExcalidrawElements([{ type: 'image', x: 0, y: 0, width: image.naturalWidth * fit, height: image.naturalHeight * fit, fileId: id as any }]));
+      await session.acceptFiles({ [id]: imageFile(id, dataURL, file.type) });
+      await handle.insert(convertToExcalidrawElements([{ type: 'image', x: 0, y: 0, width: image.naturalWidth * fit, height: image.naturalHeight * fit, fileId: id as NonNullable<Extract<Element, { type: 'image' }>['fileId']> }]));
       setTool('select');
     });
     input.click();
@@ -499,7 +501,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const selectionActions = {
     duplicate: () => run(async () => { const h = body.current!, items = h.selected(); const r = selection!.rect; await h.insert(items, [r.x + r.width / 2 + 24, r.y + r.height / 2 + 24]); }),
     remove: () => run(() => body.current?.replaceSelected(() => null)),
-    recolor: (color: string) => run(() => body.current?.replaceSelected(e => e.type === 'image' ? e : { ...e, strokeColor: color } as Element)),
+    recolor: (color: string) => run(() => body.current?.replaceSelected(e => e.type === 'image' ? e : { ...e, strokeColor: color })),
     toScratch: () => run(async () => { await toScratch(body.current!.selected()); toast.show({ kind: 'success', message: '已复制到草稿纸' }); }),
     bookmark: () => { if (selection) addBookmark(selection.rect); },
     source: (info: SelectionInfo | null) => run(async () => { const s = info?.source; if (!s?.document || !s.page || !Array.isArray(s.polygon)) return; setScratchOpen(false); await host.openSource(s.document, s.page, polygonBounds(s.polygon)); }),
@@ -572,10 +574,10 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   });
   const openSettings = (id: string, anchor: HTMLElement | null) => {
     setTarget(id);
-    requestAnimationFrame(() => pop.set({ id: 'page-settings', anchor: anchor?.isConnected ? anchor : layer!.querySelector<HTMLElement>('[data-anchor="more"]')! }));
+    window.requestAnimationFrame(() => pop.set({ id: 'page-settings', anchor: anchor?.isConnected ? anchor : layer!.querySelector<HTMLElement>('[data-anchor="more"]')! }));
   };
   const moreMenu: (MenuEntry | false)[] = [
-    { icon: 'docText', label: '文字段落…', onSelect: () => requestAnimationFrame(() => pop.set({ id: 'mixed', anchor: layer!.querySelector<HTMLElement>('[data-anchor="more"]')! })) },
+    { icon: 'docText', label: '文字段落…', onSelect: () => window.requestAnimationFrame(() => pop.set({ id: 'mixed', anchor: layer!.querySelector<HTMLElement>('[data-anchor="more"]')! })) },
     paged ? { icon: 'sliders', label: '纸张与页边距…', onSelect: () => openSettings(currentPageId, pop.anchor) }
       : { icon: 'canvas', label: '画布样式…', onSelect: () => openSettings(manifest.pages[0].id, pop.anchor) },
     { icon: 'focus', label: '专注模式', hint: '隐藏侧栏和工具栏之外的界面', onSelect: () => { setFocus(true); setSidebar(false); } },

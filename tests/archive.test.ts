@@ -76,7 +76,7 @@ test('complete package restores editable body, scratch, binary assets and PDF in
   const restored = await unpack(clean, archive, 'restored.inknote'), open = await DocumentStore.open(clean, 'restored.inknote');
   assert.notEqual(restored.id, m.id); assert.equal((await open.readSurface(m.pages[0].id))[0].id, 'body');
   assert.equal((await open.readSurface('scratch'))[0].id, 'scratch');
-  assert.equal((await open.readSurface('scratch'))[0].customData?.source.document,restored.id);
+  assert.equal((await open.readSurface('scratch'))[0].customData?.source!.document,restored.id);
   assert.deepEqual(new Uint8Array(await clean.readBinary(restored.assets.image.path)), source);
   assert.equal(await digest(await clean.readBinary(restored.pdf!.path)), m.pdf.sha256);
   await assert.rejects(unpack(clean, archive, 'restored.inknote'), /已存在/);
@@ -151,12 +151,12 @@ test('shared text snapshots restore to one Markdown path across pages, chunks an
     const expected = structuredClone(elements);
     for (const element of expected) {
       const ref = element.customData?.pageinkText;
-      if (ref) ref.path = editable.get(ref.snapshotAsset);
+      if (ref) ref.path = editable.get(ref.snapshotAsset)!;
       const source = element.customData?.source;
       if (source?.document === before.id) source.document = restored.id;
     }
     assert.deepEqual(actual, expected); // Includes IDs, block IDs, raw ink samples, anchors and other metadata.
-    for (const element of actual) if (element.customData?.pageinkText?.snapshotAsset === 'snapshot-v1') shared.push(element.customData.pageinkText.path);
+    for (const element of actual) if (element.customData?.pageinkText?.snapshotAsset === 'snapshot-v1') shared.push(element.customData.pageinkText!.path);
   }
   assert.equal(shared.length, 4);
   assert.deepEqual([...new Set(shared)], [editable.get('snapshot-v1')]);
@@ -178,9 +178,9 @@ test('two snapshot versions stay immutable when restored Markdown is edited and 
   const open = await DocumentStore.open(target, 'first.inknote');
   const body = (await open.readSurface(first.pages[0].id))[0];
   const scratch = (await open.readSurface('scratch')).find(e => e.id === 'second-version')!;
-  assert.equal(body.customData!.pageinkText.blockId, scratch.customData!.pageinkText.blockId);
-  assert.notEqual(body.customData!.pageinkText.path, scratch.customData!.pageinkText.path);
-  const editable = [body, scratch].map(element => element.customData!.pageinkText);
+  assert.equal(body.customData!.pageinkText!.blockId, scratch.customData!.pageinkText!.blockId);
+  assert.notEqual(body.customData!.pageinkText!.path, scratch.customData!.pageinkText!.path);
+  const editable = [body, scratch].map(element => element.customData!.pageinkText!);
   assert.notEqual(first.assets['snapshot-v1'].path, first.assets['snapshot-v2'].path);
   for (const ref of editable) {
     assert.ok(ref.path.endsWith('.md'));
@@ -209,7 +209,7 @@ test('two snapshot versions stay immutable when restored Markdown is edited and 
     assert.deepEqual(new Uint8Array(await again.readBinary(ref.path)), snapshots[ref.snapshotAsset]);
     assert.equal((element as Extract<Element, { type: 'text' }>).text, '投影段落');
   }
-  assert.equal(restoredScratch[0].customData!.source.document, second.id);
+  assert.equal(restoredScratch[0].customData!.source!.document, second.id);
   // An editable source is never a fallback for a missing immutable snapshot.
   await target.remove(first.assets['snapshot-v1'].path);
   await assert.rejects(pack(new Session(open)), /missing/);
@@ -231,18 +231,18 @@ test('pack reads immutable snapshots after the external source is deleted, inclu
 test('pack and unpack reject malformed text references and missing or invalid snapshots, including in scratch', async t => {
   type Mutation = (m: Manifest, element: Element, files: Record<string, Uint8Array>) => void;
   const ref = (patch: Record<string, unknown>): Mutation => (_m, element) => {
-    Object.assign(element.customData!.pageinkText, patch);
+    Object.assign(element.customData!.pageinkText!, patch);
   };
   const cases: { name: string; mutate: Mutation; error: RegExp }[] = [
     ...[null, [], 'invalid'].map(value => ({ name: `non-object reference ${JSON.stringify(value)}`,
-      mutate: ((_m, element) => { element.customData!.pageinkText = value; }) as Mutation, error: /文字引用损坏/ })),
+      mutate: ((_m, element) => { Object.assign(element.customData!, { pageinkText: value }); }) as Mutation, error: /文字引用损坏/ })),
     ...[
       { version: 2 }, { version: '1' }, { path: 3 }, { blockId: '' }, { blockId: '^block-1' },
       { blockId: 'invalid block' }, { snapshotAsset: '' }, { snapshotAsset: 123 },
       { width: 0 }, { width: -1 }, { width: '300' }, { width: null },
     ].map(patch => ({ name: `invalid field ${JSON.stringify(patch)}`, mutate: ref(patch), error: /文字引用损坏/ })),
     ...['path', 'blockId', 'snapshotAsset', 'width', 'version'].map(field => ({ name: `missing ${field}`,
-      mutate: ((_m, element) => { delete element.customData!.pageinkText[field]; }) as Mutation, error: /文字引用损坏/ })),
+      mutate: ((_m, element) => { delete (element.customData!.pageinkText as unknown as Record<string, unknown>)[field]; }) as Mutation, error: /文字引用损坏/ })),
     ...['../escape.md', '/absolute.md', 'Notes\\escape.md', 'Notes/../escape.md', 'Notes/unsafe\u0000.md'].map(path => ({
       name: `unsafe source path ${JSON.stringify(path)}`, mutate: ref({ path }), error: /不安全/,
     })),

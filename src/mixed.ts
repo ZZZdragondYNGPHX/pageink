@@ -44,7 +44,7 @@ export function paragraphs(source: string): Paragraph[] {
     pending = undefined;
   };
   for (const match of lines) {
-    const line = match[0].replace(/\r?\n$/, ''), from = match.index!, to = from + line.length;
+    const line = match[0].replace(/\r?\n$/, ''), from = match.index, to = from + line.length;
     if (yaml) { if (from > 0 && /^(---|\.\.\.)\s*$/.test(line)) yaml = false; continue; }
     const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})/);
     if (fence) { if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length) fence = ''; continue; }
@@ -108,7 +108,7 @@ export function reflowParagraphs(elements: readonly Element[], replacements: Rea
 export function detachParagraph(elements: readonly Element[], id: string): Element[] {
   return elements.filter(e => e.id !== id).map(e => {
     if (inkAnchor(e)?.elementId !== id) return e;
-    const customData: Record<string, any> = { ...e.customData }; delete customData.pageinkAnchor;
+    const customData: Record<string, unknown> = { ...e.customData }; delete customData.pageinkAnchor;
     return revised(e, { customData });
   });
 }
@@ -116,8 +116,8 @@ export function detachParagraph(elements: readonly Element[], id: string): Eleme
 /** When copying, references within the copied set follow their new identities; lone ink detaches. */
 export function retargetAnchors(e: Element, ids: ReadonlyMap<string, string>): Element {
   const anchor = inkAnchor(e); if (!anchor) return e;
-  const customData: Record<string, any> = { ...e.customData }, target = ids.get(anchor.elementId);
+  const customData: Record<string, unknown> = { ...e.customData }, target = ids.get(anchor.elementId);
   if (target) customData.pageinkAnchor = { ...anchor, elementId: target };
   else delete customData.pageinkAnchor;
-  return { ...e, customData } as Element;
+  return { ...e, customData };
 }

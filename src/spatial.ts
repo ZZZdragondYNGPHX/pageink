@@ -9,7 +9,7 @@ function extent(e: Element): Rect {
 export class InkSpatialIndex {
   private cells = new Map<string, Set<Element>>();
   private membership = new Map<string, { element: Element; keys: string[] }>();
-  private global = new Set<Element>();
+  private largeElements = new Set<Element>();
   private embedded = new Map<string, Element>();
   constructor(elements: readonly Element[], private cellSize = 512) { for (const e of elements) this.update(e); }
   reconcile(elements: readonly Element[]) {
@@ -29,17 +29,17 @@ export class InkSpatialIndex {
   update(e: Element) {
     if (!e.isDeleted && (e.type === 'embeddable' || e.type === 'iframe')) this.embedded.set(e.id, e); else this.embedded.delete(e.id);
     const before = this.membership.get(e.id);
-    if (before) { this.global.delete(before.element); for (const key of before.keys) { const cell = this.cells.get(key)!; cell.delete(before.element); if (!cell.size) this.cells.delete(key); } }
+    if (before) { this.largeElements.delete(before.element); for (const key of before.keys) { const cell = this.cells.get(key)!; cell.delete(before.element); if (!cell.size) this.cells.delete(key); } }
     if (e.isDeleted) { this.membership.delete(e.id); return; }
     const keys = this.keys(extent(e));
-    if (!keys) this.global.add(e);
+    if (!keys) this.largeElements.add(e);
     else for (const key of keys) { let cell = this.cells.get(key); if (!cell) this.cells.set(key, cell = new Set()); cell.add(e); }
     this.membership.set(e.id, { element: e, keys: keys ?? [] });
   }
   query(rect: Rect): Element[] {
     const keys = this.keys(rect);
     if (!keys) return [...this.membership.values()].map(item => item.element);
-    const result = new Set(this.global);
+    const result = new Set(this.largeElements);
     for (const key of keys) for (const e of this.cells.get(key) ?? []) result.add(e);
     return [...result].sort((a, b) => (a.index ?? '') < (b.index ?? '') ? -1 : (a.index ?? '') > (b.index ?? '') ? 1 : 0);
   }

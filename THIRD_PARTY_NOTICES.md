@@ -9,7 +9,7 @@ The editing kernel is Excalidraw 0.18.1 (MIT). Our changes are centralized in sc
 - Noto Sans CJK SC: original OTF in assets/fonts, OFL in assets/fonts/LICENSE.
 - Excalidraw font assets: Assistant, Cascadia, Excalifont, Lilita, Nunito, Virgil and Xiaolai use the accompanying OFL notices; Comic Shanns uses MIT. See licenses/vendor/font-*.txt. Font binaries are unchanged.
 - Liberation Sans bundled by Excalidraw identifies as 1.05; PDF.js standard fonts identify as 1.07.4. Preserve the GPL v2 text and Liberation font exception in licenses/vendor. The font exception covers embedding in documents. The OFL file shipped by this PDF.js npm version does not replace those actual-version terms. Source project: https://github.com/liberationfonts/liberation-fonts and original license: https://fedoraproject.org/wiki/Licensing:LiberationFontLicense .
-- PDF.js CMaps, Foxit fonts and decoder WASM keep their own LICENSE files inside assets.
+- PDF.js CMaps, Foxit fonts and decoder WASM keep their own LICENSE files inside assets. JBIG2 comes from PDFium (BSD-3-Clause), OpenJPEG uses BSD-2-Clause, and qcms uses MIT; PDF.js wrappers retain Apache-2.0. Exact module hashes and provenance: https://github.com/ZZZdragondYNGPHX/pageink/blob/main/docs/pdf-assets.md .
 
 ## Production dependency inventory
 

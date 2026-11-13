@@ -1,12 +1,13 @@
 import { PDFDocument, degrees, rgb } from 'pdf-lib';
 import PDFKit from 'pdfkit/js/pdfkit.standalone.js';
 import svgToPdf from 'svg-to-pdfkit';
-import { Buffer } from 'buffer';
+import { Buffer } from 'buffer/';
 import { templateLines, templateSpec, templateDots } from './templates';
 import type { Page, Rect } from './model';
 import type { VectorLayer } from './vector-export';
+import type { ExportRequest } from './export-messages';
 
-let result: PDFDocument, source: PDFDocument | undefined, fontUrl = '', font: Promise<Buffer> | undefined;
+let result: PDFDocument, source: PDFDocument | undefined, font: Buffer | undefined;
 async function layerPdf(layer: VectorLayer) {
   const doc = new PDFKit({ size: [Math.max(1, layer.width), Math.max(1, layer.height)], margin: 0, compress: true });
   const chunks: Uint8Array[] = [];
@@ -15,8 +16,8 @@ async function layerPdf(layer: VectorLayer) {
     doc.on('end', () => { const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0)); let offset = 0; for (const c of chunks) { bytes.set(c, offset); offset += c.length; } resolve(bytes); });
   });
   if (layer.text) {
-    font ??= fetch(fontUrl).then(async response => { if (!response.ok) throw Error('离线导出字体加载失败。'); return Buffer.from(await response.arrayBuffer()); });
-    doc.registerFont('Ink CJK', await font);
+    if (!font) throw Error('离线导出字体未初始化。');
+    doc.registerFont('Ink CJK', font);
   }
   const warnings: string[] = [];
   svgToPdf(doc, layer.svg, 0, 0, { width: layer.width, height: layer.height, assumePt: true, fontCallback: () => 'Ink CJK', imageCallback: (url: string) => url.startsWith('data:') ? Buffer.from(url.split(',')[1], 'base64') : url, warningCallback: (message: string) => warnings.push(message) });
@@ -24,7 +25,7 @@ async function layerPdf(layer: VectorLayer) {
   if (warnings.some(message => !message.includes('Unsupported font-family'))) throw Error(`矢量导出未完成：${warnings.join('; ')}`);
   return bytes;
 }
-async function addPage(p: Page, box: Rect, paperKind: string, paginated: boolean, layer?: VectorLayer) {
+async function addPage(p: Page, box: Rect, paperKind: string | undefined, paginated: boolean, layer?: VectorLayer) {
   const paper = paperKind === 'a4' ? [595.28, 841.89] : paperKind === 'letter' ? [612, 792] : [box.width, box.height];
   const scale = Math.min(paper[0] / box.width, paper[1] / box.height), ox = (paper[0] - box.width * scale) / 2, oy = (paper[1] - box.height * scale) / 2;
   const page = result.addPage(paper as [number, number]);
@@ -45,12 +46,12 @@ async function addPage(p: Page, box: Rect, paperKind: string, paginated: boolean
     page.drawPage(embedded,{x:ox+(layer.x-box.x)*scale,y:oy+(box.height-(layer.y-box.y)-layer.height)*scale,width:layer.width*scale,height:layer.height*scale});
   }
 }
-self.onmessage = async event => {
-  const { id, kind, data } = event.data;
+self.onmessage = async (event: MessageEvent<ExportRequest>) => {
+  const message = event.data, { id } = message;
   try {
-    if (kind === 'init') { fontUrl = data.fontUrl; result = await PDFDocument.create(); if (data.source) source = await PDFDocument.load(data.source); }
-    else if (kind === 'page') await addPage(data.page, data.box, data.paper, data.paginated, data.layer);
-    else if (kind === 'finish') { const bytes = await result.save(); (self as any).postMessage({id,result:bytes.buffer},[bytes.buffer]); return; }
-    (self as any).postMessage({id});
-  } catch (error) { (self as any).postMessage({id,error:(error as Error).message}); }
+    if (message.kind === 'init') { font = Buffer.from(message.data.font); result = await PDFDocument.create(); if (message.data.source) source = await PDFDocument.load(message.data.source); }
+    else if (message.kind === 'page') { const { data } = message; await addPage(data.page, data.box, data.paper, data.paginated, data.layer); }
+    else if (message.kind === 'finish') { const bytes = await result.save(); self.postMessage({ id, result: bytes.buffer }, { transfer: [bytes.buffer] }); return; }
+    self.postMessage({ id });
+  } catch (error) { self.postMessage({ id, error: (error as Error).message }); }
 };

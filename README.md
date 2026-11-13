@@ -27,7 +27,7 @@ Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite 
 
 在「设置 → 第三方插件 → 浏览」中搜索 **PageInk**，安装并启用。已有用户可在第三方插件设置中检查更新。也可从[官方插件目录](https://community.obsidian.md/plugins/pageink)打开安装页。
 
-手动安装：从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.7.zip`，将其中的 `pageink` 文件夹解压至笔记库的 `.obsidian/plugins/`，重启并启用。也可将同一版本的 `main.js`、`manifest.json` 和 `styles.css` 放入 `.obsidian/plugins/pageink/`。
+手动安装：从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.8.zip`，将其中的 `pageink` 文件夹解压至笔记库的 `.obsidian/plugins/`，重启并启用。也可将同一版本的 `main.js`、`manifest.json` 和 `styles.css` 放入 `.obsidian/plugins/pageink/`。
 
 ## 开始使用
 
@@ -40,6 +40,8 @@ Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite 
 ## 离线与隐私
 
 PageInk 免费、开源，无账号要求、无广告、无遥测，不发起运行时网络请求。字体、PDF 处理和解码资源随插件提供，因此主脚本约 46 MB。
+
+内嵌 WASM 解码器的来源、SHA-256 和许可见 [PDF runtime assets](docs/pdf-assets.md)。所有解码器来自固定版本的 PDF.js 包，运行时只处理本地内容。
 
 主脚本超过 Obsidian Sync Standard 的 5 MB 单文件同步上限，使用该方案时请在每台设备分别安装插件。
 

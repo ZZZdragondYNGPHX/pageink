@@ -16,12 +16,12 @@ export const PROPERTY_TYPES: Record<PropertyType, string> = {
 
 /** Dangerous names may exist as inert data, but must never be edited or traversed. */
 export function editableKey(key: string): boolean {
-  return !!key.trim() && !/[\x00-\x1f\x7f]/.test(key) && !['__proto__', 'constructor', 'prototype'].includes(key);
+  return !!key.trim() && ![...key].some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) && !['__proto__', 'constructor', 'prototype'].includes(key);
 }
 
 export function assertPropertiesRecord(value: unknown): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    !(Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null) ||
     Reflect.ownKeys(value).some(key => typeof key !== 'string' || !Object.getOwnPropertyDescriptor(value, key)?.enumerable ||
       !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, 'value'))) {
     throw Error('属性必须是按名称组织的对象；原有内容未修改。');
@@ -71,7 +71,7 @@ export function sameProperty(a: unknown, b: unknown): boolean {
 
 export function copyProperties(value: unknown): Record<string, unknown> {
   assertPropertiesRecord(value);
-  const copy: Record<string, unknown> = Object.create(null);
+  const copy = Object.create(null) as Record<string, unknown>;
   for (const [key, item] of Object.entries(value)) copy[key] = structuredClone(item);
   return copy;
 }

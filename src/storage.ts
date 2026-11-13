@@ -37,7 +37,7 @@ export class DocumentStore {
     for (const key of keys) {
       const path = this.manifest.chunks[key];
       if (!(await this.io.exists(path))) throw new MissingDependency(`等待同步资源：${path}`);
-      const chunk = JSON.parse(await this.io.read(path));
+      const chunk = JSON.parse(await this.io.read(path)) as Element[];
       if (!Array.isArray(chunk)) throw new Error(`损坏的数据块：${path}`);
       elements.push(...chunk);
     }
@@ -135,7 +135,7 @@ export async function forkDocument(io: FileIO, source: Manifest, path: string): 
   const mapping = new Map<string, string>(); let index = 0;
   for (const resource of resources) {
     const target = `${next.resourceDir}/restored/${index++}.bin`;
-    if (chunks.has(resource)) await io.write(target, JSON.stringify(retargetInternalSources(JSON.parse(await io.read(resource)), source.id, next.id)));
+    if (chunks.has(resource)) await io.write(target, JSON.stringify(retargetInternalSources(JSON.parse(await io.read(resource)) as Element[], source.id, next.id)));
     else await io.writeBinary(target, await io.readBinary(resource));
     mapping.set(resource, target);
   }

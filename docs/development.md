@@ -7,6 +7,7 @@
 ```sh
 npm ci
 npm run typecheck
+npm run lint
 npm test
 npm run build
 ```
@@ -29,6 +30,10 @@ npm run build
 文件树工具栏暂无公开扩展 API；`notes-host.tsx` 将 DOM 适配集中在 `mountExplorers`，卸载恢复原始按钮与事件，核心能力通过宿主命令、文件/编辑器菜单和原生标签页复用。文件夹浏览状态使用 `ItemView` 状态，绘写注册为原生文件视图。
 
 Markdown 正文与撤销由原生编辑器负责。绘写数据保存完整对象与采样，视口只影响显示；导出读取完整内容。段落和卡片使用稳定引用与不可变来源快照，恢复时另存可编辑原件。
+
+`eslint.config.mjs` 使用 Obsidian 官方规则检查源码、清单与许可证；构建脚本、测试库和第三方源码不作为插件运行代码扫描。Excalidraw npm 包的 `@excalidraw/math` / `@excalidraw/utils` 类型映射到包内声明，避免 `skipLibCheck` 掩盖未解析的类型。内核扩展方法由 `kernel-api.ts` 声明。
+
+PDF Worker 使用结构化消息传递字体与页面数据，图片 data URL 直接在本地解码。PDFKit 浏览器包中未使用的文件路径读取入口由 `scripts/pdf-browser.mjs` 集中拒绝，构建检查精确出现次数。资源来源、WASM 哈希和许可见 [PDF runtime assets](pdf-assets.md)。
 
 属性更新只写入发生变化的键。Markdown 使用 `processFrontMatter`；绘写沿用已有保存和冲突处理，避免覆盖并发修改或重写笔迹。
 
@@ -56,4 +61,4 @@ node dev/workflows.mjs
 3. 推送源码，创建与清单版本完全相同的 Git 标签和 GitHub Release。
 4. 单独上传 `main.js`、`manifest.json`、`styles.css`，并附安装 ZIP 与校验和。
 
-插件已收录于 [Obsidian Community](https://community.obsidian.md/plugins/pageink)。发布新版 GitHub Release 后由目录同步；无需重复提交收录申请。
+插件版本与扫描结果见 [Obsidian Community](https://community.obsidian.md/plugins/pageink)。新版 GitHub Release 由平台检测并同步；出现检测问题时先读取具体报告、修复后发布新版本，不要通过重写旧标签重复提交。是否可从目录安装，以平台的新检测结果为准。

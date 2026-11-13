@@ -16,7 +16,7 @@ function archiveResources(m: Manifest) {
 }
 
 function readChunk(bytes: Uint8Array, path: string, m: Manifest): Element[] {
-  const elements: Element[] = JSON.parse(strFromU8(bytes));
+  const elements = JSON.parse(strFromU8(bytes)) as Element[];
   if (!Array.isArray(elements)) throw Error(`打包数据块损坏：${path}`);
   for (const element of elements) {
     if (!element || typeof element !== 'object' || Array.isArray(element)) throw Error(`打包数据块损坏：${path}`);
@@ -37,7 +37,7 @@ function readChunk(bytes: Uint8Array, path: string, m: Manifest): Element[] {
 }
 
 function restoreChunk(bytes: Uint8Array, previousId: string, m: Manifest, editable: ReadonlyMap<string, string>): Uint8Array {
-  const elements = retargetInternalSources(JSON.parse(strFromU8(bytes)), previousId, m.id);
+  const elements = retargetInternalSources(JSON.parse(strFromU8(bytes)) as Element[], previousId, m.id);
   return strToU8(JSON.stringify(elements.map(element => {
     const ref: TextReference | undefined = element.customData?.pageinkText;
     if (!ref) return element;

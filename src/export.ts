@@ -1,9 +1,10 @@
 import { exportToBlob } from '@excalidraw/excalidraw';
 import { Session } from './session';
-import { Element, Page, pageRect, digest, Rect } from './model';
+import { Element, Page, pageRect, digest, Rect, toArrayBuffer } from './model';
 import { bounds } from './geometry';
 import { vectorLayer } from './vector-export';
-import { assetBytes, assetUrl } from './assets';
+import { assetBytes } from './assets';
+import type { ExportRequest, ExportResponse } from './export-messages';
 import { renderArea } from './preview';
 import type { PdfService } from './pdf';
 
@@ -55,16 +56,17 @@ export async function readingPdf(session: Session, onProgress: (current: number,
   let worker: Worker;
   try { worker = new Worker(workerUrl, { type: 'module' }); } catch (error) { URL.revokeObjectURL(workerUrl); throw error; }
   let nextId = 0;
-  const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  const pending = new Map<number, { resolve: (value: ArrayBuffer | undefined) => void; reject: (error: Error) => void }>();
   const fail = (error: Error) => { for (const task of pending.values()) task.reject(error); pending.clear(); };
   const abort = () => { worker.terminate(); fail(new DOMException('导出已取消', 'AbortError')); };
-  worker.onmessage = event => { const task = pending.get(event.data.id); if (!task) return; pending.delete(event.data.id); event.data.error ? task.reject(new Error(event.data.error)) : task.resolve(event.data.result); };
+  worker.onmessage = (event: MessageEvent<ExportResponse>) => { const task = pending.get(event.data.id); if (!task) return; pending.delete(event.data.id); event.data.error ? task.reject(new Error(event.data.error)) : task.resolve(event.data.result); };
   worker.onerror = event => { event.preventDefault(); fail(new Error(event.message || 'PDF 后台导出失败。')); };
   worker.onmessageerror = () => fail(new Error('PDF 后台导出消息损坏。'));
   signal?.addEventListener('abort', abort, { once: true });
-  const call = (kind: string, data?: unknown, transfer: Transferable[] = []) => new Promise<any>((resolve, reject) => { signal?.throwIfAborted(); const id = ++nextId; pending.set(id, { resolve, reject }); worker.postMessage({ id, kind, data }, transfer); });
+  const call = (message: Omit<Extract<ExportRequest, { kind: 'init' }>, 'id'> | Omit<Extract<ExportRequest, { kind: 'page' }>, 'id'> | Omit<Extract<ExportRequest, { kind: 'finish' }>, 'id'>, transfer: Transferable[] = []) => new Promise<ArrayBuffer | undefined>((resolve, reject) => { signal?.throwIfAborted(); const id = ++nextId; pending.set(id, { resolve, reject }); worker.postMessage({ id, ...message }, transfer); });
   try {
-    await call('init', { source, fontUrl: assetUrl('fonts/NotoSansCJKsc-Regular.otf') }, source ? [source] : []);
+    const font = toArrayBuffer(assetBytes('fonts/NotoSansCJKsc-Regular.otf'));
+    await call({ kind: 'init', data: { source, font } }, source ? [source, font] : [font]);
     for (const [i, page] of pages.entries()) {
       signal?.throwIfAborted();
       const elements = (options.selection ?? await session.read(page.id)).filter(e => !e.isDeleted);
@@ -78,11 +80,11 @@ export async function readingPdf(session: Session, onProgress: (current: number,
         const x = Math.min(box.x, layer.x), y = Math.min(box.y, layer.y);
         box = { x, y, width: Math.max(box.x + box.width, layer.x + layer.width) - x, height: Math.max(box.y + box.height, layer.y + layer.height) - y };
       }
-      await call('page', { page: freeform ? { ...page, pdfPage: undefined } : page, box, paper: options.paper, paginated: !freeform, layer });
+      await call({ kind: 'page', data: { page: freeform ? { ...page, pdfPage: undefined } : page, box, paper: options.paper, paginated: !freeform, layer } });
       onProgress(i + 1, pages.length);
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => window.setTimeout(resolve, 0));
     }
-    const bytes: ArrayBuffer = await call('finish'); signal?.throwIfAborted(); return new Uint8Array(bytes);
+    const bytes = await call({ kind: 'finish' }); signal?.throwIfAborted(); if (!bytes) throw Error('PDF 后台导出没有返回文件。'); return new Uint8Array(bytes);
   } finally { signal?.removeEventListener('abort', abort); worker.terminate(); URL.revokeObjectURL(workerUrl); }
 }
 export { pack, unpack } from './archive';

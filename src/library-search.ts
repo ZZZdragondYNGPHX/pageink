@@ -53,7 +53,7 @@ export async function scanLibrary(entries: readonly NoteEntry[], query: string, 
     if (!missing.size) matches.push({ entry, snippet: first ? searchSnippet(first.text, terms) : entry.path,
       label: first?.label ?? '名称 / 路径', target: first?.target });
     done++; progress(snapshot());
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
   }
   signal.throwIfAborted();
   return snapshot();

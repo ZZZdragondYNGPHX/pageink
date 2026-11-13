@@ -41,7 +41,7 @@ function PdfRaster({ page, placement, pdf, scale, views }: { page: Page; placeme
   const [error, setError] = useState('');
   useEffect(() => {
     const abort = new AbortController(), target = base.current!;
-    const scratch = document.createElement('canvas');
+    const scratch = createEl('canvas');
     pdf.render(page, scratch, scale, undefined, abort.signal).then(() => {
       if (abort.signal.aborted) return;
       target.width = scratch.width; target.height = scratch.height; target.getContext('2d')!.drawImage(scratch, 0, 0); setError('');
@@ -57,18 +57,18 @@ function PdfRaster({ page, placement, pdf, scale, views }: { page: Page; placeme
     const area = sceneViewport(v);
     const x = Math.max(0, area.x - placement.x), y = Math.max(0, area.y - placement.y);
     const width = Math.min(page.width, area.x + area.width - placement.x) - x, height = Math.min(page.height, area.y + area.height - placement.y) - y;
-    if (wanted <= scale + 0.05 || width <= 0 || height <= 0) { target.setCssStyles({ display: 'none' }); return; }
-    const abort = new AbortController(), rect = { x, y, width, height }, rendered = document.createElement('canvas');
+    if (wanted <= scale + 0.05 || width <= 0 || height <= 0) { target.classList.remove('is-visible'); return; }
+    const abort = new AbortController(), rect = { x, y, width, height }, rendered = createEl('canvas');
     pdf.render(page, rendered, Math.min(wanted, Math.sqrt(8_000_000 / (width * height))), rect, abort.signal).then(() => {
       if (abort.signal.aborted) return;
       target.width = rendered.width; target.height = rendered.height; target.getContext('2d')!.drawImage(rendered, 0, 0);
-      target.setCssStyles({ display: 'block', left: `${page.margins.left + x}px`, top: `${page.margins.top + y}px`, width: `${width}px`, height: `${height}px` });
+      target.classList.add('is-visible'); target.setCssStyles({ left: `${page.margins.left + x}px`, top: `${page.margins.top + y}px`, width: `${width}px`, height: `${height}px` });
     }).catch(() => {}).finally(() => { rendered.width = rendered.height = 0; });
     return () => abort.abort();
   }, [settled, scale, pdf, page.pdfPage]);
   return <>
     <canvas ref={base} className="ink-pdf-base" style={{ left: page.margins.left, top: page.margins.top, width: page.width, height: page.height }}/>
-    <canvas ref={detail} className="ink-pdf-detail" style={{ display: 'none' }}/>
+    <canvas ref={detail} className="ink-pdf-detail" />
     {error && <div className="ink-pdf-missing" style={{ left: page.margins.left, top: page.margins.top, width: page.width, height: page.height }}>{error}</div>}
   </>;
 }
@@ -78,10 +78,10 @@ function useSettled<T>(views: ViewStore, select: (v: View) => T, delay: number, 
   const [value, setValue] = useState(() => select(views.get()));
   const latest = useRef(value); latest.current = value;
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const update = () => { clearTimeout(timer); timer = setTimeout(() => { const next = select(views.get()); if (!equal(latest.current, next)) setValue(next); }, delay); };
+    let timer: number | undefined;
+    const update = () => { window.clearTimeout(timer); timer = window.setTimeout(() => { const next = select(views.get()); if (!equal(latest.current, next)) setValue(next); }, delay); };
     update(); const unsubscribe = views.subscribe(update);
-    return () => { clearTimeout(timer); unsubscribe(); };
+    return () => { window.clearTimeout(timer); unsubscribe(); };
   }, [views]);
   return value;
 }
@@ -92,7 +92,7 @@ export function GridLayer({ views, template, dark }: { views: ViewStore; templat
   useEffect(() => {
     const apply = () => {
       const el = ref.current; if (!el) return;
-      if (template !== 'dotted' && template !== 'grid' && template !== 'ruled') { el.setCssStyles({ backgroundImage: 'none' }); return; }
+      if (template !== 'dotted' && template !== 'grid' && template !== 'ruled') { el.style.removeProperty('background-image'); return; }
       const v = views.get(), base = templateSpec(template === 'ruled' ? 'grid' : template).step;
       let step = base * v.zoom; while (step < 14) step *= 4;
       const color = dark ? 'rgba(255,255,255,.16)' : template === 'dotted' ? 'rgba(80,96,115,.32)' : 'rgba(80,96,115,.12)';

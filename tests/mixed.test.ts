@@ -63,7 +63,7 @@ test('moving, deleting and copying paragraphs preserve ink and retarget only cop
   assert.equal(detached.length, 2); assert.equal(detached[0].customData?.pageinkAnchor, undefined);
   assert.equal((detached[0] as any).points, (attached as any).points);
   const copies = cloneElements([a, attached]);
-  assert.equal(copies[1].customData?.pageinkAnchor.elementId, copies[0].id);
+  assert.equal(copies[1].customData?.pageinkAnchor!.elementId, copies[0].id);
   assert.equal(textReference(copies[0])?.blockId, 'a');
   assert.equal(cloneElements([attached])[0].customData?.pageinkAnchor, undefined);
 });
@@ -97,6 +97,6 @@ test('damaged source/anchor metadata refuses to load instead of losing editable 
   assert.throws(() => validateMixed([a], m), /文字引用/);
   m.assets.md = { path: 'snapshot.bin', mimeType: 'text/markdown', created: 1 };
   validateMixed([a], m);
-  assert.throws(() => validateMixed([{ ...a, customData: { pageinkText: { ...textReference(a), path: '../private.md' } } }], m), /不安全/);
-  assert.throws(() => validateMixed([{ ...ink('a'), customData: { pageinkAnchor: { version: 4, elementId: 'a' } } }], m), /锚定/);
+  assert.throws(() => validateMixed([{ ...a, customData: { pageinkText: { ...textReference(a)!, path: '../private.md' } } }], m), /不安全/);
+  assert.throws(() => validateMixed([{ ...ink('a'), customData: { pageinkAnchor: { version: 4, elementId: 'a' } } } as unknown as Element], m), /锚定/);
 });
