@@ -1,7 +1,7 @@
 {
   "id": "pageink",
   "name": "PageInk",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "minAppVersion": "1.12.7",
   "description": "Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite canvas, with a separate scratchpad.",
   "author": "ZZZdragondYNGPHX",

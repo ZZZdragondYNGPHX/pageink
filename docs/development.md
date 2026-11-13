@@ -55,4 +55,4 @@ node dev/workflows.mjs
 3. 推送源码，创建与清单版本完全相同的 Git 标签和 GitHub Release。
 4. 单独上传 `main.js`、`manifest.json`、`styles.css`，并附安装 ZIP 与校验和。
 
-首次收录通过 [Obsidian Community](https://community.obsidian.md/) 提交，流程见[官方发布指南](https://docs.obsidian.md/plugins/releasing/submit-plugin)。
+插件已收录于 [Obsidian Community](https://community.obsidian.md/plugins/pageink)。发布新版 GitHub Release 后由目录同步；无需重复提交收录申请。
