@@ -124,7 +124,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const currentPageId = useView(views, () => body.current && views !== EMPTY_VIEWS ? body.current.currentPage().page.id : manifest.pages[0].id);
   const currentIndex = Math.max(0, manifest.pages.findIndex(p => p.id === currentPageId));
   const currentPage = manifest.pages[currentIndex];
-  const goToPage = (id: string) => { body.current?.reveal(id); if (compact) setSidebar(false); };
+  const goToPage = (id: string) => { body.current?.reveal(id); if (compact) closeSidebar(); };
   const toggleReading = () => {
     setMarquee(null); pop.close(); body.current?.clearSelection(); setReading(value => !value);
   };
@@ -593,6 +593,12 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   ];
 
   const sidebarVisible = sidebar && !focus;
+  const sidebarTab = !paged && tab === 'pages' ? 'bookmarks' : tab;
+  const closeSidebar = (remember = false) => {
+    setSidebar(false);
+    if (remember) store.update({ sidebar: paged ? { pages: false } : { canvas: false } });
+    layer?.querySelector<HTMLButtonElement>('.ink-topbar [aria-controls]')?.focus({ preventScroll: true });
+  };
   const toggleSidebar = () => { const next = !sidebar; setSidebar(next); store.update({ sidebar: paged ? { pages: next } : { canvas: next } }); };
   const chooseTab = (next: SidebarTab) => { setTab(next); store.update({ sidebar: { tab: next } }); };
   const status = session.conflictPath ? null : session.saveState === 'failed'
@@ -634,17 +640,21 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       {session.sourceIssue && <div className="ink-banner" role="status"><InkIcon name="warning"/><span>原 PDF 暂不可用：{session.sourceIssue} 笔迹不受影响。</span><span className="ink-banner-actions"><button type="button" onClick={() => host.relinkSource()}>重新关联…</button></span></div>}
       <div className={`ink-body${scratchOpen && prefs.scratchPlacement === "docked" ? " has-docked-scratch" : ""}`}>
         {sidebarVisible && <>
-        {compact && <button type="button" className="ink-sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebar(false)}/>}
-        <aside className="ink-sidebar" id={sidebarId} aria-label="侧栏">
-          <div className="ink-sidebar-heading"><strong>{tab === 'search' ? '搜索笔记' : tab === 'bookmarks' || !paged ? '书签' : '页面'}</strong><span>{tab === 'pages' && paged ? `${manifest.pages.length} 页` : tab === 'bookmarks' || !paged && tab !== 'search' ? `${manifest.regions.length} 个` : ''}</span>
-            <IconButton icon="close" label="收起侧栏" onClick={toggleSidebar}/></div>
-          <SidebarTabs tab={paged ? tab : tab === 'pages' ? 'bookmarks' : tab} onTab={chooseTab} paged={paged}/>
+        {compact && <button type="button" className="ink-sidebar-backdrop" aria-label="关闭侧栏" onClick={() => closeSidebar()}/>}
+        <aside className="ink-sidebar" id={sidebarId} aria-label="侧栏" onKeyDown={event => {
+          if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeSidebar(); }
+        }}>
+          <div className="ink-sidebar-heading">
+            <SidebarTabs id={sidebarId} tab={sidebarTab} onTab={chooseTab} paged={paged}/>
+            <IconButton icon="close" label="收起侧栏" onClick={() => closeSidebar(true)}/></div>
+          <div className="ink-sidebar-panel" id={`${sidebarId}-panel`} role="tabpanel" aria-labelledby={`${sidebarId}-${sidebarTab}`}>
           {paged && tab === 'pages' && <PageList session={session} pdf={pdf} current={currentPageId} onSelect={goToPage} onAdd={() => addPage()} onMenu={(id, anchor) => { setTarget(id); pop.set({ id: 'page-menu', anchor }); }}/>}
           {(tab === 'bookmarks' || !paged && tab === 'pages') && <BookmarkList regions={manifest.regions} pageNumber={id => paged ? indexOf(id) + 1 : 0} onOpen={openRegion}
             onMenu={(region, anchor) => { setTarget(region.id); pop.set({ id: 'bookmark-menu', anchor }); }} onSaveView={paged ? undefined : bookmarkView}
             onAdd={() => { setReading(false); setMarquee({ shape: 'rect', purpose: 'bookmark' }); if (compact) setSidebar(false); }}
             renaming={renaming} onRename={renameRegion}/>}
           {tab === 'search' && <SearchPanel session={session} pdf={pdf} paged={paged} onOpen={(hit: SearchHit) => body.current?.reveal(hit.page, hit.rect, !!hit.rect)}/>}
+          </div>
         </aside></>}
         <div className="ink-surfaces" ref={area}>
         <main className="ink-canvas-area">

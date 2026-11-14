@@ -54,7 +54,7 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
   };
   const place = () => {
     if (drag.current?.active || !root.current) return;
-    root.current.style.transform = '';
+    root.current.setCssStyles({ transform: '' });
     const value = latest.current;
     if (!value) {
       if (!root.current.hidden) setSlotHeight(root.current.offsetHeight + 8);
@@ -105,7 +105,7 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
     const next = contain({ x: d.baseX + dx, y: d.baseY + dy, edge: 'none', collapsed: d.previous?.collapsed ?? false }, false);
     d.nextX = next.x; d.nextY = next.y;
     // Follow the pointer without rendering Workspace or relaying out the canvas on every move.
-    root.current.style.transform = `translate(${next.x - d.baseX}px, ${next.y - d.baseY}px)`;
+    root.current.setCssStyles({ transform: `translate(${next.x - d.baseX}px, ${next.y - d.baseY}px)` });
   };
   const finish = (cancelled: boolean) => {
     const d = drag.current;
@@ -114,7 +114,7 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
     armIdle();
     if (grip.current?.hasPointerCapture(d.id)) grip.current.releasePointerCapture(d.id);
     if (!d.active || !root.current || !layer) return;
-    setDragging(false); root.current.style.transform = '';
+    setDragging(false); root.current.setCssStyles({ transform: '' });
     if (cancelled) { setDock(d.previous); return; }
     const distances = [
       { edge: 'left' as const, distance: d.nextX },

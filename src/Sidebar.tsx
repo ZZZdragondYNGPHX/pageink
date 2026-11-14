@@ -58,7 +58,7 @@ export function PageList({ session, pdf, current, onSelect, onMenu, onAdd }: {
         <button type="button" className="ink-thumb-button" aria-label={`第 ${index + 1} 页`} onClick={() => onSelect(page.id)} onContextMenu={event => { event.preventDefault(); onMenu(page.id, event.currentTarget); }}>
           <Thumbnail session={session} page={page} pdf={pdf} version={version} root={list.current}/>
         </button>
-        <div className="ink-thumb-footer"><span>{index + 1}</span><IconButton icon="more" label={`第 ${index + 1} 页操作`} className="ink-thumb-more" onClick={event => onMenu(page.id, event.currentTarget)}/></div>
+        <div className="ink-thumb-footer"><span>第 {index + 1} 页</span><IconButton icon="more" label={`第 ${index + 1} 页操作`} className="ink-thumb-more" onClick={event => onMenu(page.id, event.currentTarget)}/></div>
       </div>;
     })}
   </div><div className="ink-sidebar-footer"><button type="button" className="ink-thumb-add" onClick={onAdd}><InkIcon name="plus"/><span>添加页面</span></button></div></>;
@@ -120,14 +120,15 @@ export function SearchPanel({ session, pdf, paged, onOpen, initial }: { session:
   </div>;
 }
 
-export function SidebarTabs({ tab, onTab, paged }: { tab: SidebarTab; onTab: (tab: SidebarTab) => void; paged: boolean }) {
-  const tabs: [SidebarTab, string, string][] = [...(paged ? [['pages', '页面', 'pages'] as [SidebarTab, string, string]] : []), ['bookmarks', '书签', 'bookmark'], ['search', '搜索', 'search']];
+export function SidebarTabs({ tab, onTab, paged, id }: { tab: SidebarTab; onTab: (tab: SidebarTab) => void; paged: boolean; id: string }) {
+  const tabs: [SidebarTab, string][] = [...(paged ? [['pages', '页面'] as [SidebarTab, string]] : []), ['bookmarks', '书签'], ['search', '搜索']];
   return <div className="ink-tabs" role="tablist" aria-label="侧栏" onKeyDown={event => {
+    if (event.nativeEvent.isComposing) return;
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const index = tabs.findIndex(([id]) => id === tab);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     onTab(tabs[next][0]); event.currentTarget.querySelectorAll<HTMLButtonElement>('button')[next]?.focus();
-  }}>{tabs.map(([id, label, icon]) =>
-    <button key={id} type="button" role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => onTab(id)}><InkIcon name={icon}/><span>{label}</span></button>)}</div>;
+  }}>{tabs.map(([value, label]) =>
+    <button key={value} id={`${id}-${value}`} type="button" role="tab" tabIndex={tab === value ? 0 : -1} aria-selected={tab === value} aria-controls={`${id}-panel`} onClick={() => onTab(value)}>{label}</button>)}</div>;
 }

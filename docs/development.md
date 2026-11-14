@@ -44,6 +44,7 @@ PDF Worker 使用结构化消息传递字体与页面数据，图片 data URL �
 ```sh
 node dev/ui-polish.mjs
 node dev/dock-workflows.mjs
+node dev/sidebar-workflows.mjs
 node dev/writing-workflows.mjs
 node dev/library-workflows.mjs
 node dev/notes-workflows.mjs
