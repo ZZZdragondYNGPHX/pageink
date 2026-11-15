@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
 import type { ScratchFrame } from './preferences';
+import { isolateFloatingInput } from './pointer-input';
 
 const MIN = { width: 260, height: 200 };
 /** Keeps at least the title bar reachable inside the area. */
@@ -21,15 +22,7 @@ export function ScratchWindow({ open, frame, area, onFrame, onClose, docked, onD
   const pending = useRef<ScratchFrame>();
   const shown = containFrame(frame, area);
   const latest = useRef(shown); latest.current = shown;
-  useEffect(() => {
-    const element = root.current!;
-    // Obsidian's mobile drawers listen for TouchEvents as well as PointerEvents.
-    // Native listeners avoid React's passive touchmove delegation; taps still click.
-    const isolate = (event: TouchEvent) => { event.stopPropagation(); if (event.type === 'touchmove' && event.cancelable) event.preventDefault(); };
-    const events = ['touchstart', 'touchmove', 'touchend', 'touchcancel'] as const;
-    for (const type of events) element.addEventListener(type, isolate, { passive: false });
-    return () => { for (const type of events) element.removeEventListener(type, isolate); };
-  }, []);
+  useEffect(() => isolateFloatingInput(root.current!), []);
   useLayoutEffect(() => {
     if (drag.current) return;
     if (docked) { for (const key of ["transform", "right", "top", "width", "height"]) root.current!.style.removeProperty(key); return; }

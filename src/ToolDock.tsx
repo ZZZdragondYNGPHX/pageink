@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { InkIcon } from './InkIcon';
+import { isolateFloatingInput } from './pointer-input';
 
 type Dock = { x: number; y: number; edge: 'none' | 'left' | 'right' | 'top' | 'bottom'; collapsed: boolean };
 type Drag = { id: number; x: number; y: number; pointerX: number; pointerY: number; baseX: number; baseY: number; nextX: number; nextY: number; active: boolean; previous: Dock | null };
@@ -8,8 +9,6 @@ const IDLE_DELAY = 8000;
 /** Tool controls keep their own input; only the grip moves the toolbox. */
 export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivElement | null; visible: boolean; onDrag: () => void; children: React.ReactNode }) {
   const root = useRef<HTMLDivElement>(null), grip = useRef<HTMLButtonElement>(null);
-  const slot = useRef<HTMLDivElement>(null);
-  const [slotHeight, setSlotHeight] = useState(54);
   const [dock, setDock] = useState<Dock | null>(null), [dragging, setDragging] = useState(false);
   const latest = useRef(dock); latest.current = dock;
   const drag = useRef<Drag | null>(null), suppressClick = useRef(false);
@@ -56,10 +55,7 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
     if (drag.current?.active || !root.current) return;
     root.current.setCssStyles({ transform: '' });
     const value = latest.current;
-    if (!value) {
-      if (!root.current.hidden) setSlotHeight(root.current.offsetHeight + 8);
-      return;
-    }
+    if (!value) return;
     const next = contain(value);
     if (next.x !== value.x || next.y !== value.y) setDock(next);
   };
@@ -67,16 +63,12 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
   useLayoutEffect(() => {
     if (!layer || !root.current) return;
     const observer = new ResizeObserver(place);
-    observer.observe(layer); observer.observe(root.current); if (slot.current) observer.observe(slot.current);
+    observer.observe(layer); observer.observe(root.current);
     return () => observer.disconnect();
   }, [layer]);
   useEffect(() => {
-    const element = grip.current!;
-    // Match the scratch window's native isolation from Obsidian's mobile drawers.
-    const isolate = (event: TouchEvent) => { event.stopPropagation(); if (event.type === 'touchmove' && event.cancelable) event.preventDefault(); };
-    const events = ['touchstart', 'touchmove', 'touchend', 'touchcancel'] as const;
-    for (const type of events) element.addEventListener(type, isolate, { passive: false });
-    return () => { drag.current = null; for (const type of events) element.removeEventListener(type, isolate); };
+    const dispose = isolateFloatingInput(grip.current!);
+    return () => { drag.current = null; dispose(); };
   }, []);
   const start = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || drag.current || !layer || !root.current) return;
@@ -148,7 +140,7 @@ export function ToolDock({ layer, visible, onDrag, children }: { layer: HTMLDivE
     const value = latest.current ?? { x: (bar.left - area.left) * layer.clientWidth / area.width, y: (bar.top - area.top) * layer.clientHeight / area.height, edge: 'none', collapsed: false };
     setDock(contain({ ...value, edge: 'none', x: value.x + offset[0] * step, y: value.y + offset[1] * step }, false));
   };
-  return <div ref={slot} className="ink-dock-slot" hidden={!visible} style={{ height: slotHeight }}><div ref={root} hidden={!visible} className={`ink-writing-bar${dock ? ' is-floating-dock' : ''}${dock?.collapsed ? ' is-collapsed' : ''}${dragging ? ' is-dragging' : ''}`}
+  return <div className="ink-dock-slot" hidden={!visible}><div ref={root} hidden={!visible} className={`ink-writing-bar${dock ? ' is-floating-dock' : ''}${dock?.collapsed ? ' is-collapsed' : ''}${dragging ? ' is-dragging' : ''}`}
     data-edge={dock?.edge ?? 'none'} style={dock ? { left: dock.x, top: dock.y } : undefined}
     onPointerEnter={armIdle} onPointerLeave={armIdle}
     onPointerMoveCapture={armIdle} onWheelCapture={armIdle} onScrollCapture={armIdle}

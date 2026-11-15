@@ -5,6 +5,7 @@ import type { CardsHost } from './cards-host';
 
 /** Remembered viewport of one document on this device. */
 export interface ViewMemory { page?: string; dx: number; dy: number; zoom: number }
+export type ViewSurface = 'body' | 'scratch';
 
 /** Workspace operations exposed to host commands and menus. */
 export interface WorkspaceActions { exportPdf(): void; exportPackage(): void; toggleScratch(): void; toggleFocus(): void; search(): void }
@@ -26,8 +27,8 @@ export interface WorkspaceHost {
   resolveConflict(openCopy: boolean): Promise<void>;
   relinkSource(): void;
   showVersions(): void;
-  loadView(): ViewMemory | undefined;
-  saveView(view: ViewMemory): void;
+  loadView(surface?: ViewSurface): ViewMemory | undefined;
+  saveView(view: ViewMemory, surface?: ViewSurface): void;
   theme(): 'light' | 'dark';
   onThemeChange(listener: () => void): () => void;
   /** Lets host commands reach the mounted workspace; returns a disconnect function. */

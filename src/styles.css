@@ -161,9 +161,10 @@
 
 /* ---------- Scheme A Floating Frosted-Glass Islands & Pencil Kit Dock ---------- */
 
-.ink-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; min-height: 44px;
+.ink-topbar { position: absolute; inset: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; pointer-events: none;
   padding: 8px 12px 2px; border-bottom: 0; background: transparent; color: var(--ink-text); z-index: 20; }
 .ink-topbar-start, .ink-topbar-end {
+  pointer-events: auto;
   display: inline-flex; align-items: center; gap: 3px; min-width: 0; flex: none;
   padding: 3px 6px; border: 1px solid var(--ink-glass-border); border-radius: 999px;
   background: var(--ink-glass); -webkit-backdrop-filter: saturate(190%) blur(24px); backdrop-filter: saturate(190%) blur(24px);
@@ -175,14 +176,14 @@
 .ink-workspace .ink-topbar-end .ink-labelled { width: var(--ink-control); padding: 0; border-radius: 999px; }
 
 .ink-writing-bar {
-  position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; flex: none;
+  position: absolute; left: 0; right: 0; top: calc(var(--ink-control) + 28px); display: flex; align-items: center; justify-content: center; gap: 8px;
   align-self: center; width: fit-content; max-width: calc(100% - 24px); min-width: 0;
   margin: 2px auto 6px; padding: 4px 10px;
   border: 1px solid var(--ink-glass-border); border-radius: 999px;
   background: var(--ink-glass-heavy); -webkit-backdrop-filter: saturate(200%) blur(28px); backdrop-filter: saturate(200%) blur(28px);
   box-shadow: var(--ink-shadow-hud); color: var(--ink-text); z-index: 18;
 }
-.ink-writing-bar.is-floating-dock { position: absolute; z-index: 32; margin: 0; }
+.ink-writing-bar.is-floating-dock { right: auto; z-index: 32; margin: 0; }
 .ink-writing-bar[hidden] { display: none; }
 .ink-writing-bar.is-dragging {
   cursor: grabbing;
@@ -196,7 +197,7 @@
 .ink-workspace .ink-dock-grip:active { cursor: grabbing; }
 .ink-dock-grip .ink-icon { width: 14px; height: 14px; }
 /* The full palette follows its edge; only the single handle survives minimization. */
-.ink-dock-slot { flex: none; width: 100%; min-height: 0; }
+.ink-dock-slot { height: 0; }
 .ink-dock-slot[hidden], .ink-dock-content[hidden] { display: none; }
 .ink-dock-content { display: flex; align-items: center; gap: inherit; flex: 1; min-width: 0; min-height: 0; }
 .ink-dock-content > .ink-icon-button { flex: none; border-radius: 999px; }
@@ -346,8 +347,8 @@
 .ink-body { position: relative; display: flex; flex: 1; min-height: 0; }
 .ink-surfaces { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .ink-sidebar {
-  position: absolute; top: 8px; left: 16px; display: flex; flex-direction: column;
-  width: 224px; max-width: calc(100% - 32px); max-height: calc(100% - 72px); min-height: 0;
+  position: absolute; top: calc(var(--ink-control) + 28px); left: 16px; display: flex; flex-direction: column;
+  width: 224px; max-width: calc(100% - 32px); max-height: calc(100% - var(--ink-control) - 92px); min-height: 0;
   border: 1px solid var(--ink-glass-border); border-radius: 18px;
   background: var(--ink-glass); -webkit-backdrop-filter: saturate(190%) blur(24px); backdrop-filter: saturate(190%) blur(24px);
   box-shadow: var(--ink-shadow-hud); overflow: hidden; z-index: 12;
@@ -470,11 +471,11 @@
 .ink-scratch { touch-action: none; overscroll-behavior: contain; position: absolute; z-index: 30; display: flex; flex-direction: column; overflow: hidden; border-radius: 18px; border: 1px solid var(--ink-glass-border); background: var(--ink-paper); box-shadow: var(--ink-shadow-lg); }
 .theme-dark .ink-scratch { background: var(--ink-canvas); }
 .ink-scratch[hidden] { display: none; }
-.ink-scratch-bar { display: flex; align-items: center; justify-content: space-between; flex: none; height: 40px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--ink-line); background: var(--ink-glass); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); cursor: grab; touch-action: none; }
+.ink-scratch-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; flex: none; min-height: 40px; padding: 4px 6px 4px 14px; border-bottom: 1px solid var(--ink-line); background: var(--ink-glass); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); cursor: grab; touch-action: none; }
 .ink-scratch-bar:active { cursor: grabbing; }
 .ink-scratch-title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12.5px; letter-spacing: -.01em; }
 .ink-scratch-title .ink-icon { width: 16px; height: 16px; color: var(--ink-accent); }
-.ink-scratch-actions { display: flex; gap: 1px; }
+.ink-scratch-actions { display: flex; gap: 1px; margin-left: auto; }
 .ink-workspace .ink-scratch-actions .ink-icon-button { width: 30px; min-width: 30px; height: 30px; border-radius: 999px; }
 .ink-scratch-actions .ink-icon { width: 17px; height: 17px; }
 .ink-scratch-body { position: relative; flex: 1; min-height: 0; }
@@ -482,10 +483,12 @@
 .ink-workspace .ink-scratch-selection button { height: 28px; border-radius: 999px; font-size: 12px; }
 .ink-workspace .ink-scratch-selection .is-primary { background: var(--ink-accent); color: var(--text-on-accent, #fff); }
 .ink-scratch-selection .ink-icon { width: 16px; height: 16px; }
+.ink-scratch-view-controls { left: auto; right: 12px; bottom: 12px; }
+.ink-scratch-selection { bottom: 60px; max-width: calc(100% - 16px); }
 .ink-scratch-resize { position: absolute; left: 0; bottom: 0; z-index: 8; width: 32px; height: 32px; cursor: nesw-resize; touch-action: none; }
 .ink-scratch-resize::after { content: ''; position: absolute; left: 6px; bottom: 6px; width: 9px; height: 9px; border-left: 2px solid var(--ink-faint); border-bottom: 2px solid var(--ink-faint); border-radius: 0 0 0 3px; }
 
-.ink-scratch.is-docked { position: relative; inset: auto; z-index: 10; flex: 0 0 36%; width: auto; height: auto; min-width: 280px; max-width: 440px; margin: 4px 12px 12px 0; border-radius: 18px; box-shadow: var(--ink-shadow-hud); border: 1px solid var(--ink-glass-border); }
+.ink-scratch.is-docked { position: relative; inset: auto; z-index: 10; flex: 0 0 36%; width: auto; height: auto; min-width: 280px; max-width: 440px; margin: calc(var(--ink-control) + 28px) 12px 12px 0; border-radius: 18px; box-shadow: var(--ink-shadow-hud); border: 1px solid var(--ink-glass-border); }
 .ink-scratch.is-docked .ink-scratch-bar { cursor: default; }
 @container ink (max-width: 900px) {
   .has-docked-scratch .ink-surfaces { flex-direction: column; }
@@ -642,7 +645,7 @@
   .ink-workspace .ink-library-properties, .ink-host-modal .ink-create-card, .ink-host-modal .ink-create-options summary { min-width: 44px; min-height: 44px; }
   .ink-thumb-footer { height: 44px; }
   .ink-options .ink-swatches { flex-wrap: wrap; }
-  .ink-scratch-bar { height: 48px; }
+  .ink-scratch-bar { min-height: 48px; }
 }
 .ink-workspace button:active:not(:disabled) { filter: brightness(.94); }
 @media (prefers-reduced-motion: reduce) {

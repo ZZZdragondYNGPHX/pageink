@@ -232,6 +232,12 @@ function releaseInkElementCanvas(element) {
     build.onLoad({ filter: /excalidraw[\\/]dist[\\/]dev[\\/]index\.js$/ }, async ({ path }) => {
       let contents = await readFile(path, 'utf8');
       contents = `import { queryInkScene, InkRenderMap, getInkEmbeds } from ${JSON.stringify(resolve('src/spatial.ts'))};\n` + contents;
+      // Safari pinch events must only reach the canvas where the gesture started.
+      for (const gesture of ['gesturestart', 'gesturechange', 'gestureend']) {
+        const listener = `        document,\n        "${gesture}"`;
+        if (contents.split(listener).length !== 2) throw Error(`Upstream scoped ${gesture} listener patch mismatch`);
+        contents = contents.replace(listener, `        this.excalidrawContainerRef.current,\n        "${gesture}"`);
+      }
       const selectionVisibility = 'isSomeElementSelected(getNonDeletedElements(elements), appState)';
       if (contents.split(selectionVisibility).length !== 13) throw Error('Upstream empty selection UI patch mismatch');
       contents = contents.replaceAll(selectionVisibility, '(Object.values(appState.selectedElementIds).some(Boolean) && ' + selectionVisibility + ')');

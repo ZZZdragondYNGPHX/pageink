@@ -31,7 +31,7 @@ import { connectCards, inkCard, refreshTextCards, textCard } from './cards-rende
 import { CardEditor, CardsPanel } from './CardsPanel';
 
 export interface WorkspaceProps { session: Session; pdf?: PdfService; host: WorkspaceHost }
-type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-export' | 'pdf-text' | 'mixed' | 'cards';
+type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'scratch-zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-export' | 'pdf-text' | 'mixed' | 'cards';
 
 /** Kernel settings for a tool; a pending bookmark marquee temporarily overrides the tool. */
 function canvasTool(tool: ToolId, prefs: Preferences, marquee: CanvasTool['marquee'] | null): CanvasTool {
@@ -86,6 +86,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const [target, setTarget] = useState<string | null>(null);
   const [theme, setTheme] = useState(host.theme());
   const [views, setViews] = useState<ViewStore>(EMPTY_VIEWS);
+  const [scratchViews, setScratchViews] = useState<ViewStore>(EMPTY_VIEWS);
   const [resolving, setResolving] = useState(false);
   const [textBusy, setTextBusy] = useState(false);
   const textTask = useRef(false);
@@ -686,9 +687,14 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
               clear: () => run(async () => { const h = scratch.current; if (!h) return; await h.flush(); h.api.updateScene({ elements: [] }); await h.flush(); toast.show({ kind: 'info', message: '草稿纸已清空', action: { label: '撤销', run: () => undo('scratch') } }); }) }}
             selection={scratchSelection && !scratchSelection.busy ? { toBody: () => run(toBody), destination: paged ? '当前页' : '画布', remove: () => run(() => scratch.current?.replaceSelected(() => null)), source: scratchSelection.source ? () => selectionActions.source(scratchSelection) : undefined } : null}>
             <InkCanvas session={session} kind="scratch" pagesKey="scratch" tool={scratchTool} fingerDraws={prefs.fingerDraws} theme={theme} ref={scratch}
+              initialView={host.loadView('scratch')}
               onScribble={() => toast.show({ kind: 'info', message: '已涂划擦除', action: { label: '撤销', run: () => undo('scratch') } })}
-              onReady={handle => { scratch.current = handle; for (const resolve of scratchWaiters.current.splice(0)) resolve(handle); }}
+              onReady={handle => { scratch.current = handle; setScratchViews(handle.views); for (const resolve of scratchWaiters.current.splice(0)) resolve(handle); }}
+              onViewChange={() => { if (scratch.current) host.saveView(scratch.current.memory(), 'scratch'); }}
               onError={message => toast.show({ kind: 'error', message })} onSelection={setScratchSelection} onGesture={gesture => gesture === 'undo' ? undo('scratch') : redo('scratch')}/>
+            <div className="ink-view-controls ink-scratch-view-controls">
+              <ZoomControls views={scratchViews} label="草稿纸缩放" fitLabel="草稿纸显示全部内容" onZoom={anchor => pop.toggle('scratch-zoom', anchor)} onFit={() => scratch.current?.zoom('fitAll')}/>
+            </div>
           </ScratchWindow>
         </div>
       </div>
@@ -741,10 +747,10 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         <PageSettings page={menuPage} paged={paged} pageNumber={indexOf(menuPage.id) + 1} onTemplate={(template, all) => setTemplate(all ? manifest.pages.map(p => p.id) : [menuPage.id], template)}
           onMargins={(margins, all) => setMargins(all ? manifest.pages.map(p => p.id) : [menuPage.id], margins)} onDefault={template => store.update({ newTemplate: template })} defaultTemplate={prefs.newTemplate}/>
       </Popover>}
-      {pop.open === 'zoom' && <Popover anchor={pop.anchor} onClose={pop.close} label="缩放"><Menu onDone={pop.close} items={([
+      {(pop.open === 'zoom' || pop.open === 'scratch-zoom') && <Popover anchor={pop.anchor} onClose={pop.close} label={pop.open === 'scratch-zoom' ? '草稿纸缩放' : '缩放'}><Menu onDone={pop.close} items={([
         ['zoomIn', '放大', 'in'], ['zoomOut', '缩小', 'out'], ['fit', '100%', 'actual'],
-        ...(paged ? [['fitWidth', '适合宽度', 'fitWidth'], ['page', '适合整页', 'fitPage']] : [['fit', '显示全部内容', 'fitAll']]),
-      ] as [string, string, ZoomAction][]).map(([icon, label, action]) => ({ icon, label, onSelect: () => body.current?.zoom(action) }))}/></Popover>}
+        ...(paged && pop.open === 'zoom' ? [['fitWidth', '适合宽度', 'fitWidth'], ['page', '适合整页', 'fitPage']] : [['fit', '显示全部内容', 'fitAll']]),
+      ] as [string, string, ZoomAction][]).map(([icon, label, action]) => ({ icon, label, onSelect: () => (pop.open === 'scratch-zoom' ? scratch.current : body.current)?.zoom(action) }))}/></Popover>}
       {pop.open === 'jump' && <Popover anchor={pop.anchor} onClose={pop.close} label="跳转页面" align="end" className="ink-jump">
         <form onSubmit={event => { event.preventDefault(); const n = Number(new FormData(event.currentTarget).get('page')); const page = manifest.pages[n - 1]; if (page) { body.current?.reveal(page.id); pop.close(); } }}>
           <label>跳到第 <input name="page" type="number" min={1} max={manifest.pages.length} defaultValue={currentIndex + 1} data-autofocus onFocus={event => event.currentTarget.select()}/> 页</label>
@@ -794,17 +800,23 @@ function SelectionBar({ views, selection, paged, onDuplicate, onRemove, onScratc
   </div>;
 }
 
+function ZoomControls({ views, label = '缩放', fitLabel, onZoom, onFit }: {
+  views: ViewStore; label?: string; fitLabel: string; onZoom: (anchor: HTMLElement) => void; onFit: () => void;
+}) {
+  const zoom = useView(views, v => Math.round(v.zoom * 100));
+  return <div className="ink-view-group">
+    <IconButton icon={fitLabel === '适合宽度' ? 'fitWidth' : 'fit'} label={fitLabel} onClick={onFit}/>
+    <button type="button" className="ink-zoom-value" aria-label={`${label} ${zoom}%`} onClick={event => onZoom(event.currentTarget)}>{zoom}%<InkIcon name="down"/></button>
+  </div>;
+}
+
 function ViewControls({ views, paged, pageCount, pageIndex, onZoom, onJump, onStep, onFit, onBookmark, onAdd, reading }: {
   views: ViewStore; paged: boolean; pageCount: number; pageIndex: number; onZoom: (anchor: HTMLElement) => void; onJump: (anchor: HTMLElement) => void;
   onStep: (delta: number) => void; onFit: () => void; onBookmark: () => void; onAdd: () => void; reading: boolean;
 }) {
-  const zoom = useView(views, v => Math.round(v.zoom * 100));
   // Bottom-left: Obsidian's status bar floats over the bottom-right corner.
   return <div className="ink-view-controls">
-    <div className="ink-view-group">
-      <IconButton icon={paged ? 'fitWidth' : 'fit'} label={paged ? '适合宽度' : '显示全部内容'} onClick={onFit}/>
-      <button type="button" className="ink-zoom-value" aria-label={`缩放 ${zoom}%`} onClick={event => onZoom(event.currentTarget)}>{zoom}%<InkIcon name="down"/></button>
-    </div>
+    <ZoomControls views={views} fitLabel={paged ? '适合宽度' : '显示全部内容'} onZoom={onZoom} onFit={onFit}/>
     {paged ? <div className="ink-view-group">
       <IconButton icon="left" label="上一页" disabled={pageIndex === 0} onClick={() => onStep(-1)}/>
       <button type="button" className="ink-page-number" aria-label={`第 ${pageIndex + 1} 页，共 ${pageCount} 页，点击跳转`} onClick={event => onJump(event.currentTarget)}>{pageIndex + 1}<span>/ {pageCount}</span></button>

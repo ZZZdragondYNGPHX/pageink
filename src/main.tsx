@@ -13,7 +13,7 @@ import { assetUrl, clearAssetUrls } from './assets';
 import { normalizePreferences, PreferenceStore } from './preferences';
 import { ErrorBoundary } from './ui';
 import { TEMPLATES, paperStyle } from './templates';
-import type { ViewMemory, WorkspaceActions, WorkspaceHost } from './host';
+import type { ViewMemory, ViewSurface, WorkspaceActions, WorkspaceHost } from './host';
 import { NotesHost } from './notes-host';
 import { drawingRegionCode, NOTE_TYPES } from './notes';
 import { MixedNotes } from './mixed-host';
@@ -251,11 +251,15 @@ class DrawingView extends FileView implements WorkspaceHost {
     }).open();
   }
   showVersions() { if (this.session) void this.plugin.showRecovery(this.session.manifest).catch((e: Error) => new Notice((e).message)); }
-  private viewKey() { return `pageink-view-${this.session?.manifest.id}`; }
-  private pendingView?: ViewMemory;
-  loadView() { const value = this.session && this.app.loadLocalStorage(this.viewKey()) as ViewMemory | null; return value && typeof value.zoom === 'number' ? value : undefined; }
-  saveView(view: ViewMemory) { this.pendingView = view; window.clearTimeout(this.viewTimer); this.viewTimer = window.setTimeout(() => this.saveViewNow(), 800); }
-  private saveViewNow() { window.clearTimeout(this.viewTimer); if (this.pendingView && this.session) this.app.saveLocalStorage(this.viewKey(), this.pendingView); this.pendingView = undefined; }
+  private viewKey(surface: ViewSurface = 'body') { return `pageink-view-${this.session?.manifest.id}${surface === 'scratch' ? '-scratch' : ''}`; }
+  private pendingViews = new Map<ViewSurface, ViewMemory>();
+  loadView(surface: ViewSurface = 'body') { const value = this.session && this.app.loadLocalStorage(this.viewKey(surface)) as ViewMemory | null; return value && typeof value.zoom === 'number' ? value : undefined; }
+  saveView(view: ViewMemory, surface: ViewSurface = 'body') { this.pendingViews.set(surface, view); window.clearTimeout(this.viewTimer); this.viewTimer = window.setTimeout(() => this.saveViewNow(), 800); }
+  private saveViewNow() {
+    window.clearTimeout(this.viewTimer);
+    if (this.session) for (const [surface, view] of this.pendingViews) this.app.saveLocalStorage(this.viewKey(surface), view);
+    this.pendingViews.clear();
+  }
   theme() { return activeDocument.body.classList.contains('theme-dark') ? 'dark' as const : 'light' as const; }
   onThemeChange(listener: () => void) { const ref = this.app.workspace.on('css-change', listener); return () => this.app.workspace.offref(ref); }
   connect(actions: WorkspaceActions) { this.actions = actions; return () => { if (this.actions === actions) this.actions = null; }; }
