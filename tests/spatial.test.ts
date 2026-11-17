@@ -23,3 +23,23 @@ test('render projection preserves offscreen authority and excludes only active o
   assert.equal(map.size, 1); assert.equal(map.get('a'), undefined); assert.equal(map.get('b'), b);
   assert.deepEqual([...map], [['b', b]]); assert.equal(source.size, 2);
 });
+test('viewport candidates reuse a cell range and invalidate after edits, insertion and deletion', () => {
+  const a = element('a'), index = new InkSpatialIndex([a]);
+  const rect = { x: 10, y: 10, width: 20, height: 20 }, original = index.query(rect);
+  assert.equal(index.query({ ...rect, x: 20 }), original);
+  const b = element('b'); index.update(b);
+  assert.deepEqual(index.query(rect).map(e => e.id), ['a', 'b']);
+  Object.assign(a, { x: 10000 }); index.update(a);
+  assert.deepEqual(index.query(rect).map(e => e.id), ['b']);
+  Object.assign(b, { isDeleted: true }); index.update(b);
+  assert.deepEqual(index.query(rect), []);
+  assert.deepEqual(original.map(e => e.id), ['a']);
+});
+test('pen geometry updates in the same cells reuse live candidates; order changes still re-sort', () => {
+  const a = element('a', 10), b = element('b', 10), index = new InkSpatialIndex([a, b]);
+  const rect = { x: 0, y: 0, width: 30, height: 30 }, first = index.query(rect);
+  Object.assign(a, { x: 11, version: 2 }); index.update(a);
+  assert.equal(index.query(rect), first); assert.equal(first[0].x, 11);
+  Object.assign(a, { index: 'z' }); index.update(a);
+  assert.deepEqual(index.query(rect).map(e => e.id), ['b', 'a']);
+});

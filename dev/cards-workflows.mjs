@@ -19,7 +19,7 @@ const editor = () => drawing().getByRole('dialog', { name: '编辑卡片段落',
 const waitFor = async (test, label, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await test()) return; await page.waitForTimeout(100); } throw Error(label); };
 const snapshot = () => app(async app => {
   const view = app.workspace.getLeavesOfType('drawing-local-view').find(l => l.view.file?.path === window.boardPath).view;
-  await view.session.flush(); return { path: view.file.path, manifest: structuredClone(view.session.manifest), elements: await view.session.read(view.session.manifest.pages[0].id), memory: view.pendingView ?? view.loadView() };
+  await view.session.flush(); return { path: view.file.path, manifest: structuredClone(view.session.manifest), elements: await view.session.read(view.session.manifest.pages[0].id), memory: view.pendingViews.get('body') ?? view.loadView() };
 });
 const activate = () => app(async (app, plugin) => { const leaf = app.workspace.getLeavesOfType('drawing-local-view').find(l => l.view.file?.path === window.boardPath); if (!leaf) { await plugin.openPath(window.boardPath); return; } await app.workspace.revealLeaf(leaf); app.workspace.setActiveLeaf(leaf, { focus: true }); });
 async function pick(text) { await page.locator('.prompt-input').fill(text); await page.locator('.suggestion-item').filter({ hasText: text }).first().click(); }

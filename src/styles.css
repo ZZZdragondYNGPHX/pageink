@@ -422,6 +422,9 @@
 .ink-mode-canvas .ink-canvas-area { background: var(--ink-canvas); }
 .ink-editor { position: absolute; inset: 0; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
 .ink-editor > .excalidraw { position: absolute; inset: 0; background: transparent; }
+.ink-editor canvas.static, .ink-editor canvas.ink-viewport-snapshot { transform-origin: 0 0; }
+.ink-editor canvas.ink-viewport-snapshot { pointer-events: none; }
+.ink-editor canvas.ink-viewport-redraw { visibility: hidden; }
 .ink-editor .excalidraw .layer-ui__wrapper, .ink-editor .excalidraw .FixedSideContainer, .ink-editor .excalidraw .HintViewer, .ink-editor .excalidraw .App-bottom-bar { display: none; }
 .ink-editor.is-erasing canvas.interactive { cursor: none; }
 .ink-editor.is-marquee canvas.interactive { cursor: crosshair; }

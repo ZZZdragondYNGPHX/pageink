@@ -1,6 +1,6 @@
 # PDF runtime assets
 
-PageInk embeds the unchanged decoder binaries from `pdfjs-dist@5.4.624`, the exact package fixed by `package-lock.json`. PDF.js requests them through `EmbeddedWasm` in `src/assets.ts`; `AssetStore` verifies byte lengths while decompressing them. They process PDF page content locally. No decoder is downloaded at runtime and no user document is sent to a service.
+PageInk embeds decoder binaries from `pdfjs-dist@5.4.624`, fixed by `package-lock.json`. `EmbeddedWasm` in `src/assets.ts` supplies them to PDF.js; `AssetStore` decompresses and checks byte lengths. PDF content is decoded locally.
 
 | Asset | Purpose | License | SHA-256 |
 | --- | --- | --- | --- |
@@ -8,16 +8,24 @@ PageInk embeds the unchanged decoder binaries from `pdfjs-dist@5.4.624`, the exa
 | `openjpeg.wasm` | OpenJPEG JPEG 2000 decoder | BSD-2-Clause + Apache-2.0 wrapper | `67b8e2b162da472e98cb48d3d32e3e38fff481b9b32ff4818e78bb248af88ab2` |
 | `qcms_bg.wasm` | qcms ICC color conversion | MIT + Apache-2.0 wrapper | `6017eca5939cde1836e88e6d8cd27ae039246f206515ea4487bdfd0e3fb16e26` |
 
-`jbig2.wasm` is the PDFium-derived decoder distributed by PDF.js; it is required for JBIG2-compressed scans. Its copyright notice is `LICENSE_JBIG2`, with the PDF.js wrapper notice in `LICENSE_PDFJS_JBIG2`. OpenJPEG uses `LICENSE_OPENJPEG` / `LICENSE_PDFJS_OPENJPEG`, and qcms uses `LICENSE_QCMS` / `LICENSE_PDFJS_QCMS`. All six original notices ship inside the embedded asset set and in the installation ZIP. The binaries' strings may contain upstream project and license URLs; those strings do not initiate requests.
+## Source and notices
 
-Package source: [pdfjs-dist](https://github.com/mozilla/pdfjs-dist) and [PDF.js](https://github.com/mozilla/pdf.js). Bytes and notices come from the pinned npm package, with no local compilation or binary edits.
+Package source: [pdfjs-dist](https://github.com/mozilla/pdfjs-dist) and [PDF.js](https://github.com/mozilla/pdf.js). Binaries and notices are copied from the npm package without recompilation.
+
+| Decoder | Original notice | PDF.js wrapper notice |
+| --- | --- | --- |
+| JBIG2 | `LICENSE_JBIG2` | `LICENSE_PDFJS_JBIG2` |
+| OpenJPEG | `LICENSE_OPENJPEG` | `LICENSE_PDFJS_OPENJPEG` |
+| qcms | `LICENSE_QCMS` | `LICENSE_PDFJS_QCMS` |
+
+All six notices are included in the embedded asset set and installation ZIP.
 
 ## Browser PDF export
 
-PDF export uses `pdfkit@0.17.2`'s standalone browser bundle and `svg-to-pdfkit@0.1.8`. `scripts/pdf-browser.mjs` removes the bundle's three filesystem module lookups, replacing its string-path readers with an explicit error. The patch checks the exact occurrence count and fails the build if upstream structure changes. Fonts and images are supplied as memory bytes; the worker receives local embedded fonts by transferable messages.
+PDF export uses the standalone browser bundle from `pdfkit@0.17.2` and `svg-to-pdfkit@0.1.8`. `scripts/pdf-browser.mjs` replaces three filesystem module lookups with errors for string-path reads. The patch validates exact occurrence counts during the build. Fonts and images are supplied as memory bytes; the worker receives embedded fonts through transferable messages.
 
-`Buffer` comes from the MIT browser package `buffer@6.0.3` via `buffer/`, bundled into the worker. It does not load Node's built-in `buffer` on a device. The file picker reads a file only after the user selects it; vault contents are managed through `FileIO` and the host vault API.
+The worker bundles `buffer@6.0.3` through `buffer/`. File imports use the host file picker; vault access uses `FileIO` and the Obsidian vault API.
 
-## Installation limits
+## Distribution
 
-The supported community installation consists of `main.js`, `manifest.json`, and `styles.css`. Embedded fonts and PDF resources make `main.js` approximately 46 MB. This exceeds Obsidian Sync Standard's 5 MB single-file limit; install PageInk independently on each device using that plan. The larger file is retained to preserve offline CJK text export and complete PDF decoding.
+Community installation uses `main.js`, `manifest.json`, and `styles.css`. Bundled fonts and PDF resources account for most of the approximately 46 MB main script. Installation and synchronization details are in the [README](../README.md).

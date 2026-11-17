@@ -16,9 +16,31 @@ test('deliberate repeated scribbles recognise at different angles and zoom level
     assert.ok(scribbleRegion(points, zoom, 900));
   }
 });
+test('two reversals recognise short, narrow and sparsely sampled scribbles without changing raw points', () => {
+  const gestures: ScenePoint[][] = [
+    zigzag.slice(0, 31),
+    [[0, 0], [120, 2], [0, 4], [120, 6]],
+    [[0, 0], [20, 2], [0, 4], [20, 6]],
+  ];
+  for (const gesture of gestures) for (const angle of [0, .4, Math.PI / 2]) for (const zoom of [.5, 1, 2]) {
+    const points = gesture.map(([x, y]) => [(x * Math.cos(angle) - y * Math.sin(angle)) / zoom, (x * Math.sin(angle) + y * Math.cos(angle)) / zoom] as ScenePoint);
+    const original = structuredClone(points);
+    const region = scribbleRegion(points, zoom, 300);
+    assert.ok(region, 'Three sweeps should erase even with narrow spacing or few samples');
+    assert.deepEqual(points, original);
+  }
+  assert.ok(scribbleRegion(gestures[2], 1, 60));
+  assert.equal(scribbleRegion(gestures[2], 1, 30), null);
+});
 test('ordinary letters, circles, underlines, slow hatching and short zigzags remain ink', () => {
   assert.equal(scribbleRegion(zigzag, 1, 4000), null);
-  assert.equal(scribbleRegion(zigzag.slice(0, 35), 1, 900), null);
+  for (const points of [
+    [[0, 0], [120, 2], [0, 4]], // Only one reversal.
+    [[0, 40], [20, 0], [40, 40], [60, 0], [80, 40]], // M/W letter.
+    [[0, 0], [80, 0], [0, 40], [80, 40]], // Z letter.
+    [[0, 0], [120, .5], [0, 1], [120, 1.5]], // Degenerate envelope.
+  ] as ScenePoint[][]) assert.equal(scribbleRegion(points, 1, 300), null);
+  assert.equal(scribbleRegion(zigzag.slice(0, 25), 1, 300), null);
   assert.equal(scribbleRegion(Array.from({ length: 61 }, (_, i) => [i * 2, 0]), 1, 500), null);
   assert.equal(scribbleRegion(Array.from({ length: 121 }, (_, i) => [50 * Math.cos(i / 120 * Math.PI * 8), 50 * Math.sin(i / 120 * Math.PI * 8)]), 1, 1200), null);
   assert.equal(scribbleRegion(zigzag.map(([x, y]) => [x / 20, y / 20]), 1, 900), null);

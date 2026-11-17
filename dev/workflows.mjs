@@ -48,7 +48,9 @@ async function create(mode, name) {
   await page.locator('.ink-create-name').fill(name);
   if (mode === '手写笔记') await page.getByRole('radio', { name: '横线', exact: true }).click();
   await page.getByRole('button', { name: `新建${mode}`, exact: true }).click();
-  await workspace.waitFor(); await page.waitForTimeout(700);
+  await workspace.waitFor();
+  await page.waitForFunction(() => window.app.workspace.activeLeaf.view.session?.flushers.has('body'));
+  await workspace.locator('main .ink-canvas-status').waitFor({ state: 'hidden' });
 }
 async function exportItem(label, extension) {
   await button('导出').click();
@@ -64,7 +66,8 @@ try {
   const environment = await page.evaluate(() => ({ obsidian: navigator.userAgent.match(/obsidian\/([\d.]+)/i)?.[1] ?? null, userAgent: navigator.userAgent }));
   await create('手写笔记', '流程笔记');
   const box = await workspace.locator('.ink-canvas-area').boundingBox();
-  await drag([[box.x + 200, box.y + 140], [box.x + 250, box.y + 120], [box.x + 300, box.y + 160], [box.x + 340, box.y + 140]]);
+  const dock = await workspace.locator('.ink-writing-bar').boundingBox(), y = Math.max(box.y + 240, dock.y + dock.height + 50);
+  await drag([[box.x + 200, y], [box.x + 250, y - 20], [box.x + 300, y + 20], [box.x + 340, y]]);
   const written = await snapshot();
   assert.equal(written.body[0].filter(e => e.type === 'freedraw').length, 1);
   assert.ok(written.body[0][0].points.length > 10);
@@ -92,9 +95,12 @@ try {
   await workspace.getByRole('searchbox', { name: '搜索', exact: true }).fill('函数');
   await waitFor(async () => await workspace.locator('.ink-search-hit').count() > 0, 'PDF search missing');
   await button('收起侧栏').click();
+  if (await button('展开笔盒').isVisible()) await button('展开笔盒').click();
   await button('摘录').click();
+  await workspace.locator('.ink-editor-pages.is-marquee').waitFor();
   const paper = await workspace.locator('.ink-paper').first().boundingBox();
-  await drag([[paper.x + 80, paper.y + 80], [paper.x + 410, paper.y + 230]]);
+  const captureDock = await workspace.locator('.ink-writing-bar').boundingBox(), captureY = Math.max(paper.y + 80, captureDock.y + captureDock.height + 30);
+  await drag([[paper.x + 80, captureY], [paper.x + 410, captureY + 150]]);
   await waitFor(async () => (await snapshot()).scratch.some(e => e.type === 'image'), 'Capture missing');
   await waitFor(visibleScratchInk, 'Captured text is not visible in the opened scratchpad');
   let captured = await snapshot();
@@ -109,6 +115,10 @@ try {
   await workspace.getByRole('button', { name: '调整草稿纸大小，用方向键调整' }).focus();
   await page.keyboard.press('ArrowLeft');
   assert.equal(Math.round((await workspace.locator('.ink-scratch').boundingBox()).width), Math.round(scratchBox.width + 16));
+  // Floating uses a shorter viewport than the docked panel. Fit before checking
+  // undo pixels so off-screen content is not mistaken for a rendering failure.
+  await button('草稿纸显示全部内容').click();
+  await waitFor(visibleScratchInk, 'Captured text is not visible after fitting the floating scratchpad');
   await button('清空草稿纸（可撤销）').click();
   await waitFor(async () => (await snapshot()).scratch.length === 0, 'Scratch clear failed');
   await button('撤销草稿纸').click();
@@ -118,6 +128,7 @@ try {
   await shot(page, 'workflow-pdf-scratch');
   checks.push('PDF selectable Chinese text and search, capture to scratch, editable independent copy to body, keyboard resize, independent scratch undo');
 
+  await button('收起草稿纸').click();
   const pdfPath = await exportItem('批注版 PDF', 'pdf');
   const exported = await PDFDocument.load(await readFile(join(vault, pdfPath)));
   assert.equal(exported.getPageCount(), copied.manifest.pages.length);
@@ -150,6 +161,7 @@ try {
   assert.equal((await snapshot()).manifest.regions[0].title, '项目思路');
   await button('收起侧栏').click();
   await resize(page, 820, 1000);
+  if (await button('展开笔盒').isVisible()) await button('展开笔盒').click();
   await button('更多工具').click();
   await workspace.getByRole('menuitemcheckbox', { name: '形状', exact: true }).click();
   assert.equal(await button('形状').getAttribute('aria-pressed'), 'true');

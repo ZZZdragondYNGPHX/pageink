@@ -8,9 +8,10 @@ function extent(e: Element): Rect {
 }
 export class InkSpatialIndex {
   private cells = new Map<string, Set<Element>>();
-  private membership = new Map<string, { element: Element; keys: string[] }>();
+  private membership = new Map<string, { element: Element; keys: string[]; index: Element['index'] }>();
   private largeElements = new Set<Element>();
   private embedded = new Map<string, Element>();
+  private queryCache?: { key: string; elements: Element[] };
   constructor(elements: readonly Element[], private cellSize = 512) { for (const e of elements) this.update(e); }
   reconcile(elements: readonly Element[]) {
     const present = new Set<string>();
@@ -29,19 +30,32 @@ export class InkSpatialIndex {
   update(e: Element) {
     if (!e.isDeleted && (e.type === 'embeddable' || e.type === 'iframe')) this.embedded.set(e.id, e); else this.embedded.delete(e.id);
     const before = this.membership.get(e.id);
+    const keys = e.isDeleted ? null : this.keys(extent(e));
+    // Most pen samples stay in the same cells. The candidate arrays hold live
+    // elements, so geometry changes need no re-sort until membership/order changes.
+    if (!e.isDeleted && before?.element === e && before.index === e.index &&
+      (keys ? keys.length === before.keys.length && keys.every((key, i) => key === before.keys[i]) : this.largeElements.has(e))) return;
+    this.queryCache = undefined;
     if (before) { this.largeElements.delete(before.element); for (const key of before.keys) { const cell = this.cells.get(key)!; cell.delete(before.element); if (!cell.size) this.cells.delete(key); } }
     if (e.isDeleted) { this.membership.delete(e.id); return; }
-    const keys = this.keys(extent(e));
     if (!keys) this.largeElements.add(e);
     else for (const key of keys) { let cell = this.cells.get(key); if (!cell) this.cells.set(key, cell = new Set()); cell.add(e); }
-    this.membership.set(e.id, { element: e, keys: keys ?? [] });
+    this.membership.set(e.id, { element: e, keys: keys ?? [], index: e.index });
   }
   query(rect: Rect): Element[] {
     const keys = this.keys(rect);
-    if (!keys) return [...this.membership.values()].map(item => item.element);
+    const key = keys?.join('|') ?? '*';
+    if (this.queryCache?.key === key) return this.queryCache.elements;
+    if (!keys) {
+      const elements = [...this.membership.values()].map(item => item.element);
+      this.queryCache = { key, elements };
+      return elements;
+    }
     const result = new Set(this.largeElements);
     for (const key of keys) for (const e of this.cells.get(key) ?? []) result.add(e);
-    return [...result].sort((a, b) => (a.index ?? '') < (b.index ?? '') ? -1 : (a.index ?? '') > (b.index ?? '') ? 1 : 0);
+    const elements = [...result].sort((a, b) => (a.index ?? '') < (b.index ?? '') ? -1 : (a.index ?? '') > (b.index ?? '') ? 1 : 0);
+    this.queryCache = { key, elements };
+    return elements;
   }
   embeds() { return [...this.embedded.values()]; }
 }

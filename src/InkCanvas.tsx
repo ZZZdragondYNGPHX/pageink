@@ -88,6 +88,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const [flash, setFlash] = useState<{ rect: Rect; token: string } | null>(null);
   const [marqueePath, setMarqueePath] = useState<ScenePoint[] | null>(null);
   const busy = useRef(false), timer = useRef<number>();
+  const flushedRevision = useRef<number>();
   const owner = kind === 'scratch' ? 'scratch' : 'body';
 
   // ---------- loading ----------
@@ -153,11 +154,19 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (!api || !ready.current || !scene.current) return;
     try {
       await session.acceptFiles(api.getFiles());
+      const revision = (api as InkApi).inkRevision();
+      if (revision === flushedRevision.current) return;
       session.changeMany(scene.current.partition(api.getSceneElementsIncludingDeleted()), record);
+      flushedRevision.current = revision;
     } catch (error) { latest.current.onError((error as Error).message); throw error; }
   }
   /** Records kernel normalisation (restore, re-indexing) without creating an undo step. */
-  function absorb() { if (api && scene.current) session.changeMany(scene.current.partition(api.getSceneElementsIncludingDeleted()), false); }
+  function absorb() {
+    if (api && scene.current) {
+      session.changeMany(scene.current.partition(api.getSceneElementsIncludingDeleted()), false);
+      flushedRevision.current = (api as InkApi).inkRevision();
+    }
+  }
   async function rebuild() {
     if (!api || !scene.current) return;
     const next = layoutPages(pages());
@@ -196,15 +205,20 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     };
     const unsubscribe = api.onChange(check); check();
     const fallback = window.setInterval(() => { check(); if (done) window.clearInterval(fallback); }, 300);
-    let frame = 0;
+    let active = true;
     const pointerUp = api.onPointerUp((_tool, _state, event) => {
       if (scribble.current?.id === event.pointerId) scribble.current.finished = true;
-      window.clearTimeout(timer.current); window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => { finishScribble(); window.clearTimeout(timer.current); session.setWriting(owner, false); void flush().catch(() => {}); });
+      window.clearTimeout(timer.current);
+      // The kernel finalises geometry after its pointer-up emitter. A microtask
+      // sees the completed stroke before the next input event can start another.
+      window.queueMicrotask(() => {
+        if (!active || api.getAppState().newElement) return;
+        finishScribble(); window.clearTimeout(timer.current); session.setWriting(owner, false); void flush().catch(() => {});
+      });
     });
     // The parent flushes before closing. Reading an already-unmounted engine here can return an
     // empty scene and must never be persisted as a deletion.
-    return () => { unsubscribe(); pointerUp(); window.clearInterval(fallback); window.clearTimeout(timer.current); window.cancelAnimationFrame(frame); session.setWriting(owner, false); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
+    return () => { active = false; unsubscribe(); pointerUp(); window.clearInterval(fallback); window.clearTimeout(timer.current); session.setWriting(owner, false); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
   }, [api, initial]);
 
   // ---------- tool ----------
@@ -265,8 +279,9 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const selectionFrame = useRef(0), lastSelection = useRef<unknown>(null), hadSelection = useRef(false);
   const onKernelChange = (_elements: readonly unknown[], appState: AppState) => {
     if (!ready.current) return;
+    window.clearTimeout(timer.current);
     if (!appState.editingTextElement && !appState.newElement && !appState.isResizing && !appState.isRotating && !appState.selectedElementsAreBeingDragged) {
-      window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void flush().catch(() => {}), 500);
+      timer.current = window.setTimeout(() => void flush().catch(() => {}), 500);
     }
     const any = Object.values(appState.selectedElementIds).some(Boolean);
     if (!any && !hadSelection.current && lastSelection.current === appState.selectedElementIds) return;
@@ -332,7 +347,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const gesture = useRef<{ fingers: number; started: number; travel: number; samples: { t: number; x: number; y: number }[] } | null>(null);
   const inertia = useRef(0);
   const penDown = useRef(false), erasing = useRef(false), lastErase = useRef<ScenePoint>();
-  const scribble = useRef<{ id: number; started: number; points: ScenePoint[]; zoom: number; finished: boolean; previous?: string } | null>(null);
+  const scribble = useRef<{ id: number; started: number; zoom: number; finished: boolean; previous?: string } | null>(null);
   const marquee = useRef<{ id: number; points: ScenePoint[] } | null>(null);
   const eraserCursor = useRef<HTMLDivElement>(null);
   const local = (event: React.PointerEvent): ScenePoint => { const box = root.current!.getBoundingClientRect(); return [event.clientX - box.left, event.clientY - box.top]; };
@@ -343,10 +358,17 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     const gesture = scribble.current;
     if (!api || !gesture?.finished) return;
     scribble.current = null;
-    const region = scribbleRegion(gesture.points, gesture.zoom, performance.now() - gesture.started);
-    if (!region) return;
     const elements = api.getSceneElements(), stroke = elements[elements.length - 1];
     if (!stroke || stroke.type !== 'freedraw' || stroke.id === gesture.previous) return;
+    // Recognise from the kernel's completed samples, including coalesced input.
+    // The derived 2px path avoids jitter and never changes the stored stroke.
+    const points: ScenePoint[] = [];
+    for (const [x, y] of stroke.points) {
+      const point: ScenePoint = [stroke.x + x, stroke.y + y], previous = points[points.length - 1];
+      if (!previous || Math.hypot(point[0] - previous[0], point[1] - previous[1]) * gesture.zoom >= 2) points.push(point);
+    }
+    const region = scribbleRegion(points, gesture.zoom, performance.now() - gesture.started);
+    if (!region) return;
     const candidates = (api as InkApi).inkQuery(polygonBounds(region));
     const patches = new Map<string, Element[]>();
     for (const e of candidates) if (e.id !== stroke.id && scribbleHits(e, region)) patches.set(e.id, []);
@@ -414,6 +436,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     window.cancelAnimationFrame(inertia.current);
     if (busy.current) { event.stopPropagation(); event.preventDefault(); return; }
+    if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); event.preventDefault(); return; }
     if (event.pointerType === 'touch' && !props.fingerDraws) {
       // Fingers navigate (Pencil writes); with finger drawing on, the kernel handles touch itself.
       event.stopPropagation(); event.preventDefault();
@@ -430,10 +453,11 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (!api || !drawsWith(event) || event.button > 0) return;
     if (props.readOnly) return;
     finishScribble();
+    window.clearTimeout(timer.current);
     session.setWriting(owner, true);
     if (tool.scribble && tool.kernel === 'freedraw' && !event.ctrlKey && !event.metaKey && !event.altKey) {
       const elements = api.getSceneElements();
-      scribble.current = { id: event.pointerId, started: performance.now(), points: [scenePoint(event)], zoom: api.getAppState().zoom.value, finished: false, previous: elements[elements.length - 1]?.id };
+      scribble.current = { id: event.pointerId, started: performance.now(), zoom: api.getAppState().zoom.value, finished: false, previous: elements[elements.length - 1]?.id };
     }
     if (tool.erase) {
       event.stopPropagation(); event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
@@ -447,12 +471,9 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     }
   };
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); return; }
     const stroke = scribble.current;
-    if (stroke?.id === event.pointerId && !stroke.finished) {
-      const p = scenePoint(event), previous = stroke.points[stroke.points.length - 1];
-      if (Math.hypot(p[0] - previous[0], p[1] - previous[1]) * stroke.zoom >= 2) stroke.points.push(p);
-      if (performance.now() - stroke.started > 2500) scribble.current = null;
-    }
+    if (stroke?.id === event.pointerId && !stroke.finished && performance.now() - stroke.started > 2500) scribble.current = null;
     if (tool.erase && event.pointerType !== 'touch' && eraserCursor.current) {
       const [x, y] = local(event), r = tool.erase.radius;
       eraserCursor.current.classList.add('is-visible');
@@ -497,6 +518,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     }
   };
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); return; }
     if (touches.current.has(event.pointerId)) return finishTouch(event);
     if (event.pointerType === 'pen') penDown.current = false;
     session.setWriting(owner, false);
@@ -514,6 +536,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     }
   };
   const onPointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); return; }
     if (touches.current.has(event.pointerId)) return finishTouch(event);
     penDown.current = false;
     scribble.current = null; session.setWriting(owner, false);

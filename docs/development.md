@@ -2,7 +2,7 @@
 
 ## 构建
 
-使用 Node.js 24 和 npm 11，在仓库根目录执行：
+环境：Node.js 24、npm 11。
 
 ```sh
 npm ci
@@ -12,55 +12,57 @@ npm test
 npm run build
 ```
 
-`dist/main.js`、`dist/manifest.json`、`dist/styles.css` 是插件安装文件。构建会替换 `dist/`，验证内核补丁，并生成完整第三方许可。`npm run dev` 监听源码变化；`npm run package` 生成安装包和源码包。
+安装文件位于 `dist/main.js`、`dist/manifest.json` 和 `dist/styles.css`。构建重新生成 `dist/`，校验内核补丁并收集第三方许可。`npm run dev` 监听源码；`npm run package` 构建并生成安装 ZIP、源码 ZIP 和校验和。
 
-## 源码结构
+## 模块
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/main.tsx`、`src/host.ts` | 插件注册、文件操作和宿主适配。 |
-| `src/Workspace.tsx`、`src/InkCanvas.tsx` | 绘写工作区、输入与编辑内核集成。 |
-| `src/session.ts`、`src/storage.ts`、`src/history.ts` | 保存、冲突处理、跨页历史与独立草稿纸历史。 |
-| `src/notes-host.tsx`、`src/Library.tsx`、`src/library-search*.ts` | 原生工作台集成、文件夹浏览、内容预览与搜索。 |
-| `src/mixed*.ts`、`src/cards*.ts` | 段落引用、笔迹绑定、卡片与来源备份。 |
-| `src/properties*.ts` | 属性验证、表单与并发保存。 |
-| `src/archive.ts`、`src/export*.ts`、`src/pdf.ts` | 完整备份、导出及 PDF 处理。 |
-| `scripts/kernel-patch.mjs` | 集中管理 Excalidraw 修改，详见[内核补丁](kernel-patches.md)。 |
+| `main.tsx`、`host.ts` | 插件注册、文件操作、宿主接口。 |
+| `Workspace.tsx`、`InkCanvas.tsx` | 工作区、编辑工具、输入与内核集成。 |
+| `ink-input.ts`、`ink-viewport.ts`、`spatial.ts` | 输入批处理、视口画布复用、空间查询。 |
+| `session.ts`、`storage.ts`、`history.ts` | 文档保存、冲突恢复、正文跨页与草稿纸独立历史。 |
+| `notes-host.tsx`、`Library.tsx`、`library-search*.ts` | 文件树集成、文件夹浏览、预览与搜索。 |
+| `mixed*.ts`、`cards*.ts` | 段落引用、笔迹绑定、卡片与来源快照。 |
+| `properties*.ts` | 属性表单、验证与并发更新。 |
+| `archive.ts`、`export*.ts`、`pdf.ts` | 完整备份、导出与 PDF 处理。 |
+| `scripts/kernel-patch.mjs` | Excalidraw 补丁，详见[内核补丁](kernel-patches.md)。 |
 
-文件树工具栏暂无公开扩展 API；`notes-host.tsx` 将 DOM 适配集中在 `mountExplorers`，卸载恢复原始按钮与事件，核心能力通过宿主命令、文件/编辑器菜单和原生标签页复用。文件夹浏览状态使用 `ItemView` 状态，绘写注册为原生文件视图。
+文件名相对于 `src/`，`scripts/` 除外。文件树 DOM 适配集中在 `notes-host.tsx` 的 `mountExplorers`；文件夹浏览使用 `ItemView`，绘写注册为原生文件视图。
 
-Markdown 正文与撤销由原生编辑器负责。绘写数据保存完整对象与采样，视口只影响显示；导出读取完整内容。段落和卡片使用稳定引用与不可变来源快照，恢复时另存可编辑原件。
+## 数据与集成
 
-`eslint.config.mjs` 使用 Obsidian 官方规则检查源码、清单与许可证；构建脚本、测试库和第三方源码不作为插件运行代码扫描。Excalidraw npm 包的 `@excalidraw/math` / `@excalidraw/utils` 类型映射到包内声明，避免 `skipLibCheck` 掩盖未解析的类型。内核扩展方法由 `kernel-api.ts` 声明。
+Markdown 正文和撤销由原生编辑器管理。绘写保存完整对象、坐标和压力；视口筛选只影响显示，导出读取完整场景。段落与卡片使用稳定引用和不可变来源快照，恢复时另存原件。
 
-PDF Worker 使用结构化消息传递字体与页面数据，图片 data URL 直接在本地解码。PDFKit 浏览器包中未使用的文件路径读取入口由 `scripts/pdf-browser.mjs` 集中拒绝，构建检查精确出现次数。资源来源、WASM 哈希和许可见 [PDF runtime assets](pdf-assets.md)。
+属性更新按键提交：Markdown 使用 `processFrontMatter`，绘写使用会话存储与冲突处理。
 
-属性更新只写入发生变化的键。Markdown 使用 `processFrontMatter`；绘写沿用已有保存和冲突处理，避免覆盖并发修改或重写笔迹。
+`kernel-api.ts` 声明内核扩展接口。Excalidraw 的 `@excalidraw/math` / `@excalidraw/utils` 类型映射至包内声明。`eslint.config.mjs` 使用 Obsidian 官方规则检查插件源码和清单。
 
-## 宿主测试
+PDF Worker 通过结构化消息接收字体与页面数据；图片在本地解码。`scripts/pdf-browser.mjs` 移除 PDFKit 浏览器包中的文件路径读取入口。资源与许可见 [PDF runtime assets](pdf-assets.md)。
 
-安装 Obsidian 后，在 Windows 设置 `OBSIDIAN_EXECUTABLE` 为程序绝对路径；Linux 设置 `OBSIDIAN_APPIMAGE`。然后按需串行运行：
+## 验证
 
-```sh
-node dev/ui-polish.mjs
-node dev/dock-workflows.mjs
-node dev/input-workflows.mjs
-node dev/sidebar-workflows.mjs
-node dev/writing-workflows.mjs
-node dev/library-workflows.mjs
-node dev/notes-workflows.mjs
-node dev/mixed-workflows.mjs
-node dev/cards-workflows.mjs
-node dev/workflows.mjs
-```
+单元测试覆盖几何、原始采样、历史、布局、空间索引和存储。宿主脚本在独立测试库与临时配置中运行，报告与截图输出至 `artifacts/`。
 
-脚本创建独立测试库与临时配置，报告和截图写入被 Git 忽略的 `artifacts/`。宿主脚本共用调试端口，不能同时运行；测试期间不要重建正在加载的插件。
+Windows 设置 `OBSIDIAN_EXECUTABLE`；Linux 设置 `OBSIDIAN_APPIMAGE`。宿主脚本共用调试端口，按改动选择并串行运行：
+
+| 范围 | 脚本 |
+| --- | --- |
+| 书写、擦除、输入、独立视口 | `dev/writing-workflows.mjs`、`dev/input-workflows.mjs` |
+| PDF、导出、备份、卡片 | `dev/workflows.mjs`、`dev/cards-workflows.mjs`、`dev/mixed-workflows.mjs` |
+| 文件夹、搜索、文字 | `dev/library-workflows.mjs`、`dev/notes-workflows.mjs` |
+| 布局与控件 | `dev/ui-polish.mjs`、`dev/dock-workflows.mjs`、`dev/sidebar-workflows.mjs` |
+| 性能 | `dev/performance-workflows.mjs optimized` |
+
+性能脚本覆盖 100–50,000 笔的分布场景、10,000 笔密集页面、约 10 秒每帧四个采样的模拟笔输入，以及混合形状、撤销重做和保存重开。报告包含帧间隔、超过 50 ms 的长任务、CPU 热点、JS 堆使用和几何哈希。
+
+`PAGEINK_STRESS_QUICK=1` 将场景缩减为 1,000 笔分布页面和 10,000 笔密集页面。Xvfb 测试设置 `DISPLAY` 与 `PAGEINK_VIRTUAL_DISPLAY=1`。帧间隔和输入回调时间衡量浏览器调度；设备到显示的延迟需实机测量。
 
 ## 发布
 
-1. 同步更新 `manifest.json`、`package.json`、`package-lock.json` 和 `versions.json`，在 `CHANGELOG.md` 描述用户可见变化。
-2. 完成相关检查，执行 `npm run package`，核对安装文件、许可与版本。
-3. 推送源码，创建与清单版本完全相同的 Git 标签和 GitHub Release。
-4. 单独上传 `main.js`、`manifest.json`、`styles.css`，并附安装 ZIP 与校验和。
+1. 更新 `manifest.json`、`package.json`、`package-lock.json`、`versions.json` 和 `CHANGELOG.md`。
+2. 完成相关验证，运行 `npm run package`。
+3. 推送提交，创建与清单版本相同的 Git 标签和 GitHub Release。
+4. 上传 `main.js`、`manifest.json`、`styles.css`、安装 ZIP、源码 ZIP 和该版本的 `SHA256SUMS.txt`。
 
-插件版本与扫描结果见 [Obsidian Community](https://community.obsidian.md/plugins/pageink)。新版 GitHub Release 由平台检测并同步；出现检测问题时先读取具体报告、修复后发布新版本，不要通过重写旧标签重复提交。是否可从目录安装，以平台的新检测结果为准。
+[Obsidian Community](https://community.obsidian.md/plugins/pageink) 自动检测 GitHub Release。目录中的版本、扫描报告和安装状态由平台发布流程更新。

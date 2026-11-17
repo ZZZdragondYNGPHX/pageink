@@ -1,64 +1,51 @@
 # 页墨手记 PageInk
 
-**在 Obsidian 中写字、手写和整理想法。**
-
-在 Obsidian 中写文字、逐页绘写、展开无边画布，也能批注 PDF，用独立草稿纸演算和摘录。
-
-Write Markdown notes, annotate PDFs, and draw on paginated pages or an infinite canvas, with a separate scratchpad. The interface is in Simplified Chinese.
+Obsidian 插件，支持 Markdown、分页手写、无边画布、PDF 批注和独立草稿纸。界面使用简体中文。
 
 ![新建文字笔记、手写笔记与无边画布](docs/images/new-note.png)
 
-## 三种记录方式
+## 功能
 
-| 类型 | 用途 |
+| 类型 | 功能 |
 | --- | --- |
-| **文字笔记** | 普通 Markdown `.md` 文件，使用 Obsidian 原生编辑器。 |
-| **手写笔记** | 分页书写和绘画，支持翻页、纸张模板与页边距。 |
-| **无边画布** | 无边画布，用文字、笔迹和卡片展开想法。 |
+| 文字笔记 | 原生 Markdown 编辑、属性和手写区域引用。 |
+| 手写笔记 | 分页绘写、纸张模板、页边距、区域书签。 |
+| 无边画布 | 文字、笔迹和来源卡片，支持分组与连线。 |
+| PDF 批注 | 书写、文字搜索、原文复制和摘录。 |
+| 草稿纸 | 与正文独立的内容、视口和撤销历史，支持停靠与浮动。 |
 
-- **PDF 批注**：在教材和文档上书写，摘录内容到草稿纸。
-- **文字与手写互通**：在文字笔记中引用手写区域，或把文字段落放进手写笔记和无边画布。
-- **文件夹浏览**：在原生文件树新建，按文件夹查看内容预览、搜索与分屏阅读。
-- **导出与备份**：导出 PDF、PNG，或保存可恢复编辑的完整备份。
+文件夹浏览提供内容预览和搜索。绘写可导出 PDF、PNG 或完整可编辑备份。
 
 ## 安装
 
-需要 **Obsidian 1.12.7 或更高版本**。桌面已在 Windows 和 Linux 验证；移动端尚未完成真机验证。
+需要 Obsidian **1.12.7+**。在「设置 → 第三方插件 → 浏览」中搜索 **PageInk**，安装并启用。更新使用第三方插件设置中的「检查更新」。
 
-在「设置 → 第三方插件 → 浏览」中搜索 **PageInk**，安装并启用。已有用户可在第三方插件设置中检查更新。也可从[官方插件目录](https://community.obsidian.md/plugins/pageink)打开安装页。
+手动安装：从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载安装 ZIP，将 `pageink` 文件夹解压至笔记库的 `.obsidian/plugins/`，重新启用插件。也可下载 `main.js`、`manifest.json` 和 `styles.css`，放入 `.obsidian/plugins/pageink/`。
 
-手动安装：从 [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) 下载 `pageink-0.1.10.zip`，将其中的 `pageink` 文件夹解压至笔记库的 `.obsidian/plugins/`，重启并启用。也可将同一版本的 `main.js`、`manifest.json` 和 `styles.css` 放入 `.obsidian/plugins/pageink/`。
+## 使用
 
-## 开始使用
+在文件列表的新建菜单或文件夹右键菜单中选择笔记类型。「纸张设置与导入」设置名称、纸张，或导入 PDF 和备份。「以缩略图浏览」打开当前文件夹的内容预览。
 
-在文件列表顶部或文件夹右键菜单中选择新建类型即可开始。「以缩略图浏览」查看当前文件夹的内容预览；「纸张设置与导入」可选择名称、纸张、PDF 或备份文件。书写页沿用原生标签页，草稿纸默认停靠，支持边看边写。
+文字笔记由 Obsidian 保存。绘写自动保存到库内；「导出 → 可编辑备份」生成包含笔迹、草稿纸和附件的 `.inkpack`。
 
-笔记自动保存在本地。绘写文档的完整备份请使用「导出 → 可编辑备份」；单独复制 `.inknote` 文件不包含笔迹和附件。多设备使用时，等待同步工具完成传输后再切换设备。
+[使用指南](docs/guide.md) · [开发指南](docs/development.md) · [更新记录](CHANGELOG.md) · [插件目录](https://community.obsidian.md/plugins/pageink) · [问题反馈](https://github.com/ZZZdragondYNGPHX/pageink/issues)
 
-[使用指南](docs/guide.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/ZZZdragondYNGPHX/pageink/issues)
+## 运行与数据
 
-## 离线与隐私
+PageInk 离线运行，无账号、广告或遥测。字体与 PDF 资源内嵌在约 46 MB 的主脚本中。Obsidian Sync Standard 的单文件上限为 5 MB，使用该方案时需在各设备分别安装插件。
 
-PageInk 免费、开源，无账号要求、无广告、无遥测，不发起运行时网络请求。字体、PDF 处理和解码资源随插件提供，因此主脚本约 46 MB。
-
-内嵌 WASM 解码器的来源、SHA-256 和许可见 [PDF runtime assets](docs/pdf-assets.md)。所有解码器来自固定版本的 PDF.js 包，运行时只处理本地内容。
-
-主脚本超过 Obsidian Sync Standard 的 5 MB 单文件同步上限，使用该方案时请在每台设备分别安装插件。
-
-仅在你主动选择导入 PDF、图片或备份文件时读取所选库外文件，并将所需内容复制入库。
+绘写文档由 `.inknote` 入口、`Drawing Resources/` 和关联 PDF 组成。迁移使用 `.inkpack` 或同步整个库；多设备编辑需等待资源传输完成。保存周期、冲突恢复及设备支持见[使用指南](docs/guide.md)。
 
 ## Installation and usage
 
-PageInk requires Obsidian 1.12.7 or later. The interface is currently in Simplified Chinese. Desktop workflows have been tested on Windows and Linux; mobile devices have not been verified yet.
+PageInk supports Markdown notes, paginated handwriting, an infinite canvas, PDF annotations, and a separate scratchpad. It requires Obsidian **1.12.7+** and uses a Simplified Chinese interface.
 
-1. Search for **PageInk** in **Settings → Community plugins → Browse**, then install and enable it. Existing users can check for updates in Community plugins. For manual installation, download the ZIP from [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) and extract `pageink` into `.obsidian/plugins/`.
-2. Use the New note menu in the file explorer: **文字笔记** for Markdown, **手写笔记** for paginated drawing, or **无边画布** for an infinite canvas. **纸张设置与导入** imports a PDF or backup.
-3. Notes save locally. To back up a drawing, choose **导出 → 可编辑备份**; copying an `.inknote` file alone does not include its ink and attachments. PDF and PNG exports are also available.
+1. Search for **PageInk** in **Settings → Community plugins → Browse**, then install and enable it. For manual installation, extract the ZIP from [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) into `.obsidian/plugins/`.
+2. Use the file explorer's New note menu: **文字笔记** creates Markdown, **手写笔记** creates paginated handwriting, and **无边画布** creates an infinite canvas. **纸张设置与导入** imports PDFs and backups.
+3. Choose **导出 → 可编辑备份** for a complete `.inkpack` backup. Drawing data includes the `.inknote` file, vault resources, and the source PDF.
 
-PageInk works offline without an account, ads, or telemetry. Fonts and PDF resources are bundled. The main script exceeds the 5 MB file limit of Obsidian Sync Standard, so install the plugin separately on each device when using that plan. Files outside the vault are read only when you select them for import. Original code is MIT-licensed; bundled dependencies retain their own licenses.
+PageInk runs offline with bundled fonts and PDF resources. Its approximately 46 MB main script exceeds Obsidian Sync Standard's 5 MB file limit; install it separately on each device with that plan.
 
-## 开发与许可
+## 许可
 
-构建和源码说明见[开发指南](docs/development.md)。
-
-自有代码采用 [MIT 许可证](LICENSE)。绘图内核使用 Excalidraw，图标使用 Lucide；第三方代码、字体及资源保留各自许可，详见[第三方声明](THIRD_PARTY_NOTICES.md)。
+自有代码采用 [MIT](LICENSE)。Excalidraw、Lucide、字体及其他依赖的许可见[第三方声明](THIRD_PARTY_NOTICES.md)，PDF 解码器来源与哈希见 [PDF runtime assets](docs/pdf-assets.md)。

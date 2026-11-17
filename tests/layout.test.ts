@@ -67,6 +67,21 @@ test('scene merges pages by fractional index so stored order stays valid', () =>
   const built = scene.build(id => id === a.id ? [el('a-old', 0, 0, { index: 'a0' }), el('a-new', 0, 0, { index: 'a3' })] : [el('b', 0, 0, { index: 'a1' })]);
   assert.deepEqual(built.map(e => e.id), ['a-old', 'b', 'a-new']);
 });
+test('single-surface partition retains off-paper ink, reuses snapshots and follows in-place edits and removals', () => {
+  const page = newPage(), scene = new PageScene(layoutPages([page]));
+  const ink = el('ink', -100, 2000, { type: 'freedraw', points: [[0, 0], [10, 5]], pressures: [.5, .5] });
+  const built = scene.build(() => [ink]), first = scene.partition(built).get(page.id)!;
+  assert.deepEqual([first[0].x, first[0].y], [-100, 2000]);
+  assert.equal(scene.partition(built).get(page.id)![0], first[0]);
+  Object.assign(built[0], { version: 2, y: 3000 });
+  const changed = scene.partition(built).get(page.id)!;
+  assert.equal(changed[0].y, 3000); assert.equal(first[0].y, 2000);
+  assert.equal((changed[0] as any).points, (first[0] as any).points);
+  assert.equal(scene.pageOf('ink'), page.id);
+  assert.deepEqual(scene.partition([]).get(page.id), []);
+  assert.equal(scene.pageOf('ink'), undefined);
+  scene.partition(built); assert.equal(scene.pageOf('ink'), page.id);
+});
 
 test('moving ink between pages is one undo step that restores both pages', () => {
   const session = new Session(new DocumentStore({} as FileIO, 'x', newManifest('Test', 'pages')));

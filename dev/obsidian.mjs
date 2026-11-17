@@ -54,7 +54,14 @@ export async function launch({ port = 9333, width = 1400, height = 900, theme, f
   await prepareVault({ theme, fresh, files });
   const profile = await mkdtemp(join(tmpdir(), 'pageink-obsidian-profile-'));
   await writeFile(join(profile, 'obsidian.json'), JSON.stringify({ updateDisabled: true, vaults: { '0123456789abcdef': { path: vault, ts: Date.now(), open: true } } }));
-  const child = spawn(appImage, [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, `--window-size=${width},${height}`], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, APPIMAGE_SILENT_INSTALL: '1' } });
+  const hostEnvironment = { ...process.env, APPIMAGE_SILENT_INSTALL: '1' };
+  const hostArguments = [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, `--window-size=${width},${height}`];
+  if (process.env.PAGEINK_VIRTUAL_DISPLAY) {
+    // DISPLAY alone does not override Electron's automatic Wayland selection.
+    delete hostEnvironment.WAYLAND_DISPLAY;
+    hostArguments.push('--ozone-platform=x11');
+  }
+  const child = spawn(appImage, hostArguments, { detached: true, windowsHide: true, stdio: 'ignore', env: hostEnvironment });
   child.unref();
   let browser;
   for (let i = 0; i < 120 && !browser; i++) {

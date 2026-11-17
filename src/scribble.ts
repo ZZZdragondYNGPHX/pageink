@@ -3,9 +3,9 @@ import { polygonBounds, polygonContains, type ScenePoint } from './geometry';
 
 /** Recognise a deliberate, fast back-and-forth stroke. Operates on a derived copy only. */
 export function scribbleRegion(points: readonly ScenePoint[], zoom: number, elapsed: number): ScenePoint[] | null {
-  if (points.length < 10 || elapsed > 2500 || elapsed < 80) return null;
+  if (points.length < 4 || elapsed > 2500 || elapsed < 40) return null;
   const box = polygonBounds(points);
-  if (Math.max(box.width, box.height) * zoom < 24 || Math.max(box.width, box.height) * zoom > 900) return null;
+  if (Math.max(box.width, box.height) * zoom < 18 || Math.max(box.width, box.height) * zoom > 900) return null;
   // Principal axis makes the gesture work at any writing angle.
   let xx = 0, xy = 0, yy = 0;
   const cx = points.reduce((sum, p) => sum + p[0], 0) / points.length;
@@ -16,7 +16,7 @@ export function scribbleRegion(points: readonly ScenePoint[], zoom: number, elap
   const across = points.map(([x, y]) => -(x - cx) * sin + (y - cy) * cos);
   const range = (values: number[]) => { let lo = Infinity, hi = -Infinity; for (const v of values) { lo = Math.min(lo, v); hi = Math.max(hi, v); } return hi - lo; };
   const span = range(axis), height = range(across);
-  if (height * zoom < 6 || height > span * .85) return null;
+  if (height * zoom < 3 || height > span * .85) return null;
   let direction = 0, extreme = axis[0], start = axis[0], runs = 0, length = 0, axial = 0;
   for (let i = 1; i < axis.length; i++) {
     length += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
@@ -29,7 +29,9 @@ export function scribbleRegion(points: readonly ScenePoint[], zoom: number, elap
     }
   }
   if (Math.abs(extreme - start) >= span * .55) runs++;
-  if (runs < 5 || axial < span * 4 || axial / length < .82) return null;
+  // Short gestures need a narrow envelope so a normal Z remains handwriting.
+  // Longer scribbles can spread further across the target.
+  if (runs < 3 || axial < span * 2 || axial / length < .82 || (runs === 3 && height > span * .35)) return null;
   // A convex envelope avoids erasing disconnected corners of an axis-aligned box.
   const sorted = points.map(p => [...p] as ScenePoint).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const cross = (a: ScenePoint, b: ScenePoint, c: ScenePoint) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);

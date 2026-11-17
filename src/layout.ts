@@ -91,6 +91,22 @@ export class PageScene {
 
   /** Page-local, non-deleted elements per page, in scene order. Every page gets an entry. */
   partition(elements: readonly Element[]): Map<string, Element[]> {
+    // A single page, canvas or scratch surface needs no group/binding ownership pass.
+    // Retain the same local snapshots for unchanged objects, including off-paper ink.
+    if (this.layout.placements.length === 1) {
+      const placement = this.layout.placements[0], live: Element[] = [], present = new Set<string>();
+      for (const e of elements) {
+        if (e.isDeleted) continue;
+        present.add(e.id);
+        const cached = this.locals.get(e);
+        if (!cached || cached.version !== e.version || cached.x !== placement.x || cached.y !== placement.y || this.owner.get(e.id) !== placement.page.id) {
+          this.owner.set(e.id, placement.page.id); this.geometry.set(e.id, signature(e));
+        }
+        live.push(this.local(e, placement));
+      }
+      for (const id of this.owner.keys()) if (!present.has(id)) { this.owner.delete(id); this.geometry.delete(id); }
+      return new Map([[placement.page.id, live]]);
+    }
     const live = elements.filter(e => !e.isDeleted);
     const byId = new Map(live.map(e => [e.id, e]));
     const moved = (e: Element) => !this.owner.has(e.id) || this.geometry.get(e.id) !== signature(e) || !this.layout.byId.has(this.owner.get(e.id)!);

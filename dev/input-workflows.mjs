@@ -15,6 +15,7 @@ const ready = async () => {
 };
 const cdp = await page.context().newCDPSession(page);
 const pen = async (locator, dx = 0, dy = 0) => {
+  await locator.click({ trial: true });
   const box = await locator.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2;
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'pen' });
   if (dx || dy) await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x + dx, y: y + dy, button: 'left', buttons: 1, pointerType: 'pen' });
