@@ -68,12 +68,12 @@ var _renderStaticScene = (config) => {
     key: JSON.stringify([canvas.width, canvas.height, scale, state.theme, state.viewBackgroundColor, state.gridSize, state.gridStep, renderConfig.renderGrid, state.frameRendering]),
     zoom: state.zoom.value, scrollX: state.scrollX, scrollY: state.scrollY} : null;
   const canPreview = supportsPreview && !state.newElement && !state.editingTextElement;
-  if (canPreview && deferInkViewport(canvas, viewport, () => _renderStaticScene(config))) {
+  if (canPreview && shouldDeferInkViewport(canvas, viewport, elements.length, state.width, state.height) && deferInkViewport(canvas, viewport, () => _renderStaticScene(config), 50)) {
     const pending = inkStaticRaster.get(canvas);
     if (pending) { cancelAnimationFrame(pending.frame); pending.frame = 0; }
     return;
   }
-  if (!canPreview && canvas) discardInkViewport(canvas);
+  if (canvas) { if (canPreview) clearInkViewport(canvas); else discardInkViewport(canvas); }
   const plainInk = e => e.type === "freedraw" && !e.frameId && !e.link && !e.boundElements?.length;
   // Text/images can finish loading without a geometry mutation. Always let the
   // upstream renderer refresh them; viewport-only previews remain safe.
@@ -83,7 +83,9 @@ var _renderStaticScene = (config) => {
   const simple = eligible && elements.every(plainInk);
   if (!eligible) {
     if (canvas) { cancelAnimationFrame(inkStaticRaster.get(canvas)?.frame); inkStaticRaster.delete(canvas); inkRasterStatus(canvas, false); }
+    const renderStart = performance.now();
     _renderStaticSceneUncached({...config, renderConfig: {...renderConfig, inkDirectFreeDraw: true}});
+    if (canvas) recordInkRenderCost(canvas, performance.now() - renderStart);
     if (canPreview) commitInkViewport(canvas, viewport);
     return;
   }
@@ -119,7 +121,10 @@ var _renderStaticScene = (config) => {
       if (entry.cursor < elements.length) entry.frame = requestAnimationFrame(draw);
       else { commitInkViewport(canvas, viewport); inkRasterStatus(canvas, false); }
     };
-    entry.frame = requestAnimationFrame(draw);
+    // Paint the first chunk immediately and stage the viewport so scrolling during the
+    // initial progressive pass reuses the partial bitmap via transform instead of clearing it repeatedly.
+    draw();
+    if (entry.cursor < elements.length && canPreview) stageInkViewport(canvas, viewport);
     return;
   }
   if (previous) cancelAnimationFrame(previous.frame);
@@ -132,7 +137,11 @@ var _renderStaticScene = (config) => {
       renderElement(elements[i], config.elementsMap, config.allElementsMap, config.rc, context, {...renderConfig, inkDirectFreeDraw: true}, state);
       context.restore();
     }
-  } else _renderStaticSceneUncached({...config, renderConfig: {...renderConfig, inkDirectFreeDraw: true}});
+  } else {
+    const renderStart = performance.now();
+    _renderStaticSceneUncached({...config, renderConfig: {...renderConfig, inkDirectFreeDraw: true}});
+    recordInkRenderCost(canvas, performance.now() - renderStart);
+  }
   inkStaticRaster.set(canvas, {key, ids: elements.map(e => e.id), versions: elements.map(e => e.versionNonce)});
   commitInkViewport(canvas, viewport);
   inkRasterStatus(canvas, false);
@@ -141,6 +150,15 @@ var _renderStaticScene = (config) => {
       const freeDrawRender = '    case "freedraw": {\n      ShapeCache.generateElementShape(element, null);\n      if (renderConfig.isExporting) {';
       if (contents.split(freeDrawRender).length !== 2) throw Error('Upstream direct overview ink patch mismatch');
       contents = contents.replace(freeDrawRender, freeDrawRender.replace('if (renderConfig.isExporting)', 'if (renderConfig.isExporting || renderConfig.inkDirectFreeDraw || appState.newElement?.id === element.id)'));
+      const lineDirectRender = '    case "line":\n    case "arrow":\n    case "image":\n    case "text":\n    case "iframe":\n    case "embeddable": {\n      ShapeCache.generateElementShape(element, renderConfig);\n      if (renderConfig.isExporting) {';
+      if (contents.split(lineDirectRender).length !== 2) throw Error('Upstream highlighter line direct render patch mismatch');
+      contents = contents.replace(lineDirectRender, lineDirectRender.replace('if (renderConfig.isExporting)', 'if (renderConfig.isExporting || (renderConfig.inkDirectFreeDraw && element.type === "line" && element.customData?.inkKind === "highlighter"))'));
+      const drawFree = '    case "freedraw": {\n      context.save();\n      context.fillStyle = element.strokeColor;';
+      if (contents.split(drawFree).length !== 2) throw Error('Upstream highlighter multiply freedraw patch mismatch');
+      contents = contents.replace(drawFree, '    case "freedraw": {\n      context.save();\n      if (appState?.theme !== "dark" && (element.customData?.inkKind === "highlighter" || (element.customData?.inkKind !== "pen" && element.opacity <= 50))) context.globalCompositeOperation = "multiply";\n      context.fillStyle = element.strokeColor;');
+      const drawLine = '    case "arrow":\n    case "line": {\n      context.lineJoin = "round";\n      context.lineCap = "round";\n      ShapeCache.get(element).forEach((shape) => {\n        rc.draw(shape);\n      });\n      break;\n    }';
+      if (contents.split(drawLine).length !== 2) throw Error('Upstream highlighter multiply line patch mismatch');
+      contents = contents.replace(drawLine, '    case "arrow":\n    case "line": {\n      const hiMul = appState?.theme !== "dark" && element.type === "line" && element.customData?.inkKind === "highlighter";\n      if (hiMul) { context.save(); context.globalCompositeOperation = "multiply"; }\n      context.lineJoin = "round";\n      context.lineCap = "round";\n      ShapeCache.get(element).forEach((shape) => {\n        rc.draw(shape);\n      });\n      if (hiMul) context.restore();\n      break;\n    }');
       const invalidateRaster = '  elementWithCanvasCache.delete(element);';
       if (contents.split(invalidateRaster).length !== 2) throw Error('Upstream raster invalidation patch mismatch');
       contents = contents.replace(invalidateRaster, '  releaseInkElementCanvas(element);');
@@ -169,7 +187,7 @@ function releaseInkElementCanvas(element) {
       contents = `import { inkAssetUrl, trackInkFontFace } from ${JSON.stringify(resolve('src/kernel-assets.ts'))};\n` + contents;
       contents = `import { resetInkScene, updateInkElement } from ${JSON.stringify(resolve('src/spatial.ts'))};\n` + contents;
       contents = `import { resetInkJournal, recordInkMutation, inkSnapshotChanges, inkSceneRevision } from ${JSON.stringify(resolve('src/kernel-journal.ts'))};\n` + contents;
-      contents = `import { discardInkViewport, commitInkViewport, deferInkViewport } from ${JSON.stringify(resolve('src/ink-viewport.ts'))};\n` + contents;
+      contents = `import { discardInkViewport, clearInkViewport, commitInkViewport, stageInkViewport, deferInkViewport, shouldDeferInkViewport, recordInkRenderCost } from ${JSON.stringify(resolve('src/ink-viewport.ts'))};\n` + contents;
       const from = 'var getFontFamilyString = ({\n  fontFamily\n}) => {';
       if (contents.split(from).length !== 2) throw Error('Upstream font family patch mismatch');
       contents = contents.replace(from, from + '\n  if (fontFamily === 2) return "Ink Notebook Sans";');
@@ -230,21 +248,40 @@ function releaseInkElementCanvas(element) {
 `);
       const inkErase = `
   inkErase(patches) {
-    const inserted = [], next = [];
-    for (const element of this.elements) {
+    const inserted = [], next = [], nonDeleted = [];
+    let needsGlobalReindex = false;
+    const prevElements = this.elements;
+    for (let i = 0; i < prevElements.length; i++) {
+      const element = prevElements[i];
       const pieces = patches.get(element.id);
-      if (!pieces) { next.push(element); continue; }
+      if (!pieces) {
+        next.push(element);
+        if (!element.isDeleted) nonDeleted.push(element);
+        continue;
+      }
       mutateElement(element, { isDeleted: true }, false);
       this.nonDeletedElementsMap.delete(element.id);
       next.push(element);
-      for (const piece of pieces) {
-        next.push(piece); inserted.push(piece);
-        this.elementsMap.set(piece.id, piece); this.nonDeletedElementsMap.set(piece.id, piece);
-        _Scene.mapElementToScene(piece, this); updateInkElement(this, piece); recordInkMutation(this, piece);
+      if (pieces.length) {
+        let keys = null;
+        if (!needsGlobalReindex && element.index) {
+          const hasNext = i + 1 < prevElements.length;
+          const upper = hasNext ? prevElements[i + 1].index : null;
+          if (!hasNext || (upper && element.index < upper)) {
+            try { keys = generateNKeysBetween(element.index, upper, pieces.length); } catch { keys = null; }
+          }
+        }
+        if (!keys) needsGlobalReindex = true;
+        for (let k = 0; k < pieces.length; k++) {
+          const piece = keys ? { ...pieces[k], index: keys[k] } : pieces[k];
+          next.push(piece); nonDeleted.push(piece); inserted.push(piece);
+          this.elementsMap.set(piece.id, piece); this.nonDeletedElementsMap.set(piece.id, piece);
+          _Scene.mapElementToScene(piece, this); updateInkElement(this, piece); recordInkMutation(this, piece);
+        }
       }
     }
-    syncMovedIndices(next, arrayToMap(inserted));
-    this.elements = next; this.nonDeletedElements = next.filter(element => !element.isDeleted);
+    if (needsGlobalReindex && inserted.length) syncMovedIndices(next, arrayToMap(inserted));
+    this.elements = next; this.nonDeletedElements = nonDeleted;
     this.triggerUpdate();
   }
 `;
@@ -269,7 +306,7 @@ function releaseInkElementCanvas(element) {
       contents = `import { queryInkScene, InkRenderMap, getInkEmbeds } from ${JSON.stringify(resolve('src/spatial.ts'))};\n` + contents;
       contents = `import { inkSceneRevision } from ${JSON.stringify(resolve('src/kernel-journal.ts'))};\n` + contents;
       contents = 'import { releaseInkStaticScene } from "./chunk-4FTI6OG3.js";\n' + contents;
-      contents = `import { preserveInkSamples, inkPointerSamples } from ${JSON.stringify(resolve('src/ink-input.ts'))};\n` + contents;
+      contents = `import { preserveInkSamples, inkPointerSamples, stabilizeInkPoint, stabilizedRawPoints } from ${JSON.stringify(resolve('src/ink-input.ts'))};\n` + contents;
       // Safari pinch events must only reach the canvas where the gesture started.
       for (const gesture of ['gesturestart', 'gesturechange', 'gestureend']) {
         const listener = `        document,\n        "${gesture}"`;
@@ -311,9 +348,10 @@ function releaseInkElementCanvas(element) {
         ['hitElement(x, y, element, considerBoundingBox = true) {', 'hitElement(x, y, element, considerBoundingBox = true) {\n    if (element.type === "freedraw" && !inkStrokeHitPossible(element, x, y, this.getElementHitThreshold())) return false;'],
         ['const elements = (includeBoundTextElement && includeLockedElements ? this.scene.getNonDeletedElements() : this.scene.getNonDeletedElements().filter(', 'const hitPad = this.getElementHitThreshold();\n    const candidates = queryInkScene(this.scene, { x: x - hitPad, y: y - hitPad, width: hitPad * 2, height: hitPad * 2 });\n    const elements = (includeBoundTextElement && includeLockedElements ? candidates : candidates.filter('],
         ['const simulatePressure = event.pressure === 0.5;', 'const simulatePressure = !inkFixedPressure(event) && event.pointerType !== "pen" && event.pressure === 0.5;'],
-        ['pressures: simulatePressure ? [] : [event.pressure]', 'pressures: simulatePressure ? [] : [inkSamplePressure(event)], customData: { inkFixedWidth: inkFixedPressure(event) }'],
+        ['pressures: simulatePressure ? [] : [event.pressure]', 'pressures: simulatePressure ? [] : [inkSamplePressure(event)], customData: { inkFixedWidth: inkFixedPressure(event), ...(inkToolKind(event) ? { inkKind: inkToolKind(event) } : {}) }'],
         ['[...newElement2.pressures, event.pressure]', '[...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : event.pressure]'],
         ['[...newElement2.pressures, childEvent.pressure]', '[...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure]'],
+        ['        let dx = pointerCoords.x - newElement2.x;\n        let dy = pointerCoords.y - newElement2.y;\n        if (dx === points[0][0] && dy === points[0][1]) {\n          dy += 1e-4;\n          dx += 1e-4;\n        }\n        const pressures = newElement2.simulatePressure ? [] : [...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure];\n        mutateElement(newElement2, {\n          points: [...points, pointFrom(dx, dy)],\n          pressures,\n          lastCommittedPoint: pointFrom(dx, dy)\n        });', '        const rawEndDx = pointerCoords.x - newElement2.x;\n        const rawEndDy = pointerCoords.y - newElement2.y;\n        let dx = rawEndDx;\n        let dy = rawEndDy;\n        if (dx === points[0][0] && dy === points[0][1]) {\n          dy += 1e-4;\n          dx += 1e-4;\n        }\n        const pressures = newElement2.simulatePressure ? [] : [...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure];\n        const stabEnd = Number(this.excalidrawContainerRef.current?.closest?.(".ink-editor")?.dataset.stabilize || 0);\n        const prevRaw = newElement2.customData?.inkRawPoints ?? ((stabEnd === 1 || stabEnd === 2) ? [[points[0][0], points[0][1]]] : null);\n        mutateElement(newElement2, {\n          points: [...points, pointFrom(dx, dy)],\n          pressures,\n          lastCommittedPoint: pointFrom(dx, dy),\n          ...(prevRaw ? { customData: { ...newElement2.customData, inkRawPoints: [...prevRaw, [rawEndDx, rawEndDy]] } } : {})\n        });'],
         ['for (const element of elementsMap.values()) {\n          if (isElementInViewport(', 'for (const element of queryInkScene(this.scene, { x: -scrollX, y: -scrollY, width: width / zoom.value, height: height / zoom.value })) {\n          if (elementsMap.has(element.id) && isElementInViewport('],
         ['const elementsMap = getRenderableElements({\n            elements,\n            editingTextElement,\n            newElementId,\n            pendingImageElementId\n          });', 'const elementsMap = new InkRenderMap(this.scene.getNonDeletedElementsMap(), [editingTextElement?.id, newElementId, pendingImageElementId]);'],
       ];
@@ -346,21 +384,26 @@ function releaseInkElementCanvas(element) {
       contents = contents.replace(freeMove, `        if (newElement2.type === "freedraw") {
           const points = [...newElement2.points];
           const pressures = newElement2.simulatePressure ? newElement2.pressures : [...newElement2.pressures];
+          const stabilize = Number(this.excalidrawContainerRef.current?.closest?.(".ink-editor")?.dataset.stabilize || 0);
+          const stabilizeLevel = stabilize === 1 || stabilize === 2 ? stabilize : 0;
           for (const sample of inkPointerSamples(event)) {
             const coords = viewportCoordsToSceneCoords(sample, this.state);
-            const dx = coords.x - newElement2.x, dy = coords.y - newElement2.y;
+            const rawDx = coords.x - newElement2.x, rawDy = coords.y - newElement2.y;
+            const [dx, dy] = stabilizeInkPoint(newElement2, stabilizeLevel, rawDx, rawDy, points[0]?.[0] ?? 0, points[0]?.[1] ?? 0);
             const pressure = newElement2.customData?.inkFixedWidth ? 0.5 : sample.pressure;
             const last = points[points.length - 1];
             if (last && last[0] === dx && last[1] === dy && (newElement2.simulatePressure || pressures[pressures.length - 1] === pressure)) continue;
             points.push(pointFrom(dx, dy));
             if (!newElement2.simulatePressure) pressures.push(pressure);
           }
-          if (points.length !== newElement2.points.length) {
-            mutateElement(newElement2, {points, pressures}, false);
+          const rawPoints = stabilizeLevel > 0 ? stabilizedRawPoints(newElement2) : undefined;
+          const rawChanged = !!(rawPoints && rawPoints.length !== (newElement2.customData?.inkRawPoints?.length ?? 0));
+          if (points.length !== newElement2.points.length || rawChanged) {
+            mutateElement(newElement2, {points, pressures, ...(rawPoints ? { customData: { ...newElement2.customData, inkRawPoints: rawPoints } } : {})}, false);
             this.setState({newElement: newElement2});
           }
         } else if (isLinearElement(newElement2)) {`);
-      contents += '\nfunction inkFixedPressure(event) { return event.target?.closest?.(".ink-editor")?.dataset.pressure === "fixed"; }\nfunction inkSamplePressure(event) { return inkFixedPressure(event) ? 0.5 : event.pressure; }\n';
+      contents += '\nfunction inkFixedPressure(event) { return event.target?.closest?.(".ink-editor")?.dataset.pressure === "fixed"; }\nfunction inkSamplePressure(event) { return inkFixedPressure(event) ? 0.5 : event.pressure; }\nfunction inkToolKind(event) { const k = event.target?.closest?.(".ink-editor")?.dataset.inkKind; return k === "pen" || k === "highlighter" ? k : undefined; }\n';
       contents += `
 const inkStrokeBounds = new WeakMap();
 function inkStrokeHitPossible(e, x, y, threshold) {

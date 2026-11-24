@@ -1,8 +1,9 @@
-import { exportToBlob } from '@excalidraw/excalidraw';
+import { exportToBlob, getCommonBounds } from '@excalidraw/excalidraw';
 import { Session } from './session';
 import { Element, Page, pageRect, digest, Rect, toArrayBuffer } from './model';
 import { bounds } from './geometry';
 import { vectorLayer } from './vector-export';
+import { filterElementsInRect, tileCanvasRect } from './export-layout';
 import { assetBytes } from './assets';
 import type { ExportRequest, ExportResponse } from './export-messages';
 import { renderArea } from './preview';
@@ -19,7 +20,7 @@ export async function png(session: Session, elements: readonly Element[]): Promi
   await session.loadFiles(live);
   const b = bounds(live)!, padding = live.reduce((max, e) => Math.max(max, e.strokeWidth * 4), 8);
   const scale = fittingScale(b.width + padding * 2, b.height + padding * 2);
-  const blob = await exportToBlob({ elements: live, files: { ...session.files }, mimeType: 'image/png', appState: { exportBackground: false }, exportPadding: padding, getDimensions: (w: number, h: number) => ({ width: w * scale, height: h * scale, scale }) });
+  const blob = await exportToBlob({ elements: live, files: { ...session.files }, mimeType: 'image/png', appState: { exportBackground: false, exportWithDarkMode: false }, exportPadding: padding, getDimensions: (w: number, h: number) => ({ width: w * scale, height: h * scale, scale }) });
   return { blob, scale };
 }
 
@@ -40,6 +41,8 @@ export interface PdfExportOptions {
   pages?: readonly string[];
   /** Export only these objects on a single page. */
   selection?: readonly Element[];
+  /** Split a large infinite canvas into multiple printable A4/Letter pages. */
+  tile?: boolean;
 }
 export async function readingPdf(session: Session, onProgress: (current: number, total: number) => void, signal?: AbortSignal, options: PdfExportOptions = {}) {
   signal?.throwIfAborted();
@@ -73,6 +76,29 @@ export async function readingPdf(session: Session, onProgress: (current: number,
       await session.loadFiles(elements); signal?.throwIfAborted();
       let box = freeform ? bounds(elements) : pageRect(page);
       if (!box) { if (freeform) throw Error(options.selection ? '没有可导出的内容。' : '画布还是空的。'); continue; }
+      if (freeform && options.tile && (options.paper === 'a4' || options.paper === 'letter')) {
+        // Use Excalidraw's exact curve-aware bounds (+ stroke padding) so curved lines/arrows never clip past tile edges.
+        const elementTrueBounds = (e: Element): Rect => {
+          const [x1, y1, x2, y2] = getCommonBounds([e]);
+          const pad = Math.max(e.type === 'arrow' ? 24 : 8, e.strokeWidth * 4);
+          return { x: x1 - pad, y: y1 - pad, width: Math.max(1, x2 - x1 + pad * 2), height: Math.max(1, y2 - y1 + pad * 2) };
+        };
+        const [gx1, gy1, gx2, gy2] = getCommonBounds(elements);
+        const pad = elements.reduce((max, e) => Math.max(max, e.strokeWidth * 4, e.type === 'arrow' ? 24 : 8), 8);
+        const trueBox: Rect = { x: gx1 - pad, y: gy1 - pad, width: Math.max(1, gx2 - gx1 + pad * 2), height: Math.max(1, gy2 - gy1 + pad * 2) };
+        const tiles = tileCanvasRect(trueBox, options.paper, elements, 24, elementTrueBounds);
+        for (let t = 0; t < tiles.length; t++) {
+          signal?.throwIfAborted();
+          const tile = tiles[t];
+          const tileEls = filterElementsInRect(elements, tile, 16, elementTrueBounds);
+          if (!tileEls.length) continue;
+          const layer = await vectorLayer(session, tileEls);
+          await call({ kind: 'page', data: { page: { ...page, pdfPage: undefined }, box: tile, paper: options.paper, paginated: false, layer } });
+          onProgress(t + 1, tiles.length);
+          await new Promise(resolve => window.setTimeout(resolve, 0));
+        }
+        continue;
+      }
       const layer = elements.length ? await vectorLayer(session, elements) : undefined;
       // The editor also permits marks outside the paper. Include the complete padded vector
       // layer rather than silently clipping those marks at export.

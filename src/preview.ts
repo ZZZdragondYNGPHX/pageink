@@ -1,6 +1,7 @@
 import { exportToSvg, getCommonBounds } from '@excalidraw/excalidraw';
 import { Session } from './session';
-import { Page, Rect, pageRect } from './model';
+import { Element, Page, Rect, pageRect } from './model';
+import { isHighlighterElement } from './geometry';
 import { PdfService } from './pdf';
 import { templateSpec, templateLines, templateDots } from './templates';
 export async function renderArea(session: Session, page: Page, area: Rect, scale: number, pdf?: PdfService, signal?: AbortSignal) {
@@ -22,13 +23,30 @@ export async function renderArea(session: Session, page: Page, area: Rect, scale
   });
   await session.loadFiles(elements); signal?.throwIfAborted();
   if (elements.length) {
-    const [x, y] = getCommonBounds(elements);
-    const svg = await exportToSvg({ elements, files: { ...session.files }, appState: { exportBackground: false }, exportPadding: 0 });
-    svg.setAttribute('viewBox', `${area.x - x} ${area.y - y} ${area.width} ${area.height}`);
-    svg.setAttribute('width', String(canvas.width)); svg.setAttribute('height', String(canvas.height));
-    const url = URL.createObjectURL(new Blob([svg.outerHTML], { type: 'image/svg+xml' }));
-    try { const image = new Image(); image.src = url; await image.decode(); signal?.throwIfAborted(); ctx.drawImage(image, 0, 0, canvas.width, canvas.height); }
-    finally { URL.revokeObjectURL(url); }
+    // Composite each highlighter stroke individually via `multiply` (matching live 2D canvas
+    // per-stroke blending so crossing multi-color highlighters blend accurately) while batching
+    // contiguous non-highlighter elements in exact z-order.
+    const runs: { highlighter: boolean; items: Element[] }[] = [];
+    for (const e of elements) {
+      const highlighter = isHighlighterElement(e);
+      const prev = runs[runs.length - 1];
+      if (!highlighter && prev && !prev.highlighter) prev.items.push(e);
+      else runs.push({ highlighter, items: [e] });
+    }
+    for (const run of runs) {
+      const [x, y] = getCommonBounds(run.items);
+      const svg = await exportToSvg({ elements: run.items, files: { ...session.files }, appState: { exportBackground: false, exportWithDarkMode: false }, exportPadding: 0 });
+      svg.setAttribute('viewBox', `${area.x - x} ${area.y - y} ${area.width} ${area.height}`);
+      svg.setAttribute('width', String(canvas.width)); svg.setAttribute('height', String(canvas.height));
+      const url = URL.createObjectURL(new Blob([svg.outerHTML], { type: 'image/svg+xml' }));
+      try {
+        const image = new Image(); image.src = url; await image.decode(); signal?.throwIfAborted();
+        ctx.save();
+        if (run.highlighter) ctx.globalCompositeOperation = 'multiply';
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      } finally { URL.revokeObjectURL(url); }
+    }
   }
   return canvas;
 }

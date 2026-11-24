@@ -108,13 +108,16 @@ export function Switch({ checked, onChange, label, hint }: { checked: boolean; o
   </label>;
 }
 
-export function Swatches({ colors, value, onChange, label, custom = true }: { colors: readonly string[]; value: string; onChange: (color: string) => void; label: string; custom?: boolean }) {
-  const preset = colors.some(c => c.toLowerCase() === value.toLowerCase());
+export function Swatches({ colors, value, onChange, label, custom = true, allowTransparent = false }: { colors: readonly string[]; value: string; onChange: (color: string) => void; label: string; custom?: boolean; allowTransparent?: boolean }) {
+  const isTransparent = allowTransparent && value === 'transparent';
+  const preset = isTransparent || colors.some(c => c.toLowerCase() === value.toLowerCase());
+  const pickerValue = /^#[0-9a-f]{6}$/i.test(value) ? value : colors[0] ?? '#fff4cc';
   return <div className="ink-swatches" role="radiogroup" aria-label={label} onKeyDown={radioKeys}>
-    {colors.map((color, index) => <button key={color} type="button" role="radio" tabIndex={color.toLowerCase() === value.toLowerCase() || !preset && index === 0 ? 0 : -1} className="ink-swatch" aria-checked={color.toLowerCase() === value.toLowerCase()} aria-label={`颜色 ${color}`} title={color} onClick={() => onChange(color)}><span style={{ background: color }}/></button>)}
+    {allowTransparent && <button type="button" role="radio" tabIndex={isTransparent || !preset ? 0 : -1} className="ink-swatch is-transparent" aria-checked={isTransparent} aria-label="无填充" title="无填充" onClick={() => onChange('transparent')}><span/></button>}
+    {colors.map((color, index) => <button key={color} type="button" role="radio" tabIndex={color.toLowerCase() === value.toLowerCase() || (!allowTransparent && !preset && index === 0) ? 0 : -1} className="ink-swatch" aria-checked={color.toLowerCase() === value.toLowerCase()} aria-label={`颜色 ${color}`} title={color} onClick={() => onChange(color)}><span style={{ background: color }}/></button>)}
     {custom && <label className="ink-swatch ink-swatch-custom" title="自定义颜色" data-selected={!preset}>
-      <span style={!preset ? { background: value } : undefined}/>
-      <input type="color" aria-label="自定义颜色" value={value} onChange={event => onChange(event.target.value)}/>
+      <span style={!preset ? { background: pickerValue } : undefined}/>
+      <input type="color" aria-label="自定义颜色" value={pickerValue} onChange={event => onChange(event.target.value)}/>
     </label>}
   </div>;
 }

@@ -11,6 +11,7 @@ import { renderArea } from './preview';
 import { clearInkFontFaces } from './kernel-assets';
 import { assetUrl, clearAssetUrls } from './assets';
 import { normalizePreferences, PreferenceStore } from './preferences';
+import { ElementsLibraryStore, normalizeLibraryItems } from './elements-library';
 import { ErrorBoundary } from './ui';
 import { TEMPLATES, paperStyle } from './templates';
 import type { ViewMemory, ViewSurface, WorkspaceActions, WorkspaceHost } from './host';
@@ -135,6 +136,7 @@ class DrawingView extends FileView implements WorkspaceHost {
       unique: title => plugin.uniquePath(title, 'inknote') });
   }
   get prefs() { return this.plugin.prefs; }
+  get elements() { return this.plugin.elements; }
   getViewType() { return VIEW; }
   getIcon() { return 'pencil'; }
   getDisplayText() { return this.file?.basename ?? '绘写笔记'; }
@@ -274,8 +276,21 @@ export default class DrawingPlugin extends Plugin {
   closingViews = new Map<string, Promise<void>>();
   previewCache = new Map<string, HTMLCanvasElement>();
   prefs!: PreferenceStore;
+  elements!: ElementsLibraryStore;
   async onload() {
     this.prefs = new PreferenceStore(normalizePreferences(await this.loadData()), value => this.saveData(value));
+    const libPath = `${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`}/elements-library.json`;
+    let savedItems: ReturnType<typeof normalizeLibraryItems> = [];
+    let libraryLoadFailed = false;
+    try {
+      if (await this.io.exists(libPath)) savedItems = normalizeLibraryItems(JSON.parse(await this.io.read(libPath)));
+    } catch { libraryLoadFailed = true; }
+    this.elements = new ElementsLibraryStore(savedItems, async items => {
+      if (libraryLoadFailed) {
+        throw new Error('常用元素库启动读取失败，为防止覆盖已有收藏已暂停写入，请检查元素库文件后重载。');
+      }
+      await this.io.write(libPath, JSON.stringify(items));
+    });
     this.register(() => { this.prefs.flush(); clearInkFontFaces(); clearAssetUrls(); });
     const face = new FontFace('Ink Notebook Sans', `url("${assetUrl('fonts/NotoSansCJKsc-Regular.otf')}")`);
     await face.load(); const fontDocument = activeDocument; fontDocument.fonts.add(face); this.register(() => fontDocument.fonts.delete(face));

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clearInkViewport, commitInkViewport, deferInkViewport, type InkRasterView } from '../src/ink-viewport';
+import { clearInkViewport, commitInkViewport, deferInkViewport, recordInkRenderCost, shouldDeferInkViewport, type InkRasterView } from '../src/ink-viewport';
 
 const canvas = () => ({
   isConnected: true, dataset: {} as Record<string, string>,
@@ -83,4 +83,22 @@ test('settled redraw holds one visible snapshot and releases its backing on comp
     assert.equal(snapshot.removed, true); assert.equal(classes.has('ink-viewport-redraw'), false);
     clearInkViewport(target);
   }
+});
+test('ordinary scenes render live without scroll cutoff; dense scenes defer only within a bounded pan shift', () => {
+  const target = canvas(), base = view();
+  commitInkViewport(target, base);
+  recordInkRenderCost(target, 3);
+  // Moderate scene: panning and zooming render live (no cutoff/truncation).
+  assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 200 }, 200, 1000, 800), false);
+  assert.equal(shouldDeferInkViewport(target, { ...base, zoom: 1.5 }, 200, 1000, 800), false);
+  // Single-frame heavy scene (<2000): small pan defers, >22% shift forces refresh.
+  assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 80 }, 1500, 1000, 800), true);
+  assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 260 }, 1500, 1000, 800), false);
+  // Progressive mega-scene (>=2000): stays deferred during continuous scroll so progressive redraws aren't repeatedly cleared.
+  assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 260 }, 2500, 1000, 800), true);
+  // Slow render cost (>10ms) also enables bounded deferral.
+  recordInkRenderCost(target, 25);
+  recordInkRenderCost(target, 25);
+  assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 60 }, 400, 1000, 800), true);
+  clearInkViewport(target);
 });

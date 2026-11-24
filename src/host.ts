@@ -1,5 +1,6 @@
 import type { Rect } from './model';
 import type { PreferenceStore } from './preferences';
+import type { ElementsLibraryStore } from './elements-library';
 import type { MixedHost } from './mixed-host';
 import type { CardsHost } from './cards-host';
 
@@ -13,6 +14,7 @@ export interface WorkspaceActions { exportPdf(): void; exportPackage(): void; to
 /** Everything the workspace needs from Obsidian. Keeps UI code free of host APIs and testable. */
 export interface WorkspaceHost {
   prefs: PreferenceStore;
+  elements: ElementsLibraryStore;
   text: MixedHost;
   cards: CardsHost;
   openLibrary(): Promise<void>;

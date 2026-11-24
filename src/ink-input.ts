@@ -25,3 +25,56 @@ export function preserveInkSamples(schedule: (consume: (event: PointerEvent) => 
 }
 
 export function inkPointerSamples(event: PointerEvent): readonly PointerEvent[] { return batches.get(event) ?? [event]; }
+
+export type StabilizeLevel = 0 | 1 | 2;
+const STABILIZE_ALPHA: Record<StabilizeLevel, number> = { 0: 1, 1: 0.65, 2: 0.42 };
+
+/**
+ * Low-latency exponential moving average stroke stabilizer.
+ * Level 0 passes raw coordinates through untouched; higher levels smooth micro-tremor
+ * while keeping the exact start point anchored and allowing raw lift endpoints.
+ */
+export class InkStabilizer {
+  private x = 0;
+  private y = 0;
+  private active = false;
+  constructor(readonly level: StabilizeLevel) {}
+  start(x: number, y: number): [number, number] {
+    this.x = x; this.y = y; this.active = true;
+    return [x, y];
+  }
+  next(x: number, y: number): [number, number] {
+    if (this.level === 0) return [x, y];
+    if (!this.active) return this.start(x, y);
+    const a = STABILIZE_ALPHA[this.level];
+    this.x += a * (x - this.x);
+    this.y += a * (y - this.y);
+    return [this.x, this.y];
+  }
+  finish(x: number, y: number): [number, number] {
+    this.active = false;
+    return [x, y];
+  }
+}
+
+const strokeStabilizers = new WeakMap<object, { filter: InkStabilizer; raw: [number, number][] }>();
+
+/** Per-stroke stateful stabilizer keyed by the active freedraw element object; also retains raw coordinates. */
+export function stabilizeInkPoint(stroke: object, level: StabilizeLevel, x: number, y: number, originX = 0, originY = 0): [number, number] {
+  if (level === 0) return [x, y];
+  let entry = strokeStabilizers.get(stroke);
+  if (!entry || entry.filter.level !== level) {
+    const filter = new InkStabilizer(level);
+    filter.start(originX, originY);
+    entry = { filter, raw: [[originX, originY]] };
+    strokeStabilizers.set(stroke, entry);
+  }
+  entry.raw.push([x, y]);
+  return entry.filter.next(x, y);
+}
+
+/** Returns an immutable copy of raw local coordinates recorded for a stabilized stroke. */
+export function stabilizedRawPoints(stroke: object): readonly [number, number][] | undefined {
+  const entry = strokeStabilizers.get(stroke);
+  return entry ? entry.raw.map(([x, y]) => [x, y] as [number, number]) : undefined;
+}

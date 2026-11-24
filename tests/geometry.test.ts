@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { eraseStroke, cloneElements, constrainMargins, lassoHits, bounds, removeElements } from '../src/geometry';
+import { eraseStroke, eraseStrokeSegment, eraseStrokePath, eraseLinePath, isHighlighterElement, cloneElements, constrainMargins, lassoHits, bounds, removeElements } from '../src/geometry';
 import { Element, newPage } from '../src/model';
 const stroke = { id: 'a', type: 'freedraw', x: 0, y: 0, width: 100, height: 0, angle: 0, strokeWidth: 2, isDeleted: false,
   points: [[0, 0], [100, 0]], pressures: [.2, .8], simulatePressure: false, version: 1, groupIds: [] } as unknown as Element;
@@ -46,4 +46,34 @@ test('deleting a container removes its bound text and detaches surviving arrows'
   const shape={...stroke,type:'rectangle'},text={...stroke,id:'t',type:'text',containerId:'a'},arrow={...stroke,id:'b',type:'arrow',startBinding:{elementId:'a'}};
   const remaining=removeElements([shape,text,arrow] as Element[],new Set(['a']));
   assert.equal(remaining.length,1);assert.equal((remaining[0] as any).startBinding,null);assert.equal(remaining[0].version,2);
+});
+test('capsule segment and path eraser cut cleanly in a single pass with AABB culling', () => {
+  // Fast vertical sweep from y=-40 to y=40 across x=50 cuts horizontal stroke [0,0]->[100,0] in one pass.
+  const pieces = eraseStrokeSegment(stroke, [50, -40], [50, 40], 9, false);
+  assert.equal(pieces.length, 2);
+  assert.ok(Math.abs(pieces[0].width - 36.75) < 1e-9);
+  assert.ok(Math.abs(pieces[1].x - 63.25) < 1e-9);
+  // Whole-stroke mode returns empty immediately on sweep intersection and preserves untouched strokes.
+  assert.equal(eraseStrokeSegment(stroke, [50, -40], [50, 40], 9, true).length, 0);
+  assert.equal(eraseStrokeSegment(stroke, [50, 50], [100, 80], 9, true)[0], stroke);
+  // Multi-segment coalesced path cuts twice in one batch.
+  const triple = eraseStrokePath(stroke, [[25, -20], [25, 20], [75, 20], [75, -20]], 4, false);
+  assert.equal(triple.length, 3);
+  assert.equal(eraseStrokePath(stroke, [[0, 200], [100, 200]], 4, false)[0], stroke);
+  // Highlighter identity uses explicit inkKind tag (surviving opacity edits and snapped lines) with legacy opacity fallback.
+  const penLowOpacity = { ...stroke, opacity: 35, customData: { inkKind: 'pen' as const } } as Element;
+  const hiHighOpacity = { ...stroke, opacity: 70, customData: { inkKind: 'highlighter' as const } } as Element;
+  const hiLine = { ...stroke, type: 'line', opacity: 35, customData: { inkKind: 'highlighter' as const } } as Element;
+  const legacyHi = { ...stroke, opacity: 35 } as Element;
+  assert.equal(isHighlighterElement(penLowOpacity), false);
+  assert.equal(isHighlighterElement(hiHighOpacity), true);
+  assert.equal(isHighlighterElement(hiLine), true);
+  assert.equal(isHighlighterElement(legacyHi), true);
+  // Partial eraser cuts a snapped highlighter line into two shorter line segments; whole mode deletes it.
+  const cutLine = eraseLinePath(hiLine, [[50, -10], [50, 10]], 4, false);
+  assert.equal(cutLine.length, 2);
+  assert.equal(cutLine[0].type, 'line');
+  assert.equal(cutLine[0].customData?.inkKind, 'highlighter');
+  assert.equal(eraseLinePath(hiLine, [[50, -10], [50, 10]], 4, true).length, 0);
+  assert.equal(eraseLinePath(hiLine, [[50, 50], [60, 50]], 4, false)[0], hiLine);
 });

@@ -18,7 +18,7 @@ export function PaperLayer({ layout, views, pdf, sourceIssue }: { layout: PageLa
     apply(); return views.subscribe(apply);
   }, [views]);
   const visible = useView(views, v => {
-    const area = sceneViewport(v), margin = area.height * 0.75;
+    const area = sceneViewport(v), margin = area.height;
     const wide = { x: area.x - margin, y: area.y - margin, width: area.width + margin * 2, height: area.height + margin * 2 };
     return layout.placements.filter(p => intersects(p.paper, wide)).map(p => p.index).join(',');
   });

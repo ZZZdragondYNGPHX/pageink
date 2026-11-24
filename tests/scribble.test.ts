@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scribbleHits, scribbleRegion } from '../src/scribble';
+import { scribbleHits, scribbleRegion, eraseStrokeInRegion } from '../src/scribble';
 import { normalizePreferences } from '../src/preferences';
 import type { Element } from '../src/model';
 import type { ScenePoint } from '../src/geometry';
@@ -61,4 +61,35 @@ test('only covered handwriting is erased, preserving objects, locked ink and cro
 test('older writing preferences receive scribble default and explicit opt-out persists', () => {
   assert.equal(normalizePreferences({ pen: { pressure: true } }).pen.scribble, true);
   assert.equal(normalizePreferences({ pen: { scribble: false } }).pen.scribble, false);
+});
+test('sensitive scribble recognises natural CJK/square scribbles and erases everything inside the scribbled region', () => {
+  // Brisk 4-sweep square scribble over a single CJK character (height ≈ span, slightly shorter middle sweeps).
+  const cjkScribble: ScenePoint[] = [
+    [0, 0], [40, 8], [8, 16], [36, 24], [4, 32], [38, 38],
+  ];
+  const region = scribbleRegion(cjkScribble, 1, 450);
+  assert.ok(region && region.length >= 3);
+
+  // eraseStrokeInRegion deletes enclosed strokes whole and slices long crossing strokes cleanly at the region boundary.
+  const boxRegion: ScenePoint[] = [[0, 0], [100, 0], [100, 50], [0, 50]];
+  const enclosed = ink([[10, 10], [80, 40]]);
+  assert.equal(eraseStrokeInRegion(enclosed, boxRegion).length, 0);
+
+  const crossing = ink([[-200, 25], [300, 25]], { simulatePressure: false, pressures: [0.2, 0.8] });
+  const remaining = eraseStrokeInRegion(crossing, boxRegion);
+  assert.equal(remaining.length, 2);
+  // Left surviving piece ends at x=0; right surviving piece starts at x=100.
+  assert.ok(Math.abs(remaining[0].x + remaining[0].width - 0) < 1e-6);
+  assert.ok(Math.abs(remaining[1].x - 100) < 1e-6);
+
+  // 50% covered long line (1000 units, middle 500 inside scribble) keeps both 250-unit outside halves!
+  const halfCovered = ink([[0, 25], [1000, 25]]);
+  const halves = eraseStrokeInRegion(halfCovered, [[250, 0], [750, 0], [750, 50], [250, 50]]);
+  assert.equal(halves.length, 2);
+  assert.ok(Math.abs(halves[0].width - 250) < 1e-6);
+  assert.ok(Math.abs(halves[1].x - 750) < 1e-6 && Math.abs(halves[1].width - 250) < 1e-6);
+
+  // Locked ink and non-ink shapes stay untouched.
+  assert.equal(eraseStrokeInRegion(ink([[10, 10], [80, 40]], { locked: true }), boxRegion)[0].id, 'ink');
+  assert.equal(eraseStrokeInRegion({ ...enclosed, type: 'rectangle' } as unknown as Element, boxRegion).length, 1);
 });

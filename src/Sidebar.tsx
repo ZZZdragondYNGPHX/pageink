@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { Page, Region } from './model';
 import { pageRect } from './model';
 import type { Session } from './session';
-import type { PdfService } from './pdf';
+import type { PdfOutlineItem, PdfService } from './pdf';
 import { renderArea } from './preview';
 import { IconButton, InkIcon } from './InkIcon';
 import { searchDocument, SearchHit } from './search';
@@ -120,8 +120,96 @@ export function SearchPanel({ session, pdf, paged, onOpen, initial }: { session:
   </div>;
 }
 
-export function SidebarTabs({ tab, onTab, paged, id }: { tab: SidebarTab; onTab: (tab: SidebarTab) => void; paged: boolean; id: string }) {
-  const tabs: [SidebarTab, string][] = [...(paged ? [['pages', '页面'] as [SidebarTab, string]] : []), ['bookmarks', '书签'], ['search', '搜索']];
+const outlineCache = new WeakMap<PdfService, PdfOutlineItem[]>();
+
+function countOutlineNodes(items: readonly PdfOutlineItem[]): number {
+  let n = 0;
+  for (const item of items) n += 1 + countOutlineNodes(item.items);
+  return n;
+}
+
+function findActiveOutlineKey(items: readonly PdfOutlineItem[], currentPdfPage: number | undefined, prefix = '0'): string | null {
+  if (!currentPdfPage) return null;
+  let best: { key: string; page: number } | null = null;
+  const walk = (nodes: readonly PdfOutlineItem[], path: string) => {
+    nodes.forEach((node, idx) => {
+      const key = `${path}.${idx}`;
+      if (node.pdfPage !== null && node.pdfPage <= currentPdfPage) {
+        if (!best || node.pdfPage >= best.page) best = { key, page: node.pdfPage };
+      }
+      if (node.items.length) walk(node.items, key);
+    });
+  };
+  walk(items, prefix);
+  return (best as { key: string; page: number } | null)?.key ?? null;
+}
+
+export function OutlineList({ pdf, pages, currentPdfPage, onSelect }: {
+  pdf: PdfService; pages: readonly Page[]; currentPdfPage?: number; onSelect: (pageId: string, pdfPage?: number, pdfTop?: number | null, pdfLeft?: number | null) => void;
+}) {
+  const [items, setItems] = useState<PdfOutlineItem[] | null>(() => outlineCache.get(pdf) ?? null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    const cached = outlineCache.get(pdf);
+    if (cached) { setItems(cached); return; }
+    let active = true;
+    setItems(null);
+    void pdf.outline().then(list => {
+      outlineCache.set(pdf, list);
+      if (!active) return;
+      setItems(list);
+      if (countOutlineNodes(list) > 40) {
+        const init: Record<string, boolean> = {};
+        const collapseDeep = (nodes: readonly PdfOutlineItem[], path: string, depth: number) => {
+          nodes.forEach((n, idx) => {
+            const key = `${path}.${idx}`;
+            if (depth >= 1 && n.items.length) init[key] = true;
+            if (n.items.length) collapseDeep(n.items, key, depth + 1);
+          });
+        };
+        collapseDeep(list, '0', 0);
+        setCollapsed(init);
+      }
+    }).catch(() => { if (active) setItems([]); });
+    return () => { active = false; };
+  }, [pdf]);
+
+  const pageByPdf = new Map<number, { page: Page; index: number }>();
+  pages.forEach((p, index) => { if (p.pdfPage) pageByPdf.set(p.pdfPage, { page: p, index }); });
+  const activeKey = items ? findActiveOutlineKey(items, currentPdfPage) : null;
+
+  const renderNodes = (nodes: readonly PdfOutlineItem[], path: string, depth: number): React.ReactNode => nodes.map((node, idx) => {
+    const key = `${path}.${idx}`;
+    const hasChildren = node.items.length > 0;
+    const isCollapsed = !!collapsed[key];
+    const target = node.pdfPage !== null ? pageByPdf.get(node.pdfPage) : undefined;
+    return <li key={key} className="ink-outline-node">
+      <div className={`ink-outline-row${key === activeKey ? ' is-active' : ''}`} style={{ paddingLeft: 4 + Math.min(depth, 5) * 14 }}>
+        {hasChildren ? <button type="button" className="ink-outline-toggle" aria-expanded={!isCollapsed} aria-label={isCollapsed ? `展开 ${node.title}` : `收起 ${node.title}`}
+          onClick={() => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }))}><InkIcon name={isCollapsed ? 'right' : 'down'}/></button>
+          : <span className="ink-outline-spacer" aria-hidden="true"/>}
+        <button type="button" className="ink-outline-jump" disabled={!target} aria-current={key === activeKey ? 'location' : undefined}
+          title={node.title} onClick={() => target && onSelect(target.page.id, node.pdfPage ?? undefined, node.pdfTop, node.pdfLeft)}>
+          <span className="ink-outline-title">{node.title}</span>
+          {target && <small>{target.index + 1}</small>}
+        </button>
+      </div>
+      {hasChildren && !isCollapsed && <ul className="ink-outline-children">{renderNodes(node.items, key, depth + 1)}</ul>}
+    </li>;
+  });
+
+  if (items === null) return <div className="ink-empty"><span className="ink-spinner" aria-label="正在读取目录"/><p>正在读取 PDF 目录…</p></div>;
+  if (!items.length) return <div className="ink-empty"><InkIcon name="outline"/><strong>没有内置目录</strong><p>这份 PDF 未包含大纲目录，可使用「书签」自行标记重点章节。</p></div>;
+  return <ul className="ink-outline-list" role="tree" aria-label="PDF 目录">{renderNodes(items, '0', 0)}</ul>;
+}
+
+export function SidebarTabs({ tab, onTab, paged, hasOutline, id }: { tab: SidebarTab; onTab: (tab: SidebarTab) => void; paged: boolean; hasOutline?: boolean; id: string }) {
+  const tabs: [SidebarTab, string][] = [
+    ...(paged ? [['pages', '页面'] as [SidebarTab, string]] : []),
+    ...(hasOutline ? [['outline', '目录'] as [SidebarTab, string]] : []),
+    ['bookmarks', '书签'],
+    ['search', '搜索'],
+  ];
   return <div className="ink-tabs" role="tablist" aria-label="侧栏" onKeyDown={event => {
     if (event.nativeEvent.isComposing) return;
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;

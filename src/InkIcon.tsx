@@ -7,7 +7,10 @@ import {
   Scan, SlidersHorizontal, ZoomIn, ZoomOut, Maximize, MoveHorizontal, Expand, ExternalLink,
   History, RefreshCw, FileText, ArrowUp, ArrowDown, GripVertical, TriangleAlert, LocateFixed,
   ArrowRightToLine, Droplet, PenTool, Pointer, LayoutDashboard, Notebook, BookOpen, FileType, Package,
-  CalendarDays, FolderOpen, LayoutGrid, List, PanelRight, PanelsTopLeft, type LucideIcon,
+  CalendarDays, FolderOpen, LayoutGrid, List, PanelRight, PanelsTopLeft,
+  Layers, Group, Ungroup, ArrowUpToLine, ArrowDownToLine, Lock, Unlock,
+  MoveVertical, CornerUpLeft, ClipboardPaste, Moon, Sun, ScanSearch, ListTree, CornerDownLeft,
+  Eye, EyeOff, Ruler, Sparkles, Magnet, BookmarkPlus, type LucideIcon,
 } from 'lucide-react';
 
 // Official Lucide SVG assets, pinned in package-lock.json. ISC + Feather MIT notices ship with the bundle.
@@ -26,6 +29,9 @@ const icons: Record<string, LucideIcon> = {
   warning: TriangleAlert, locate: LocateFixed, toBody: ArrowRightToLine, drop: Droplet,
   pressure: PenTool, finger: Pointer, canvas: LayoutDashboard, notebook: Notebook, read: BookOpen,
   pdf: FileType, package: Package, calendar: CalendarDays, folderOpen: FolderOpen, grid: LayoutGrid, list: List, dock: PanelRight, float: PanelsTopLeft,
+  layers: Layers, group: Group, ungroup: Ungroup, bringFront: ArrowUpToLine, sendBack: ArrowDownToLine, lock: Lock, unlock: Unlock,
+  space: MoveVertical, autoReturn: CornerUpLeft, paste: ClipboardPaste, moon: Moon, sun: Sun, zoomWindow: ScanSearch, outline: ListTree, returnKey: CornerDownLeft,
+  tape: EyeOff, eye: Eye, eyeOff: EyeOff, ruler: Ruler, sticker: Sparkles, gridSnap: Magnet, saveSticker: BookmarkPlus,
 };
 export const hasIcon = (name: string) => name in icons;
 export function InkIcon({ name, className = '' }: { name: string; className?: string }) {

@@ -3,6 +3,7 @@ import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { digest, Page, Rect } from './model';
 import { FileIO } from './storage';
 import { assetUrl, EmbeddedCMapReader, EmbeddedStandardFonts, EmbeddedWasm } from './assets';
+export interface PdfOutlineItem { title: string; pdfPage: number | null; pdfLeft?: number | null; pdfTop?: number | null; items: PdfOutlineItem[] }
 export class PdfService {
   document!: pdfjs.PDFDocumentProxy;
   private constructor() {}
@@ -47,6 +48,61 @@ export class PdfService {
         return { text: item.str, rect: { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) } };
       });
     } finally { pdfPage.cleanup(); }
+  }
+  /** Extracts the PDF's native multi-level bookmark outline with 1-based page numbers and optional PDF top coordinate. */
+  async outline(): Promise<PdfOutlineItem[]> {
+    const raw = await this.document.getOutline().catch(() => null);
+    if (!raw?.length) return [];
+    const resolveDest = async (dest: unknown): Promise<{ pdfPage: number | null; pdfLeft: number | null; pdfTop: number | null }> => {
+      try {
+        const target = typeof dest === 'string' ? await this.document.getDestination(dest) : dest;
+        if (!Array.isArray(target) || target[0] == null) return { pdfPage: null, pdfLeft: null, pdfTop: null };
+        const pdfPage = typeof target[0] === 'number'
+          ? target[0] + 1
+          : (await this.document.getPageIndex(target[0] as Parameters<pdfjs.PDFDocumentProxy['getPageIndex']>[0])) + 1;
+        const kind = (target[1] as { name?: string } | null)?.name;
+        const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null;
+        let pdfLeft: number | null = null;
+        let pdfTop: number | null = null;
+        if (kind === 'XYZ') { pdfLeft = num(target[2]); pdfTop = num(target[3]); }
+        else if (kind === 'FitR') { pdfLeft = num(target[2]); pdfTop = num(target[5]); }
+        else if (kind === 'FitH' || kind === 'FitBH') { pdfTop = num(target[2]); }
+        return { pdfPage, pdfLeft, pdfTop };
+      } catch {
+        return { pdfPage: null, pdfLeft: null, pdfTop: null };
+      }
+    };
+    interface RawOutlineNode { title?: string; dest?: unknown; items?: RawOutlineNode[] }
+    const seen = new WeakSet<object>();
+    const walk = async (nodes: readonly RawOutlineNode[]): Promise<PdfOutlineItem[]> => {
+      if (!nodes.length) return [];
+      const result: PdfOutlineItem[] = [];
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object' || seen.has(node)) continue;
+        seen.add(node);
+        const title = (node.title ?? '').trim() || '未命名章节';
+        const { pdfPage, pdfLeft, pdfTop } = node.dest ? await resolveDest(node.dest) : { pdfPage: null, pdfLeft: null, pdfTop: null };
+        const items = node.items?.length ? await walk(node.items) : [];
+        result.push({ title, pdfPage, pdfLeft, pdfTop, items });
+      }
+      return result;
+    };
+    return walk(raw);
+  }
+  /** Converts PDF-space destination coordinates (`pdfLeft`, `pdfTop`) into page-local viewport Y at scale 1. */
+  async resolvePageY(pdfPageNumber: number, pdfTop: number | null, pdfLeft: number | null = null): Promise<number | null> {
+    if (pdfTop === null && pdfLeft === null) return null;
+    try {
+      const pdfPage = await this.document.getPage(pdfPageNumber);
+      try {
+        const viewport = pdfPage.getViewport({ scale: 1 });
+        const vb = viewport.viewBox;
+        const px = pdfLeft ?? vb[0];
+        const py = pdfTop ?? vb[3];
+        const [, vy] = viewport.convertToViewportPoint(px, py) as number[];
+        return Number.isFinite(vy) ? Math.max(0, Math.min(viewport.height, vy)) : null;
+      } finally { pdfPage.cleanup(); }
+    } catch { return null; }
   }
   destroy() { return this.document.destroy(); }
 }

@@ -14,9 +14,9 @@ import { ToolShelf, SHORTCUTS } from './Toolbar';
 import { ToolDock } from './ToolDock';
 import type { InkApi } from './kernel-api';
 import { imageFile, readDataURL } from './binary';
-import { BookmarkList, PageList, SearchPanel, SidebarTabs } from './Sidebar';
+import { BookmarkList, OutlineList, PageList, SearchPanel, SidebarTabs } from './Sidebar';
 import { ScratchWindow } from './Scratch';
-import { PEN_COLORS, Preferences, SidebarTab, ToolId } from './preferences';
+import { PEN_COLORS, PEN_WIDTHS, Preferences, SHAPE_FILLS, SidebarTab, ToolId } from './preferences';
 import { ViewStore, View, useView, toScreen, sceneViewport } from './view';
 import { TEMPLATES, paperStyle } from './templates';
 import type { WorkspaceHost } from './host';
@@ -29,23 +29,35 @@ import type { SourceParagraph } from './mixed-host';
 import { cardReference, cardText } from './cards';
 import { connectCards, inkCard, refreshTextCards, textCard } from './cards-render';
 import { CardEditor, CardsPanel } from './CardsPanel';
+import { LayersPanel } from './LayersPanel';
+import { groupElements, insertVerticalSpace, LayerOrderAction, reorderElements, restyleElements, setElementsLocked, ungroupElements } from './layers';
+import { copyInkClipboard, prepareClipboardForSession, readInkClipboard } from './clipboard';
+import { ZoomBoxOverlay, ZoomWindow } from './ZoomWindow';
+import { clampZoomBox, zoomBoxSize, ZoomFactor } from './zoom-window';
+import { ElementsPanel } from './ElementsPanel';
+import { prepareLibraryInsert, type SavedElementItem } from './elements-library';
+import { RulerOverlay } from './RulerOverlay';
+import type { RulerState } from './ruler';
+import { setAllTapesRevealed, toggleTapeElement } from './tape';
 
 export interface WorkspaceProps { session: Session; pdf?: PdfService; host: WorkspaceHost }
-type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'scratch-zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-export' | 'pdf-text' | 'mixed' | 'cards';
+type PopoverId = 'export' | 'more' | 'page-settings' | 'zoom' | 'scratch-zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-layers' | 'selection-export' | 'pdf-text' | 'mixed' | 'cards' | 'layers' | 'elements';
 
 /** Kernel settings for a tool; a pending bookmark marquee temporarily overrides the tool. */
 function canvasTool(tool: ToolId, prefs: Preferences, marquee: CanvasTool['marquee'] | null): CanvasTool {
   const base: CanvasTool = { kernel: 'selection', color: prefs.pen.color, width: prefs.pen.width, opacity: 100, fontSize: prefs.text.size, pressure: false };
   if (marquee) return { ...base, kernel: 'hand', marquee };
   switch (tool) {
-    case 'pen': return { ...base, kernel: 'freedraw', pressure: prefs.pen.pressure, scribble: prefs.pen.scribble };
-    case 'highlighter': return { ...base, kernel: 'freedraw', color: prefs.highlighter.color, width: prefs.highlighter.width, opacity: 35 };
-    case 'eraser': return { ...base, kernel: 'hand', erase: { whole: prefs.eraser.mode === 'stroke', radius: prefs.eraser.size } };
-    case 'lasso': return { ...base, marquee: { shape: 'lasso', purpose: 'select' } };
+    case 'pen': return { ...base, kernel: 'freedraw', inkKind: 'pen', pressure: prefs.pen.pressure, stabilize: prefs.pen.stabilize, scribble: prefs.pen.scribble, circleLasso: prefs.pen.circleLasso, holdToShape: prefs.pen.holdToShape };
+    case 'highlighter': return { ...base, kernel: 'freedraw', inkKind: 'highlighter', color: prefs.highlighter.color, width: prefs.highlighter.width, opacity: 35, holdToShape: prefs.pen.holdToShape };
+    case 'eraser': return { ...base, kernel: 'hand', erase: { whole: prefs.eraser.mode === 'stroke', radius: prefs.eraser.size, highlighterOnly: prefs.eraser.highlighterOnly } };
+    case 'lasso': return { ...base, marquee: { shape: 'lasso', purpose: 'select', filter: prefs.lasso.filter } };
     case 'select': return base;
+    case 'space': return { ...base, kernel: 'hand', space: true };
+    case 'tape': return { ...base, kernel: 'hand', tape: { color: prefs.tape.color, height: prefs.tape.height } };
     case 'hand': return { ...base, kernel: 'hand' };
     case 'text': return { ...base, kernel: 'text', color: prefs.text.color };
-    case 'shape': return { ...base, kernel: prefs.shape.kind, color: prefs.shape.color, width: prefs.shape.width };
+    case 'shape': return { ...base, kernel: prefs.shape.kind, color: prefs.shape.color, width: prefs.shape.width, strokeStyle: prefs.shape.strokeStyle, fillColor: prefs.shape.fillColor };
     case 'capture': return { ...base, kernel: 'hand', marquee: { shape: prefs.capture.shape, purpose: 'capture' } };
   }
 }
@@ -60,6 +72,7 @@ const EMPTY_VIEWS = new ViewStore();
 export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const sidebarId = useId();
   const prefs = useSyncExternalStore(host.prefs.subscribe, host.prefs.get), store = host.prefs;
+  const savedElements = useSyncExternalStore(host.elements.subscribe, host.elements.get);
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   useEffect(() => { session.listeners.add(rerender); return () => { session.listeners.delete(rerender); }; }, []);
   useEffect(() => {
@@ -77,8 +90,17 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const [sidebar, setSidebar] = useState(() => paged ? prefs.sidebar.pages && window.innerWidth >= 960 : prefs.sidebar.canvas);
   const [tab, setTab] = useState<SidebarTab>(() => !paged && prefs.sidebar.tab === 'pages' ? 'bookmarks' : prefs.sidebar.tab);
   const [scratchOpen, setScratchOpen] = useState(false);
+  const scratchOpenRef = useRef(false); scratchOpenRef.current = scratchOpen;
+  const [zoomWindowOpen, setZoomWindowOpen] = useState(false);
+  const zoomWindowOpenRef = useRef(false); zoomWindowOpenRef.current = zoomWindowOpen;
+  const [zoomFactor, setZoomFactor] = useState<ZoomFactor>(2);
+  const [zoomAutoAdvance, setZoomAutoAdvance] = useState(true);
+  const [zoomBox, setZoomBox] = useState<Rect>({ x: 40, y: 60, width: 320, height: 90 });
+  const [ruler, setRuler] = useState<RulerState | null>(null);
+  const [exportTile, setExportTile] = useState(true);
   const [focus, setFocus] = useState(false);
   const [reading, setReading] = useState(false);
+  const readingRef = useRef(false); readingRef.current = reading;
   const [compact, setCompact] = useState(false);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
   const [scratchSelection, setScratchSelection] = useState<SelectionInfo | null>(null);
@@ -118,16 +140,93 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   };
 
   // ---------- tools ----------
-  const setTool = (next: ToolId) => { setReading(false); setMarquee(null); setToolState(next); if (next !== 'capture') store.update({ tool: next }); };
+  const lastDrawTool = useRef<ToolId>(['pen', 'highlighter', 'shape', 'text'].includes(tool) ? tool : 'pen');
+  const setTool = (next: ToolId) => {
+    if (['pen', 'highlighter', 'shape', 'text'].includes(next)) lastDrawTool.current = next;
+    // Keep body in read-only reading mode when switching tools for the open scratchpad (read live ref for memoized callbacks).
+    if (!scratchOpenRef.current) setReading(false);
+    setMarquee(null); setToolState(next);
+    if (next !== 'capture') store.update({ tool: next });
+  };
+  const onEraseEnd = () => {
+    if (store.get().eraser.autoReturn) setTool(lastDrawTool.current);
+  };
   const bodyTool = useMemo(() => canvasTool(reading ? 'hand' : tool, prefs, reading ? null : marquee), [tool, prefs, marquee, reading]);
   const scratchTool = useMemo(() => canvasTool(tool === 'capture' ? 'select' : tool, prefs, null), [tool, prefs]);
   const pagesKey = manifest.pages.map(p => [p.id, p.width, p.height, p.template, p.pdfPage ?? 0, p.margins.top, p.margins.right, p.margins.bottom, p.margins.left].join(':')).join('|');
   const currentPageId = useView(views, () => body.current && views !== EMPTY_VIEWS ? body.current.currentPage().page.id : manifest.pages[0].id);
   const currentIndex = Math.max(0, manifest.pages.findIndex(p => p.id === currentPageId));
   const currentPage = manifest.pages[currentIndex];
-  const goToPage = (id: string) => { body.current?.reveal(id); if (compact) closeSidebar(); };
+  const navSeq = useRef(0);
+  const syncZoomBoxToPage = (pageId: string, rect?: Rect) => {
+    const handle = body.current;
+    if (!handle) return;
+    const placement = handle.layout().byId.get(pageId);
+    if (!placement) return;
+    setZoomBox(prev => {
+      if (!paged) {
+        if (!rect) return prev;
+        return { ...prev, x: placement.x + rect.x, y: placement.y + rect.y };
+      }
+      const x = rect ? placement.x + rect.x : placement.paper.x + Math.min(24, Math.max(0, placement.paper.width - prev.width));
+      const y = rect ? placement.y + rect.y : placement.paper.y + 40;
+      return clampZoomBox({ ...prev, x, y }, placement.paper);
+    });
+  };
+  const revealPage = (pageId: string, rect?: Rect, highlight = false) => {
+    navSeq.current++;
+    body.current?.reveal(pageId, rect, highlight);
+    if (zoomWindowOpenRef.current) syncZoomBoxToPage(pageId, rect);
+  };
+  const goToPage = (id: string, pdfPageNum?: number, pdfTop?: number | null, pdfLeft?: number | null) => {
+    const seq = ++navSeq.current;
+    if (pdf && pdfPageNum && (pdfTop != null || pdfLeft != null)) {
+      run(async () => {
+        const y = await pdf.resolvePageY(pdfPageNum, pdfTop ?? null, pdfLeft ?? null);
+        if (seq !== navSeq.current) return;
+        const page = manifest.pages.find(p => p.id === id);
+        if (y !== null && page) {
+          revealPage(id, { x: 0, y, width: page.width, height: Math.min(180, Math.max(40, page.height - y)) });
+        } else {
+          revealPage(id);
+        }
+      });
+    } else {
+      revealPage(id);
+    }
+    if (compact) closeSidebar();
+  };
   const toggleReading = () => {
-    setMarquee(null); pop.close(); body.current?.clearSelection(); setReading(value => !value);
+    setMarquee(null); pop.close(); body.current?.clearSelection(); setZoomWindowOpen(false); setRuler(null); setReading(value => !value);
+  };
+  const toggleRuler = () => {
+    setRuler(cur => cur ? null : {
+      x: Math.round(areaSize.width / 2),
+      y: Math.round(areaSize.height / 2),
+      angle: 0,
+      length: Math.max(240, Math.min(520, Math.round(areaSize.width * 0.65))),
+    });
+  };
+  const toggleZoomWindow = () => {
+    setZoomWindowOpen(open => {
+      if (open) return false;
+      const handle = body.current;
+      if (handle) {
+        const v = handle.views.get();
+        const areaRect = sceneViewport(v);
+        const dim = zoomBoxSize(Math.min(720, areaSize.width), 180, zoomFactor);
+        const raw: Rect = {
+          x: areaRect.x + Math.max(16, (areaRect.width - dim.width) * 0.25),
+          y: areaRect.y + Math.max(16, areaRect.height * 0.25),
+          width: dim.width,
+          height: dim.height,
+        };
+        const limit = paged ? handle.currentPage().paper : undefined;
+        setZoomBox(clampZoomBox(raw, limit));
+      }
+      if (!['pen', 'highlighter', 'eraser', 'hand'].includes(tool)) setTool('pen');
+      return true;
+    });
   };
 
   // ---------- history ----------
@@ -139,7 +238,13 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     if (change.layout) { Object.assign(manifest, structuredClone(change.layout)); session.metadataChanged(); }
     for (const part of change.parts) { await session.load(part.surface); session.change(part.surface, part.elements, false); }
     await handle.rebuild();
-    if (surface === 'body' && paged && change.parts.length && !change.parts.some(p => p.surface === handle.currentPage().page.id)) handle.reveal(change.parts[0].surface);
+    if (surface === 'body' && paged) {
+      if (change.parts.length && !change.parts.some(p => p.surface === handle.currentPage().page.id)) {
+        revealPage(change.parts[0].surface);
+      } else if (change.layout && zoomWindowOpenRef.current) {
+        syncZoomBoxToPage(handle.currentPage().page.id);
+      }
+    }
   }
   const undo = (surface: 'body' | 'scratch' = 'body') => run(() => step(surface, false));
   const redo = (surface: 'body' | 'scratch' = 'body') => run(() => step(surface, true));
@@ -149,7 +254,8 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     await body.current?.flush();
     session.editLayout(edit);
     await body.current?.rebuild();
-    if (reveal) body.current?.reveal(reveal);
+    if (reveal) revealPage(reveal);
+    else if (paged && zoomWindowOpenRef.current && body.current) syncZoomBoxToPage(body.current.currentPage().page.id);
   }
   const indexOf = (id: string) => manifest.pages.findIndex(p => p.id === id);
   function addPage(after = manifest.pages[manifest.pages.length - 1].id) {
@@ -230,7 +336,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         placed = { ...paragraph, x: last?.x ?? (paged ? 48 : centre[0] - placement.x - width / 2), y: last ? last.y + last.height + 40 : paged ? 64 : centre[1] - placement.y - paragraph.height / 2 };
         return [...elements, placed];
       });
-      body.current?.reveal(pageId, { x: placed.x, y: placed.y, width, height: placed.height });
+      revealPage(pageId, { x: placed.x, y: placed.y, width, height: placed.height });
       setTool('pen'); toast.show({ kind: 'success', message: '文字段落已插入，可在旁边书写', detail: '圈选批注后，在「文字段落」中绑定到对应段落。' });
     });
   }
@@ -286,7 +392,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
 
   // ---------- board cards ----------
   const boardElements = session.surfaces.get(manifest.pages[0].id) ?? [];
-  const showCard = (e: Element) => { pop.close(); body.current?.reveal(manifest.pages[0].id, e); };
+  const showCard = (e: Element) => { pop.close(); revealPage(manifest.pages[0].id, e); };
   function insertCard(kind: 'text' | 'ink') {
     pop.close();
     runText(async () => {
@@ -360,10 +466,131 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       toast.show({ kind: 'success', message: '原件已恢复为新笔记，卡片已关联到恢复副本' });
     });
   }
-  function groupSelection(ungroup = false) {
-    const selected = body.current?.selected() ?? [], group = uid();
-    const outer = new Set(selected.flatMap(e => e.groupIds.length ? [e.groupIds.at(-1)!] : []));
-    run(() => body.current?.replaceSelected(e => ({ ...e, groupIds: ungroup ? e.groupIds.filter(id => !outer.has(id)) : [...e.groupIds, group] })));
+  function groupSelection(ungroup = false, explicitIds?: readonly string[]) {
+    const handle = body.current;
+    if (!handle) return;
+    const ids = new Set(explicitIds ?? handle.selected().map(e => e.id));
+    if (!ids.size) return;
+    if (paged && !ungroup) {
+      const targetElements = handle.elements().filter(e => ids.has(e.id));
+      const pages = new Set(targetElements.map(e => handle.pageOf(e)).filter(Boolean));
+      if (pages.size > 1) {
+        toast.show({ kind: 'info', message: '不能跨页组合对象，请只选择同一页的内容' });
+        return;
+      }
+    }
+    run(() => handle.transformScene(elements => ungroup ? ungroupElements(elements, ids) : groupElements(elements, ids)));
+  }
+  function orderSelection(action: LayerOrderAction, explicitIds?: readonly string[]) {
+    const ids = new Set(explicitIds ?? (body.current?.selected().map(e => e.id) ?? []));
+    if (!ids.size) return;
+    run(() => body.current?.transformScene(elements => reorderElements(elements, ids, action)));
+  }
+  function lockSelection(locked: boolean, explicitIds?: readonly string[]) {
+    const ids = new Set(explicitIds ?? (body.current?.selected().map(e => e.id) ?? []));
+    if (!ids.size) return;
+    run(() => body.current?.transformScene(elements => setElementsLocked(elements, ids, locked)));
+  }
+  function unlockAllSelection() {
+    const handle = body.current;
+    if (!handle) return;
+    const scope = handle.elements(paged ? currentPageId : undefined);
+    const lockedIds = new Set(scope.filter(e => !e.isDeleted && e.locked).map(e => e.id));
+    if (!lockedIds.size) return;
+    run(() => handle.transformScene(elements => setElementsLocked(elements, lockedIds, false)));
+  }
+  function restyleSelection(patch: { strokeColor?: string; strokeWidth?: number; opacity?: number; strokeStyle?: 'solid' | 'dashed' | 'dotted'; backgroundColor?: string }) {
+    const ids = new Set(body.current?.selected().map(e => e.id) ?? []);
+    if (!ids.size) return;
+    run(() => body.current?.transformScene(elements => restyleElements(elements, ids, patch)));
+  }
+  function handleToggleTape(id: string) {
+    run(() => body.current?.transformScene(elements => toggleTapeElement(elements, id)));
+  }
+  function toggleSelectedTapes() {
+    const handle = body.current;
+    if (!handle || !selection?.hasTape) return;
+    const ids = new Set(selection.ids);
+    const nextRevealed = !selection.tapeRevealed;
+    run(() => handle.transformScene(elements => setAllTapesRevealed(elements, nextRevealed, ids)));
+  }
+  function revealAllTapes(revealed: boolean) {
+    const useScratch = reading && scratchOpen;
+    if (reading && !useScratch) return;
+    const handle = useScratch ? scratch.current : body.current;
+    if (!handle) return;
+    const scope = !useScratch && paged ? new Set(handle.elements(currentPageId).map(e => e.id)) : undefined;
+    run(async () => {
+      let count = 0;
+      const changed = await handle.transformScene(elements => {
+        const res = setAllTapesRevealed(elements, revealed, scope);
+        count = res.count;
+        return res;
+      });
+      if (changed) toast.show({ kind: 'info', message: revealed ? `已揭开 ${count} 条胶带` : `已重新遮盖 ${count} 条胶带` });
+      else toast.show({ kind: 'info', message: revealed ? '当前没有可揭开的胶带' : '当前没有可遮盖的胶带' });
+    });
+  }
+  function saveSelectionToLibrary() {
+    const useScratch = reading && scratchOpen;
+    if (reading && !useScratch) return;
+    const handle = useScratch ? scratch.current : body.current;
+    if (!handle) return;
+    const items = handle.selected();
+    if (!items.length) return;
+    run(async () => {
+      const saved = await host.elements.add(items, { ...session.files, ...handle.api.getFiles() });
+      if (saved) toast.show({ kind: 'success', message: `已将「${saved.name}」存入常用元素库` });
+    });
+  }
+  function insertLibraryItem(item: SavedElementItem) {
+    const useScratch = reading && scratchOpen;
+    if (reading && !useScratch) return;
+    const handle = useScratch ? scratch.current : body.current;
+    if (!handle) return;
+    pop.close();
+    run(async () => {
+      const prepared = prepareLibraryInsert(item);
+      if (Object.keys(prepared.files).length) await session.acceptFiles(prepared.files);
+      await handle.insert(prepared.elements);
+      if (!reading) setTool('select');
+      toast.show({ kind: 'success', message: `已插入「${item.name}」` });
+    });
+  }
+  function handleInsertSpace(pageId: string, sceneY: number, deltaY: number) {
+    const handle = body.current;
+    if (!handle) return;
+    if (paged) {
+      const placement = handle.layout().byId.get(pageId);
+      if (!placement) return;
+      const localY = sceneY - placement.y;
+      run(async () => {
+        await handle.flush();
+        const before = await session.load(pageId);
+        const result = insertVerticalSpace(before, localY, deltaY);
+        if (!result.changed) return;
+        const page = manifest.pages.find(p => p.id === pageId);
+        if (!page) return;
+        const nextElements = result.movedIds.length ? (handle.api as InkApi).inkRebind(result.elements, result.movedIds) : result.elements;
+        session.editContent(new Map([[pageId, nextElements]]), () => {
+          const box = bounds(nextElements);
+          if (box) page.margins.bottom = Math.max(page.margins.bottom, box.y + box.height + 24 - page.height);
+        });
+        await handle.rebuild();
+        toast.show({ kind: 'info', message: deltaY >= 0 ? `已插入空白（下移 ${result.movedCount} 项）` : `已收起空隙（上移 ${result.movedCount} 项）`, action: { label: '撤销', run: () => undo() } });
+      });
+    } else {
+      run(async () => {
+        let moved = 0;
+        const changed = await handle.transformScene(elements => {
+          const result = insertVerticalSpace(elements, sceneY, deltaY);
+          moved = result.movedCount;
+          if (!result.changed) return result;
+          return { ...result, elements: (handle.api as InkApi).inkRebind(result.elements, result.movedIds) };
+        });
+        if (changed) toast.show({ kind: 'info', message: deltaY >= 0 ? `已插入空白（下移 ${moved} 项）` : `已收起空隙（上移 ${moved} 项）`, action: { label: '撤销', run: () => undo() } });
+      });
+    }
   }
   function connectSelection() {
     const selected = body.current?.selected().filter(e => cardReference(e)).sort((a, b) => a.x - b.x) ?? [];
@@ -387,7 +614,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     session.editLayout(() => manifest.regions.push(region));
     setSidebar(true); setTab('bookmarks'); setRenaming(region.id);
   }
-  const openRegion = (region: Region) => body.current?.reveal(region.pageId, region, true);
+  const openRegion = (region: Region) => revealPage(region.pageId, region, true);
   const bookmarkView = () => { if (body.current) addBookmark(sceneViewport(body.current.views.get())); };
   const renameRegion = (region: Region, title: string | null) => {
     setRenaming(null);
@@ -440,21 +667,84 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     if (purpose === 'bookmark') { setMarquee(null); addBookmark(polygonBounds(points)); }
   });
 
-  // ---------- images ----------
+  // ---------- images & clipboard ----------
+  async function insertImageBlob(file: Blob, targetHandle: CanvasHandle | null = body.current) {
+    if (!targetHandle) return;
+    if (targetHandle === body.current && readingRef.current) return;
+    const dataURL = await readDataURL(file);
+    const image = new Image(); image.src = dataURL; await image.decode();
+    if (targetHandle === body.current && readingRef.current) return;
+    const v = targetHandle.views.get(), fit = Math.min(1, (v.width / v.zoom) * 0.6 / image.naturalWidth, (v.height / v.zoom) * 0.6 / image.naturalHeight);
+    const id = uid();
+    await session.acceptFiles({ [id]: imageFile(id, dataURL, file.type || 'image/png') });
+    if (targetHandle === body.current && readingRef.current) return;
+    await targetHandle.insert(convertToExcalidrawElements([{ type: 'image', x: 0, y: 0, width: image.naturalWidth * fit, height: image.naturalHeight * fit, fileId: id as NonNullable<Extract<Element, { type: 'image' }>['fileId']> }]));
+    if (targetHandle === body.current && !readingRef.current) setTool('select');
+  }
   function chooseImage() {
+    if (readingRef.current && !scratchOpenRef.current) return;
     const input = createEl('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp,image/gif';
     input.onchange = () => run(async () => {
-      const file = input.files?.[0], handle = body.current; if (!file || !handle) return;
-      const dataURL = await readDataURL(file);
-      const image = new Image(); image.src = dataURL; await image.decode();
-      const v = handle.views.get(), fit = Math.min(1, (v.width / v.zoom) * 0.6 / image.naturalWidth, (v.height / v.zoom) * 0.6 / image.naturalHeight);
-      const id = uid();
-      await session.acceptFiles({ [id]: imageFile(id, dataURL, file.type) });
-      await handle.insert(convertToExcalidrawElements([{ type: 'image', x: 0, y: 0, width: image.naturalWidth * fit, height: image.naturalHeight * fit, fileId: id as NonNullable<Extract<Element, { type: 'image' }>['fileId']> }]));
-      setTool('select');
+      const file = input.files?.[0]; if (!file) return;
+      if (readingRef.current && !scratchOpenRef.current) return;
+      const target = readingRef.current && scratchOpenRef.current ? await scratchHandle() : body.current;
+      await insertImageBlob(file, target);
     });
     input.click();
   }
+  function copySelectedToClipboard(surface: 'body' | 'scratch' = 'body') {
+    const handle = surface === 'scratch' ? scratch.current : body.current;
+    if (!handle) return false;
+    const items = handle.selected();
+    if (!items.length) return false;
+    const payload = copyInkClipboard(items, { ...session.files, ...handle.api.getFiles() }, session.manifest.id);
+    if (!payload) return false;
+    void navigator.clipboard?.writeText?.(payload.token).catch(() => {});
+    toast.show({ kind: 'success', message: `已复制 ${payload.elements.length} 项，可在当前或其它笔记中 Ctrl+V 粘贴` });
+    return true;
+  }
+  async function pasteInkFromClipboard(surface: 'body' | 'scratch' = 'body') {
+    const handle = surface === 'scratch' ? scratch.current : body.current;
+    const payload = readInkClipboard();
+    if (!handle || !payload?.elements.length) return false;
+    if (Object.keys(payload.files).length) await session.acceptFiles(payload.files);
+    const elements = prepareClipboardForSession(payload, session.manifest.id);
+    await handle.insert(elements);
+    if (surface === 'body') setTool('select');
+    toast.show({ kind: 'success', message: `已粘贴 ${elements.length} 项` });
+    return true;
+  }
+  const onPaste = (event: React.ClipboardEvent) => {
+    if (resolving || editingCard) return;
+    const element = event.target as HTMLElement;
+    if (element.closest('input, textarea, select, [contenteditable=true]')) return;
+    const surface: 'body' | 'scratch' = element.closest('.ink-scratch') ? 'scratch' : 'body';
+    if (reading && surface === 'body') return;
+    const handle = surface === 'scratch' ? scratch.current : body.current;
+    if (!handle) return;
+    const stored = readInkClipboard();
+    const plainText = event.clipboardData?.getData('text/plain') ?? '';
+    if (stored && plainText === stored.token) {
+      event.preventDefault(); event.stopPropagation();
+      run(() => pasteInkFromClipboard(surface));
+      return;
+    }
+    const items = event.clipboardData?.items ? [...event.clipboardData.items] : [];
+    const imageItem = items.find(item => item.type.startsWith('image/'));
+    if (imageItem) {
+      const blob = imageItem.getAsFile();
+      if (blob) {
+        event.preventDefault(); event.stopPropagation();
+        run(() => insertImageBlob(blob, handle));
+        return;
+      }
+    }
+    const hasExternalClipboard = !!(plainText || items.length || (event.clipboardData?.types?.length ?? 0) > 0);
+    if (!hasExternalClipboard && stored) {
+      event.preventDefault(); event.stopPropagation();
+      run(() => pasteInkFromClipboard(surface));
+    }
+  };
 
   // ---------- export ----------
   async function exportDocument(kind: 'pdf' | 'png' | 'package', scope: 'all' | 'page' | 'selection' = 'all') {
@@ -468,7 +758,12 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       const progress = (done: number, total: number) => toast.update(id, { message: `正在导出${label} ${done}/${total}` });
       if (kind === 'package') { bytes = toArrayBuffer(await pack(session, progress, task.signal)); extension = 'inkpack'; detail = '包含正文、草稿纸、图片、原 PDF 与引用时的文字原件快照，可恢复编辑'; }
       else if (kind === 'pdf') {
-        const options: PdfExportOptions = { paper, pages: scope === 'page' ? [currentPageId] : undefined, selection: scope === 'selection' ? body.current?.selected() : undefined };
+        const options: PdfExportOptions = {
+          paper,
+          pages: scope === 'page' ? [currentPageId] : undefined,
+          selection: scope === 'selection' ? body.current?.selected() : undefined,
+          tile: !paged && scope === 'all' && paper !== 'original' && exportTile,
+        };
         bytes = toArrayBuffer(await readingPdf(session, progress, task.signal, options)); extension = 'pdf';
       } else {
         const result = scope === 'selection' ? await png(session, body.current?.selected() ?? []) : paged ? await pagePng(session, currentPage, pdf, task.signal) : await png(session, await session.read(manifest.pages[0].id));
@@ -495,14 +790,19 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     navigationToken.current = request.token;
     if (!manifest.pages.some(p => p.id === request.page)) { toast.show({ kind: 'error', message: '引用的页面已删除或尚未同步。' }); return; }
     const region = request.rect ?? manifest.regions.find(r => r.id === request.region);
-    handle.reveal(request.page, region, !!region);
+    revealPage(request.page, region, !!region);
   });
 
   // ---------- selection actions ----------
   const selectionActions = {
     duplicate: () => run(async () => { const h = body.current!, items = h.selected(); const r = selection!.rect; await h.insert(items, [r.x + r.width / 2 + 24, r.y + r.height / 2 + 24]); }),
     remove: () => run(() => body.current?.replaceSelected(() => null)),
-    recolor: (color: string) => run(() => body.current?.replaceSelected(e => e.type === 'image' ? e : { ...e, strokeColor: color })),
+    recolor: (color: string) => restyleSelection({ strokeColor: color }),
+    restyle: restyleSelection,
+    group: () => groupSelection(false),
+    ungroup: () => groupSelection(true),
+    order: (action: LayerOrderAction) => orderSelection(action),
+    toggleLock: () => lockSelection(!(selection?.locked ?? false)),
     toScratch: () => run(async () => { await toScratch(body.current!.selected()); toast.show({ kind: 'success', message: '已复制到草稿纸' }); }),
     bookmark: () => { if (selection) addBookmark(selection.rect); },
     source: (info: SelectionInfo | null) => run(async () => { const s = info?.source; if (!s?.document || !s.page || !Array.isArray(s.polygon)) return; setScratchOpen(false); await host.openSource(s.document, s.page, polygonBounds(s.polygon)); }),
@@ -529,12 +829,25 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       if (key === 'y') { event.preventDefault(); event.stopPropagation(); redo(surface); return; }
       if (key === 'f') { event.preventDefault(); event.stopPropagation(); setSidebar(true); setTab('search'); return; }
       if (key === 's') { event.preventDefault(); event.stopPropagation(); run(async () => { await session.flush(); toast.show({ kind: 'success', message: '已保存' }); }); return; }
+      if (key === 'c' && !event.shiftKey) {
+        if (copySelectedToClipboard(surface)) { event.preventDefault(); event.stopPropagation(); return; }
+      }
+      if (!reading && surface === 'body' && selection) {
+        if (key === 'g') { event.preventDefault(); event.stopPropagation(); groupSelection(event.shiftKey); return; }
+        if (event.code === 'BracketRight' || key === ']' || key === '}') { event.preventDefault(); event.stopPropagation(); orderSelection(event.shiftKey ? 'front' : 'forward'); return; }
+        if (event.code === 'BracketLeft' || key === '[' || key === '{') { event.preventDefault(); event.stopPropagation(); orderSelection(event.shiftKey ? 'back' : 'backward'); return; }
+        if (key === 'l' && event.shiftKey) { event.preventDefault(); event.stopPropagation(); lockSelection(!selection.locked); return; }
+      }
       return;
     }
     if (event.altKey || event.ctrlKey || event.metaKey) return;
-    if (event.key === 'Escape') { if (marquee) { setMarquee(null); event.stopPropagation(); } return; }
+    if (event.key === 'Escape') {
+      if (marquee) { setMarquee(null); event.stopPropagation(); return; }
+      if (selection && surface === 'body') { body.current?.clearSelection(); event.stopPropagation(); return; }
+      return;
+    }
     if (paged && (event.key === 'PageDown' || event.key === 'PageUp') && body.current) {
-      event.preventDefault(); const next = manifest.pages[currentIndex + (event.key === 'PageDown' ? 1 : -1)]; if (next) body.current.reveal(next.id); return;
+      event.preventDefault(); const next = manifest.pages[currentIndex + (event.key === 'PageDown' ? 1 : -1)]; if (next) goToPage(next.id); return;
     }
     if (event.shiftKey || key.length !== 1) return;
     const mapped = SHORTCUTS[key];
@@ -582,6 +895,9 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     paged ? { icon: 'sliders', label: '纸张与页边距…', onSelect: () => openSettings(currentPageId, pop.anchor) }
       : { icon: 'canvas', label: '画布样式…', onSelect: () => openSettings(manifest.pages[0].id, pop.anchor) },
     { icon: 'focus', label: '专注模式', hint: '隐藏侧栏和工具栏之外的界面', onSelect: () => { setFocus(true); setSidebar(false); } },
+    paged && { icon: prefs.nightPaper ? 'sun' : 'moon', label: '夜间护眼纸面', hint: '柔和暗色反显，不影响保存和导出', checked: prefs.nightPaper, onSelect: () => store.update({ nightPaper: !prefs.nightPaper }) },
+    !reading && { icon: 'ruler', label: '虚拟直尺', hint: '沿直尺边缘画笔自动吸附直线', checked: !!ruler, onSelect: toggleRuler },
+    !reading && { icon: 'gridSnap', label: '网格吸附', hint: '图形与移动自动对齐网格点', checked: prefs.gridSnap, onSelect: () => store.update({ gridSnap: !prefs.gridSnap }) },
     !paged && { icon: 'bookmark', label: '将当前视野存为书签', onSelect: bookmarkView },
     { icon: 'finger', label: '用手指书写', hint: prefs.fingerDraws ? '手指书写，双指移动' : '目前手指只用于移动和缩放', checked: prefs.fingerDraws, onSelect: () => store.update({ fingerDraws: !prefs.fingerDraws }) },
     'separator',
@@ -593,8 +909,9 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     { icon: 'sliders', label: '笔记属性…', onSelect: () => run(() => host.properties()) },
   ];
 
+  const hasOutline = paged && !!pdf;
   const sidebarVisible = sidebar && !focus;
-  const sidebarTab = !paged && tab === 'pages' ? 'bookmarks' : tab;
+  const sidebarTab: SidebarTab = (!paged && tab === 'pages') ? 'bookmarks' : (!hasOutline && tab === 'outline') ? (paged ? 'pages' : 'bookmarks') : tab;
   const closeSidebar = (remember = false) => {
     setSidebar(false);
     if (remember) store.update({ sidebar: paged ? { pages: false } : { canvas: false } });
@@ -626,13 +943,15 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     </div>
   </header>;
   const tools = <ToolDock layer={layer} visible={!reading || scratchOpen} onDrag={pop.close}>
-    <ToolShelf tool={tool} onTool={setTool} onImage={chooseImage} capture={!!pdf} prefs={prefs} store={store}/>
+    <ToolShelf tool={tool} onTool={setTool} onImage={chooseImage} capture={!!pdf} prefs={prefs} store={store} onRevealAllTapes={revealAllTapes}/>
+    <IconButton icon="sticker" label="常用元素库" aria-expanded={pop.open === 'elements'} onClick={event => pop.toggle('elements', event.currentTarget)}/>
+    <IconButton icon="layers" label="图层与编组" aria-expanded={pop.open === 'layers'} onClick={event => pop.toggle('layers', event.currentTarget)}/>
     <IconButton icon="docText" label="文字段落" aria-expanded={pop.open === 'mixed'} onClick={event => pop.toggle('mixed', event.currentTarget)}/>
     {!paged && <IconButton icon="canvas" label="画布卡片" aria-expanded={pop.open === 'cards'} disabled={!!editingCard} onClick={event => pop.toggle('cards', event.currentTarget)}/>}
   </ToolDock>;
 
   return <LayerContext.Provider value={layer}>
-    <div ref={setLayer} className={`ink-workspace ink-mode-${manifest.mode}${focus ? ' is-focus' : ''}${reading ? ' is-reading' : ''}${sidebarVisible ? ' has-sidebar' : ''}`} onKeyDownCapture={onKeyDown}>
+    <div ref={setLayer} className={`ink-workspace ink-mode-${manifest.mode}${focus ? ' is-focus' : ''}${reading ? ' is-reading' : ''}${sidebarVisible ? ' has-sidebar' : ''}`} onKeyDownCapture={onKeyDown} onPasteCapture={onPaste}>
       {topbar}
       {tools}
       {session.conflictPath && <div className="ink-banner is-warning" role="alert"><InkIcon name="warning"/><span><strong>这个笔记在别处被修改过。</strong>你的内容已安全保留，自动保存已暂停。两种选择都不会丢失任何一方的内容。</span>
@@ -646,39 +965,58 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
           if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeSidebar(); }
         }}>
           <div className="ink-sidebar-heading">
-            <SidebarTabs id={sidebarId} tab={sidebarTab} onTab={chooseTab} paged={paged}/>
+            <SidebarTabs id={sidebarId} tab={sidebarTab} onTab={chooseTab} paged={paged} hasOutline={hasOutline}/>
             <IconButton icon="close" label="收起侧栏" onClick={() => closeSidebar(true)}/></div>
           <div className="ink-sidebar-panel" id={`${sidebarId}-panel`} role="tabpanel" aria-labelledby={`${sidebarId}-${sidebarTab}`}>
-          {paged && tab === 'pages' && <PageList session={session} pdf={pdf} current={currentPageId} onSelect={goToPage} onAdd={() => addPage()} onMenu={(id, anchor) => { setTarget(id); pop.set({ id: 'page-menu', anchor }); }}/>}
-          {(tab === 'bookmarks' || !paged && tab === 'pages') && <BookmarkList regions={manifest.regions} pageNumber={id => paged ? indexOf(id) + 1 : 0} onOpen={openRegion}
+          {paged && sidebarTab === 'pages' && <PageList session={session} pdf={pdf} current={currentPageId} onSelect={goToPage} onAdd={() => addPage()} onMenu={(id, anchor) => { setTarget(id); pop.set({ id: 'page-menu', anchor }); }}/>}
+          {hasOutline && sidebarTab === 'outline' && pdf && <OutlineList pdf={pdf} pages={manifest.pages} currentPdfPage={currentPage?.pdfPage} onSelect={goToPage}/>}
+          {sidebarTab === 'bookmarks' && <BookmarkList regions={manifest.regions} pageNumber={id => paged ? indexOf(id) + 1 : 0} onOpen={openRegion}
             onMenu={(region, anchor) => { setTarget(region.id); pop.set({ id: 'bookmark-menu', anchor }); }} onSaveView={paged ? undefined : bookmarkView}
             onAdd={() => { setReading(false); setMarquee({ shape: 'rect', purpose: 'bookmark' }); if (compact) setSidebar(false); }}
             renaming={renaming} onRename={renameRegion}/>}
-          {tab === 'search' && <SearchPanel session={session} pdf={pdf} paged={paged} onOpen={(hit: SearchHit) => body.current?.reveal(hit.page, hit.rect, !!hit.rect)}/>}
+          {sidebarTab === 'search' && <SearchPanel session={session} pdf={pdf} paged={paged} onOpen={(hit: SearchHit) => revealPage(hit.page, hit.rect, !!hit.rect)}/>}
           </div>
         </aside></>}
         <div className="ink-surfaces" ref={area}>
-        <main className="ink-canvas-area">
-          <InkCanvas session={session} pdf={pdf} kind={paged ? 'pages' : 'canvas'} pagesKey={pagesKey} tool={bodyTool} fingerDraws={prefs.fingerDraws} theme={theme} readOnly={reading || !!editingCard}
+        <main className={`ink-canvas-area${zoomWindowOpen && !reading ? ' has-zoom-window' : ''}`}>
+          <InkCanvas session={session} pdf={pdf} kind={paged ? 'pages' : 'canvas'} pagesKey={pagesKey} tool={bodyTool} fingerDraws={prefs.fingerDraws} zoomLock={prefs.zoomLock} nightPaper={paged && prefs.nightPaper} gridSnap={prefs.gridSnap} ruler={reading ? null : ruler} theme={theme} readOnly={reading || !!editingCard}
             initialView={host.loadView()} ref={body}
             onReady={handle => { body.current = handle; setViews(handle.views); }}
             onError={message => toast.show({ kind: 'error', message })}
             onSelection={setSelection} onMarquee={onMarquee} onGesture={gesture => gesture === 'undo' ? undo() : redo()}
             onScribble={() => toast.show({ kind: 'info', message: '已涂划擦除', action: { label: '撤销', run: () => undo() } })}
+            onEraseEnd={onEraseEnd}
+            onInsertSpace={handleInsertSpace}
+            onToggleTape={handleToggleTape}
             onCardEdit={!paged ? editCard : undefined}
             onAddPage={paged && !reading ? () => addPage() : undefined}
             onViewChange={() => { if (body.current) host.saveView(body.current.memory()); }}/>
+          {ruler && !reading && <RulerOverlay ruler={ruler} onChange={setRuler} onClose={() => setRuler(null)}/>}
+          {zoomWindowOpen && !reading && body.current && <ZoomBoxOverlay views={views} box={zoomBox} autoAdvance={zoomAutoAdvance} onChange={setZoomBox}/>}
           {selection && !selection.busy && !marquee && !reading && !editingCard && <SelectionBar views={views} selection={selection} paged={paged}
-            onDuplicate={selectionActions.duplicate} onRemove={selectionActions.remove} onScratch={selectionActions.toScratch} onBookmark={selectionActions.bookmark}
-            onColor={anchor => pop.set({ id: 'selection-color', anchor })} onExport={anchor => pop.set({ id: 'selection-export', anchor })}
+            onDuplicate={selectionActions.duplicate} onCopy={() => copySelectedToClipboard('body')} onSaveElement={saveSelectionToLibrary} onToggleTape={selection.hasTape ? toggleSelectedTapes : undefined} onRemove={selectionActions.remove} onScratch={selectionActions.toScratch} onBookmark={selectionActions.bookmark}
+            onGroup={selectionActions.group} onUngroup={selectionActions.ungroup} onToggleLock={selectionActions.toggleLock}
+            onLayers={anchor => pop.toggle('selection-layers', anchor)}
+            onColor={anchor => pop.toggle('selection-color', anchor)} onExport={anchor => pop.toggle('selection-export', anchor)}
             onSource={selection.source ? () => selectionActions.source(selection) : undefined}/>}
           {editingCard && <CardEditor root={editingCard.root} source={editingCard.source.path} text={editingCard.source.text} views={views} onSave={saveCardDraft} onClose={() => setEditingCard(null)} bindKeys={(element, submit) => host.text.bindDraftKeys(element, submit)}/>}
           {marquee && <div className="ink-mode-hint" role="status">拖动框选要加书签的区域<button type="button" onClick={() => setMarquee(null)}>取消</button></div>}
           <ViewControls views={views} paged={paged} pageCount={manifest.pages.length} pageIndex={currentIndex}
+            zoomLock={prefs.zoomLock} onToggleZoomLock={() => store.update({ zoomLock: !prefs.zoomLock })}
+            nightPaper={prefs.nightPaper} onToggleNightPaper={() => store.update({ nightPaper: !prefs.nightPaper })}
+            zoomWindowOpen={zoomWindowOpen} onToggleZoomWindow={toggleZoomWindow}
+            rulerOpen={!!ruler} onToggleRuler={toggleRuler}
+            gridSnap={prefs.gridSnap} onToggleGridSnap={() => store.update({ gridSnap: !prefs.gridSnap })}
             onZoom={anchor => pop.toggle('zoom', anchor)} onJump={anchor => pop.toggle('jump', anchor)}
             onStep={delta => { const page = manifest.pages[currentIndex + delta]; if (page) goToPage(page.id); }}
             onFit={() => body.current?.zoom(paged ? 'fitWidth' : 'fitAll')} onBookmark={bookmarkView}
             onAdd={() => addPage(currentPageId)} reading={reading}/>
+          {zoomWindowOpen && !reading && body.current && <ZoomWindow
+            session={session} pdf={pdf} handle={body.current} paged={paged} tool={tool} prefs={prefs}
+            dark={!paged && theme === 'dark'} nightPaper={paged && prefs.nightPaper}
+            box={zoomBox} factor={zoomFactor} autoAdvance={zoomAutoAdvance}
+            onBoxChange={setZoomBox} onFactorChange={setZoomFactor} onAutoAdvanceChange={setZoomAutoAdvance}
+            onClose={() => setZoomWindowOpen(false)} onEraseEnd={onEraseEnd}/>}
           <Toasts toasts={toast.toasts} dismiss={toast.dismiss}/>
         </main>
           <ScratchWindow docked={prefs.scratchPlacement === 'docked'} onDock={() => store.update({ scratchPlacement: prefs.scratchPlacement === 'docked' ? 'floating' : 'docked' })} open={scratchOpen} frame={prefs.scratch} area={areaSize} onClose={() => setScratchOpen(false)}
@@ -686,9 +1024,20 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
             history={{ canUndo: session.scratchHistory.canUndo, canRedo: session.scratchHistory.canRedo, undo: () => undo('scratch'), redo: () => redo('scratch'),
               clear: () => run(async () => { const h = scratch.current; if (!h) return; await h.flush(); h.api.updateScene({ elements: [] }); await h.flush(); toast.show({ kind: 'info', message: '草稿纸已清空', action: { label: '撤销', run: () => undo('scratch') } }); }) }}
             selection={scratchSelection && !scratchSelection.busy ? { toBody: () => run(toBody), destination: paged ? '当前页' : '画布', remove: () => run(() => scratch.current?.replaceSelected(() => null)), source: scratchSelection.source ? () => selectionActions.source(scratchSelection) : undefined } : null}>
-            <InkCanvas session={session} kind="scratch" pagesKey="scratch" tool={scratchTool} fingerDraws={prefs.fingerDraws} theme={theme} ref={scratch}
+            <InkCanvas session={session} kind="scratch" pagesKey="scratch" tool={scratchTool} fingerDraws={prefs.fingerDraws} zoomLock={prefs.zoomLock} theme={theme} ref={scratch}
               initialView={host.loadView('scratch')}
               onScribble={() => toast.show({ kind: 'info', message: '已涂划擦除', action: { label: '撤销', run: () => undo('scratch') } })}
+              onEraseEnd={onEraseEnd}
+              onToggleTape={id => run(() => scratch.current?.transformScene(elements => toggleTapeElement(elements, id)))}
+              onInsertSpace={(_pageId, sceneY, deltaY) => run(async () => {
+                const h = scratch.current;
+                if (!h) return;
+                await h.transformScene(elements => {
+                  const result = insertVerticalSpace(elements, sceneY, deltaY);
+                  if (!result.changed) return result;
+                  return { ...result, elements: (h.api as InkApi).inkRebind(result.elements, result.movedIds) };
+                });
+              })}
               onReady={handle => { scratch.current = handle; setScratchViews(handle.views); for (const resolve of scratchWaiters.current.splice(0)) resolve(handle); }}
               onViewChange={() => { if (scratch.current) host.saveView(scratch.current.memory(), 'scratch'); }}
               onError={message => toast.show({ kind: 'error', message })} onSelection={setScratchSelection} onGesture={gesture => gesture === 'undo' ? undo('scratch') : redo('scratch')}/>
@@ -721,6 +1070,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       {pop.open === 'export' && <Popover anchor={pop.anchor} onClose={pop.close} label="导出" align="end" className="ink-export">
         <div className="ink-popover-title">导出</div>
         <div className="ink-field"><span>PDF 纸张</span><Segmented label="PDF 纸张" value={paper} onChange={setPaper} options={[{ value: 'original', label: '原尺寸' }, { value: 'a4', label: 'A4' }, { value: 'letter', label: 'Letter' }]}/></div>
+        {!paged && paper !== 'original' && <label className="ink-check ink-export-tile"><input type="checkbox" checked={exportTile} onChange={event => setExportTile(event.target.checked)}/>大图自动分页平铺（适合打印）</label>}
         <Menu onDone={() => {}} items={paged ? [
           { icon: 'pdf', label: manifest.pdf ? '批注版 PDF' : 'PDF', hint: `全部 ${manifest.pages.length} 页`, onSelect: () => run(() => exportDocument('pdf')) },
           { icon: 'page', label: '当前页 PDF', hint: `第 ${currentIndex + 1} 页`, onSelect: () => run(() => exportDocument('pdf', 'page')) },
@@ -752,14 +1102,55 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         ...(paged && pop.open === 'zoom' ? [['fitWidth', '适合宽度', 'fitWidth'], ['page', '适合整页', 'fitPage']] : [['fit', '显示全部内容', 'fitAll']]),
       ] as [string, string, ZoomAction][]).map(([icon, label, action]) => ({ icon, label, onSelect: () => (pop.open === 'scratch-zoom' ? scratch.current : body.current)?.zoom(action) }))}/></Popover>}
       {pop.open === 'jump' && <Popover anchor={pop.anchor} onClose={pop.close} label="跳转页面" align="end" className="ink-jump">
-        <form onSubmit={event => { event.preventDefault(); const n = Number(new FormData(event.currentTarget).get('page')); const page = manifest.pages[n - 1]; if (page) { body.current?.reveal(page.id); pop.close(); } }}>
+        <form onSubmit={event => { event.preventDefault(); const n = Number(new FormData(event.currentTarget).get('page')); const page = manifest.pages[n - 1]; if (page) { goToPage(page.id); pop.close(); } }}>
           <label>跳到第 <input name="page" type="number" min={1} max={manifest.pages.length} defaultValue={currentIndex + 1} data-autofocus onFocus={event => event.currentTarget.select()}/> 页</label>
           <button type="submit" className="mod-cta">前往</button>
         </form>
       </Popover>}
-      {pop.open === 'selection-color' && <Popover anchor={pop.anchor} onClose={pop.close} label="选区颜色" align="center" className="ink-color-popover">
-        <Swatches colors={PEN_COLORS} value="" custom onChange={color => { pop.close(); selectionActions.recolor(color); }} label="改为颜色"/>
+      {pop.open === 'elements' && <Popover anchor={pop.anchor} onClose={pop.close} label="常用元素库" align="end" className="ink-elements-popover">
+        <ElementsPanel items={savedElements} canSave={reading ? !!(scratchOpen && scratchSelection) : !!selection} onSaveCurrent={saveSelectionToLibrary} onInsert={insertLibraryItem} onRemove={id => run(() => host.elements.remove(id))}/>
       </Popover>}
+      {pop.open === 'layers' && <Popover anchor={pop.anchor} onClose={pop.close} label="图层与编组" align="end" className="ink-layers-popover">
+        <LayersPanel elements={body.current?.elements(paged ? currentPageId : undefined) ?? mixedElements} pageLabel={paged ? `第 ${currentIndex + 1} 页` : undefined}
+          selectedIds={selection?.ids ?? []}
+          canGroup={selection?.canGroup ?? false} grouped={selection?.grouped ?? false} locked={selection?.locked ?? false} readOnly={reading}
+          onSelect={ids => { body.current?.selectIds(ids); }}
+          onOrder={(ids, action) => orderSelection(action, ids)}
+          onGroup={ids => groupSelection(false, ids)}
+          onUngroup={ids => groupSelection(true, ids)}
+          onLock={(ids, nextLocked) => lockSelection(nextLocked, ids)}
+          onUnlockAll={unlockAllSelection}/>
+      </Popover>}
+      {pop.open === 'selection-color' && selection && <Popover anchor={pop.anchor} onClose={pop.close} label="选区样式" align="center" className="ink-style-popover">
+        {!selection.allImages && <>
+          <div className="ink-popover-subtitle">颜色</div>
+          <Swatches colors={PEN_COLORS} value={selection.strokeColor ?? PEN_COLORS[0]} custom onChange={color => selectionActions.restyle({ strokeColor: color })} label="改为颜色"/>
+        </>}
+        {selection.hasStrokeWidth && <>
+          <div className="ink-popover-subtitle">粗细</div>
+          <div className="ink-chip-row">{PEN_WIDTHS.map(w => <button key={w} type="button" aria-pressed={selection.strokeWidth === w} onClick={() => selectionActions.restyle({ strokeWidth: w })}>{w}px</button>)}</div>
+        </>}
+        {selection.hasStrokeStyle && <>
+          <div className="ink-popover-subtitle">线型</div>
+          <div className="ink-chip-row">{([['solid', '实线'], ['dashed', '虚线'], ['dotted', '点线']] as const).map(([style, label]) => <button key={style} type="button" aria-pressed={selection.strokeStyle === style} onClick={() => selectionActions.restyle({ strokeStyle: style })}>{label}</button>)}</div>
+        </>}
+        {selection.hasFill && <>
+          <div className="ink-popover-subtitle">填充</div>
+          <Swatches colors={SHAPE_FILLS} value={selection.backgroundColor ?? 'transparent'} allowTransparent custom onChange={backgroundColor => selectionActions.restyle({ backgroundColor })} label="填充颜色"/>
+        </>}
+        <div className="ink-popover-subtitle">透明度</div>
+        <div className="ink-chip-row">{([100, 70, 35] as const).map(op => <button key={op} type="button" aria-pressed={selection.opacity === op} onClick={() => selectionActions.restyle({ opacity: op })}>{op}%</button>)}</div>
+      </Popover>}
+      {pop.open === 'selection-layers' && selection && <Popover anchor={pop.anchor} onClose={pop.close} label="图层与编组" align="center"><Menu onDone={pop.close} items={[
+        { icon: 'bringFront', label: '置于顶层', hint: 'Ctrl+Shift+]', onSelect: () => selectionActions.order('front') },
+        { icon: 'moveUp', label: '上移一层', hint: 'Ctrl+]', onSelect: () => selectionActions.order('forward') },
+        { icon: 'moveDown', label: '下移一层', hint: 'Ctrl+[', onSelect: () => selectionActions.order('backward') },
+        { icon: 'sendBack', label: '置于底层', hint: 'Ctrl+Shift+[', onSelect: () => selectionActions.order('back') },
+        'separator',
+        selection.canGroup && { icon: 'group', label: '组合所选', hint: 'Ctrl+G · 合并为一个整体', onSelect: selectionActions.group },
+        selection.grouped && { icon: 'ungroup', label: '拆分组合', hint: 'Ctrl+Shift+G · 拆回独立笔迹', onSelect: selectionActions.ungroup },
+        { icon: selection.locked ? 'unlock' : 'lock', label: selection.locked ? '解锁所选' : '锁定所选', hint: 'Ctrl+Shift+L · 防止误擦或误移', onSelect: selectionActions.toggleLock },
+      ]}/></Popover>}
       {pop.open === 'selection-export' && <Popover anchor={pop.anchor} onClose={pop.close} label="导出选区" align="center"><Menu onDone={pop.close} items={[
         { icon: 'image', label: '导出为图片', hint: 'PNG，透明背景', onSelect: () => run(() => exportDocument('png', 'selection')) },
         { icon: 'pdf', label: '导出为 PDF', hint: '矢量，只含所选内容', onSelect: () => run(() => exportDocument('pdf', 'selection')) },
@@ -768,12 +1159,13 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   </LayerContext.Provider>;
 }
 
-function SelectionBar({ views, selection, paged, onDuplicate, onRemove, onScratch, onBookmark, onColor, onExport, onSource }: {
-  views: ViewStore; selection: SelectionInfo; paged: boolean; onDuplicate: () => void; onRemove: () => void; onScratch: () => void; onBookmark: () => void;
+function SelectionBar({ views, selection, paged, onDuplicate, onCopy, onSaveElement, onToggleTape, onRemove, onScratch, onBookmark, onGroup, onUngroup, onToggleLock, onLayers, onColor, onExport, onSource }: {
+  views: ViewStore; selection: SelectionInfo; paged: boolean; onDuplicate: () => void; onCopy: () => void; onSaveElement: () => void; onToggleTape?: () => void; onRemove: () => void; onScratch: () => void; onBookmark: () => void;
+  onGroup: () => void; onUngroup: () => void; onToggleLock: () => void; onLayers: (anchor: HTMLElement) => void;
   onColor: (anchor: HTMLElement) => void; onExport: (anchor: HTMLElement) => void; onSource?: () => void;
 }) {
   const bar = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ width: 280, height: 46 });
+  const [size, setSize] = useState({ width: 340, height: 46 });
   useLayoutEffect(() => {
     const element = bar.current; if (!element) return;
     const measure = () => setSize({ width: element.offsetWidth, height: element.offsetHeight });
@@ -790,7 +1182,16 @@ function SelectionBar({ views, selection, paged, onDuplicate, onRemove, onScratc
   const half = size.width / 2;
   return <div ref={bar} className="ink-selection-bar" role="toolbar" aria-label={`已选中 ${selection.ids.length} 个对象`} style={{ left: Math.max(half + 8, Math.min(x, width - half - 8)), top: Math.max(8, y) }}>
     <IconButton icon="duplicate" label="复制一份" onClick={onDuplicate}/>
-    <IconButton icon="drop" label="颜色" onClick={event => onColor(event.currentTarget)}/>
+    <IconButton icon="copy" label="跨笔记复制" shortcut="Ctrl+C" onClick={onCopy}/>
+    <IconButton icon="saveSticker" label="存为常用元素" onClick={onSaveElement}/>
+    {onToggleTape && <IconButton icon={selection.tapeRevealed ? 'eyeOff' : 'eye'} label={selection.tapeRevealed ? '重新遮盖胶带' : '揭开胶带'} onClick={onToggleTape}/>}
+    <IconButton icon="drop" label="颜色与样式" onClick={event => onColor(event.currentTarget)}/>
+    <span className="ink-divider" aria-hidden="true"/>
+    {selection.canGroup && <IconButton icon="group" label="组合所选" shortcut="Ctrl+G" onClick={onGroup}/>}
+    {selection.grouped && <IconButton icon="ungroup" label="拆分组合" shortcut="Ctrl+Shift+G" onClick={onUngroup}/>}
+    <IconButton icon="layers" label="图层顺序" onClick={event => onLayers(event.currentTarget)}/>
+    <IconButton icon={selection.locked ? 'unlock' : 'lock'} label={selection.locked ? '解锁' : '锁定'} aria-pressed={selection.locked} onClick={onToggleLock}/>
+    <span className="ink-divider" aria-hidden="true"/>
     <IconButton icon="scratch" label="复制到草稿纸" onClick={onScratch}/>
     <IconButton icon="bookmark" label={paged ? '为这块区域加书签' : '加书签'} onClick={onBookmark}/>
     <IconButton icon="share" label="导出所选" onClick={event => onExport(event.currentTarget)}/>
@@ -800,29 +1201,39 @@ function SelectionBar({ views, selection, paged, onDuplicate, onRemove, onScratc
   </div>;
 }
 
-function ZoomControls({ views, label = '缩放', fitLabel, onZoom, onFit }: {
-  views: ViewStore; label?: string; fitLabel: string; onZoom: (anchor: HTMLElement) => void; onFit: () => void;
+function ZoomControls({ views, label = '缩放', fitLabel, zoomLock, onToggleZoomLock, onZoom, onFit }: {
+  views: ViewStore; label?: string; fitLabel: string; zoomLock?: boolean; onToggleZoomLock?: () => void; onZoom: (anchor: HTMLElement) => void; onFit: () => void;
 }) {
   const zoom = useView(views, v => Math.round(v.zoom * 100));
   return <div className="ink-view-group">
     <IconButton icon={fitLabel === '适合宽度' ? 'fitWidth' : 'fit'} label={fitLabel} onClick={onFit}/>
     <button type="button" className="ink-zoom-value" aria-label={`${label} ${zoom}%`} onClick={event => onZoom(event.currentTarget)}>{zoom}%<InkIcon name="down"/></button>
+    {onToggleZoomLock && <IconButton icon={zoomLock ? 'lock' : 'unlock'} label={zoomLock ? '已锁定缩放（点击解锁）' : '锁定缩放与防横向漂移'} aria-pressed={zoomLock} className="ink-zoom-lock" onClick={onToggleZoomLock}/>}
   </div>;
 }
 
-function ViewControls({ views, paged, pageCount, pageIndex, onZoom, onJump, onStep, onFit, onBookmark, onAdd, reading }: {
-  views: ViewStore; paged: boolean; pageCount: number; pageIndex: number; onZoom: (anchor: HTMLElement) => void; onJump: (anchor: HTMLElement) => void;
+function ViewControls({ views, paged, pageCount, pageIndex, zoomLock, onToggleZoomLock, nightPaper, onToggleNightPaper, zoomWindowOpen, onToggleZoomWindow, rulerOpen, onToggleRuler, gridSnap, onToggleGridSnap, onZoom, onJump, onStep, onFit, onBookmark, onAdd, reading }: {
+  views: ViewStore; paged: boolean; pageCount: number; pageIndex: number; zoomLock: boolean; onToggleZoomLock: () => void;
+  nightPaper: boolean; onToggleNightPaper: () => void; zoomWindowOpen: boolean; onToggleZoomWindow: () => void;
+  rulerOpen: boolean; onToggleRuler: () => void; gridSnap: boolean; onToggleGridSnap: () => void;
+  onZoom: (anchor: HTMLElement) => void; onJump: (anchor: HTMLElement) => void;
   onStep: (delta: number) => void; onFit: () => void; onBookmark: () => void; onAdd: () => void; reading: boolean;
 }) {
   // Bottom-left: Obsidian's status bar floats over the bottom-right corner.
   return <div className="ink-view-controls">
-    <ZoomControls views={views} fitLabel={paged ? '适合宽度' : '显示全部内容'} onZoom={onZoom} onFit={onFit}/>
+    <ZoomControls views={views} fitLabel={paged ? '适合宽度' : '显示全部内容'} zoomLock={zoomLock} onToggleZoomLock={onToggleZoomLock} onZoom={onZoom} onFit={onFit}/>
     {paged ? <div className="ink-view-group">
       <IconButton icon="left" label="上一页" disabled={pageIndex === 0} onClick={() => onStep(-1)}/>
       <button type="button" className="ink-page-number" aria-label={`第 ${pageIndex + 1} 页，共 ${pageCount} 页，点击跳转`} onClick={event => onJump(event.currentTarget)}>{pageIndex + 1}<span>/ {pageCount}</span></button>
       <IconButton icon="right" label="下一页" disabled={pageIndex === pageCount - 1} onClick={() => onStep(1)}/>
       {!reading && <IconButton icon="pageAdd" label="在当前页后添加" onClick={onAdd}/>}
+      <IconButton icon={nightPaper ? 'sun' : 'moon'} label={nightPaper ? '关闭夜间护眼纸面' : '夜间护眼纸面'} aria-pressed={nightPaper} className="ink-zoom-lock" onClick={onToggleNightPaper}/>
     </div> : <div className="ink-view-group"><IconButton icon="bookmark" label="保存当前视野" className="ink-labelled" onClick={onBookmark}><span>保存视野</span></IconButton></div>}
+    {!reading && <div className="ink-view-group">
+      <IconButton icon="zoomWindow" label={zoomWindowOpen ? '关闭放大书写框' : '放大书写框'} aria-pressed={zoomWindowOpen} className="ink-zoom-lock" onClick={onToggleZoomWindow}/>
+      <IconButton icon="ruler" label={rulerOpen ? '收起虚拟直尺' : '虚拟直尺'} aria-pressed={rulerOpen} className="ink-zoom-lock" onClick={onToggleRuler}/>
+      <IconButton icon="gridSnap" label={gridSnap ? '关闭网格吸附' : '网格吸附'} aria-pressed={gridSnap} className="ink-zoom-lock" onClick={onToggleGridSnap}/>
+    </div>}
   </div>;
 }
 

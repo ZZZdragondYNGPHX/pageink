@@ -4,6 +4,10 @@ import type { TextReference, InkAnchor } from './mixed';
 import type { CardReference } from './cards';
 
 export interface InkCustomData extends Record<string, unknown> {
+  inkKind?: 'pen' | 'highlighter';
+  inkRawPoints?: readonly [number, number][];
+  inkRawPressures?: readonly number[];
+  inkTape?: { version: 1; revealed?: boolean };
   pageinkText?: TextReference;
   pageinkAnchor?: InkAnchor;
   pageinkCard?: CardReference;

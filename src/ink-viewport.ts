@@ -13,6 +13,40 @@ interface Preview { view: InkRasterView; timer?: number }
 const previews = new WeakMap<HTMLCanvasElement, Preview>();
 const snapshots = new WeakMap<HTMLCanvasElement, { canvas: HTMLCanvasElement; view: InkRasterView }>();
 const forcedRedraw = new WeakSet<HTMLCanvasElement>();
+const renderCosts = new WeakMap<HTMLCanvasElement, number>();
+
+const PAN_LIVE_ELEMENTS = 1200;
+const ZOOM_LIVE_ELEMENTS = 600;
+const PROGRESSIVE_ELEMENTS = 2000;
+const LIVE_RENDER_BUDGET_MS = 10;
+const MAX_DEFERRED_SHIFT_RATIO = 0.22;
+
+export function recordInkRenderCost(canvas: HTMLCanvasElement, ms: number) {
+  const prev = renderCosts.get(canvas);
+  renderCosts.set(canvas, prev === undefined ? ms : prev * 0.6 + ms * 0.4);
+}
+
+/** Only defer static redraws when the scene is genuinely heavy; ordinary scrolling renders live with zero edge clipping. */
+export function shouldDeferInkViewport(canvas: HTMLCanvasElement, view: InkRasterView, visibleCount: number, viewportWidth = 0, viewportHeight = 0): boolean {
+  if (forcedRedraw.has(canvas)) return false;
+  const previous = previews.get(canvas) ?? (snapshots.has(canvas) ? { view: snapshots.get(canvas)!.view } : undefined);
+  if (!previous) return false;
+  const base = previous.view;
+  if (base.source !== view.source || base.revision !== view.revision || base.key !== view.key) return false;
+  if (base.zoom === view.zoom && base.scrollX === view.scrollX && base.scrollY === view.scrollY) return false;
+  const sameZoom = base.zoom === view.zoom;
+  const cost = renderCosts.get(canvas) ?? 0;
+  if (visibleCount < (sameZoom ? PAN_LIVE_ELEMENTS : ZOOM_LIVE_ELEMENTS) && cost < LIVE_RENDER_BUDGET_MS) return false;
+  // For single-frame heavy scenes (<2000 elements), force a synchronous refresh once panning exposes >22%
+  // of the viewport. Multi-frame progressive scenes (>=2000) must stay deferred until settle so continuous
+  // scrolling never repeatedly clears and restarts progressive drawing at 512 strokes.
+  if (sameZoom && visibleCount < PROGRESSIVE_ELEMENTS && viewportWidth > 0 && viewportHeight > 0) {
+    const dx = Math.abs((view.scrollX - base.scrollX) * view.zoom);
+    const dy = Math.abs((view.scrollY - base.scrollY) * view.zoom);
+    if (dx > viewportWidth * MAX_DEFERRED_SHIFT_RATIO || dy > viewportHeight * MAX_DEFERRED_SHIFT_RATIO) return false;
+  }
+  return true;
+}
 
 export function discardInkViewport(canvas: HTMLCanvasElement) {
   clearInkViewport(canvas);
@@ -47,7 +81,12 @@ export function commitInkViewport(canvas: HTMLCanvasElement, view: InkRasterView
   previews.set(canvas, { view });
 }
 
-export function deferInkViewport(canvas: HTMLCanvasElement, view: InkRasterView, redraw: () => void): boolean {
+/** Register a progressive pass's viewport for transform reuse without discarding any held snapshot. */
+export function stageInkViewport(canvas: HTMLCanvasElement, view: InkRasterView) {
+  if (!previews.has(canvas)) previews.set(canvas, { view });
+}
+
+export function deferInkViewport(canvas: HTMLCanvasElement, view: InkRasterView, redraw: () => void, delayMs = 120): boolean {
   let previous = previews.get(canvas);
   const held = snapshots.get(canvas);
   if (held && (held.view.source !== view.source || held.view.revision !== view.revision || held.view.key !== view.key)) discardInkViewport(canvas);
@@ -83,6 +122,6 @@ export function deferInkViewport(canvas: HTMLCanvasElement, view: InkRasterView,
       forcedRedraw.add(canvas);
       try { redraw(); } finally { forcedRedraw.delete(canvas); }
     }
-  }, 120);
+  }, delayMs);
   return true;
 }
