@@ -29,12 +29,23 @@ export function Popover({ anchor, onClose, label, align = 'start', className = '
     return () => { observer.disconnect(); doc?.removeEventListener('scroll', place, true); };
   }, [anchor, layer, align]);
   useLayoutEffect(() => {
-    const pop = ref.current, doc = anchor?.ownerDocument ?? activeDocument, win = doc.defaultView!;
+    const pop = ref.current, doc = anchor?.ownerDocument ?? layer?.ownerDocument ?? activeDocument, win = doc.defaultView!;
     const previous = anchor ?? doc.activeElement as HTMLElement | null;
     let restoreFocus = true;
-    const frame = focus ? window.requestAnimationFrame(() => pop?.querySelector<HTMLElement>('[data-autofocus], [aria-checked="true"], input, button:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true })) : 0;
+    const focusables = () => pop ? [...pop.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter(el => el.getClientRects().length > 0 && el.tabIndex >= 0) : [];
+    const frame = focus ? window.requestAnimationFrame(() => pop?.querySelector<HTMLElement>('[data-autofocus], [aria-checked="true"], input:not(:disabled):not([tabindex="-1"]), button:not(:disabled):not([tabindex="-1"]), [tabindex="0"]')?.focus({ preventScroll: true })) : 0;
     const down = (event: PointerEvent) => { const target = event.target as Node; if (pop?.contains(target) || anchor?.contains(target)) return; restoreFocus = false; close.current(); };
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing) { event.stopPropagation(); event.preventDefault(); if (focus && previous?.isConnected) previous.focus({ preventScroll: true }); close.current(); } };
+    const key = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); if (focus && previous?.isConnected) previous.focus({ preventScroll: true }); close.current(); return; }
+      if (event.key === 'Tab' && focus && pop && pop.contains(doc.activeElement)) {
+        const items = focusables();
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (event.shiftKey && doc.activeElement === first) { event.preventDefault(); last.focus({ preventScroll: true }); }
+        else if (!event.shiftKey && doc.activeElement === last) { event.preventDefault(); first.focus({ preventScroll: true }); }
+      }
+    };
     const leave = (event: FocusEvent) => { if (!focus || pop?.contains(event.target as Node) || anchor?.contains(event.target as Node)) return; restoreFocus = false; close.current(); };
     // Escape belongs to the floating layer before the host's document-level shortcuts.
     doc.addEventListener('pointerdown', down, true); win.addEventListener('keydown', key, true); doc.addEventListener('focusin', leave);
@@ -43,7 +54,7 @@ export function Popover({ anchor, onClose, label, align = 'start', className = '
       doc.removeEventListener('pointerdown', down, true); win.removeEventListener('keydown', key, true); doc.removeEventListener('focusin', leave);
       if (focus && restoreFocus && previous?.isConnected && (pop?.contains(doc.activeElement) || doc.activeElement === doc.body)) previous.focus({ preventScroll: true });
     };
-  }, [anchor, focus]);
+  }, [anchor, layer, focus]);
   if (!layer) return null;
   return createPortal(<div ref={ref} role="dialog" aria-label={label} className={`ink-popover ${className}`} style={position ?? { visibility: 'hidden', left: 0, top: 0 }}>{children}</div>, layer);
 }
@@ -60,10 +71,12 @@ export type MenuEntry = { icon?: string; label: string; hint?: string; onSelect:
 export function Menu({ items, onDone }: { items: readonly (MenuEntry | false | null | undefined)[]; onDone: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const move = (event: React.KeyboardEvent) => {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    if (event.nativeEvent.isComposing || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const buttons = [...ref.current!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-    const index = buttons.indexOf(activeDocument.activeElement as HTMLButtonElement);
+    if (!buttons.length) return;
+    const doc = ref.current?.ownerDocument ?? activeDocument;
+    const index = buttons.indexOf(doc.activeElement as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
     buttons[next]?.focus();
   };
@@ -101,10 +114,14 @@ export function Segmented<T extends string | number>({ value, options, onChange,
     </button>)}</div>;
 }
 
-export function Switch({ checked, onChange, label, hint }: { checked: boolean; onChange: (value: boolean) => void; label: string; hint?: string }) {
+export function Switch({ checked, onChange, label, hint, icon }: { checked: boolean; onChange: (value: boolean) => void; label: string; hint?: string; icon?: string }) {
   return <label className="ink-switch-row">
-    <span><span>{label}</span>{hint && <small>{hint}</small>}</span>
-    <input type="checkbox" role="switch" className="ink-switch" checked={checked} onChange={event => onChange(event.target.checked)}/>
+    {icon && <InkIcon name={icon} className="ink-switch-icon"/>}
+    <span className="ink-switch-copy"><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
+    <span className="ink-switch-control">
+      <input type="checkbox" role="switch" aria-label={label} className="ink-switch" checked={checked} onChange={event => onChange(event.target.checked)}/>
+      <span className="ink-switch-track" aria-hidden="true"><span className="ink-switch-thumb"/></span>
+    </span>
   </label>;
 }
 
@@ -146,7 +163,7 @@ export function useToasts() {
 export function Toasts({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
   return <div className="ink-toasts" aria-live="polite">{toasts.map(toast =>
     <div key={toast.id} className={`ink-toast is-${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'}>
-      {toast.kind === 'progress' ? <span className="ink-spinner" aria-hidden="true"/> : <InkIcon name={toast.kind === 'error' ? 'warning' : toast.kind === 'success' ? 'check' : 'more'} className={toast.kind === 'info' ? 'is-hidden' : ''}/>}
+      {toast.kind === 'progress' ? <span className="ink-spinner" aria-hidden="true"/> : <InkIcon name={toast.kind === 'error' ? 'warning' : toast.kind === 'success' ? 'check' : 'info'}/>}
       <span className="ink-toast-text">{toast.message}{toast.detail && <small>{toast.detail}</small>}</span>
       {toast.action && <button type="button" className="ink-toast-action" onClick={() => { dismiss(toast.id); toast.action!.run(); }}>{toast.action.label}</button>}
       {toast.cancel && <button type="button" className="ink-toast-action" onClick={toast.cancel}>取消</button>}

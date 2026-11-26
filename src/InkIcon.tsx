@@ -9,8 +9,8 @@ import {
   ArrowRightToLine, Droplet, PenTool, Pointer, LayoutDashboard, Notebook, BookOpen, FileType, Package,
   CalendarDays, FolderOpen, LayoutGrid, List, PanelRight, PanelsTopLeft,
   Layers, Group, Ungroup, ArrowUpToLine, ArrowDownToLine, Lock, Unlock,
-  MoveVertical, CornerUpLeft, ClipboardPaste, Moon, Sun, ScanSearch, ListTree, CornerDownLeft,
-  Eye, EyeOff, Ruler, Sparkles, Magnet, BookmarkPlus, type LucideIcon,
+  MoveVertical, PenLine, ClipboardPaste, Moon, Sun, ScanSearch, ListTree, CornerDownLeft,
+  Eye, EyeOff, Ruler, Sparkles, Magnet, Bandage, RotateCw, Pin, PinOff, Wrench, Clock, Info, Unlink, type LucideIcon,
 } from 'lucide-react';
 
 // Official Lucide SVG assets, pinned in package-lock.json. ISC + Feather MIT notices ship with the bundle.
@@ -22,7 +22,7 @@ const icons: Record<string, LucideIcon> = {
   undo: Undo2, redo: Redo2, sidebar: PanelLeft, scratch: NotebookPen, search: Search, share: Share,
   more: Ellipsis, close: X, down: ChevronDown, up: ChevronUp, right: ChevronRight, left: ChevronLeft,
   check: Check, plus: Plus, minus: Minus, trash: Trash2, copy: Copy, duplicate: CopyPlus,
-  link: Link, embed: Code, bookmark: Bookmark, pages: Files, page: File, pageAdd: FilePlus2,
+  link: Link, unlink: Unlink, embed: Code, bookmark: Bookmark, pages: Files, page: File, pageAdd: FilePlus2,
   margins: Scan, sliders: SlidersHorizontal, zoomIn: ZoomIn, zoomOut: ZoomOut, fit: Maximize,
   fitWidth: MoveHorizontal, focus: Expand, external: ExternalLink, history: History,
   relink: RefreshCw, docText: FileText, moveUp: ArrowUp, moveDown: ArrowDown, grip: GripVertical,
@@ -30,8 +30,9 @@ const icons: Record<string, LucideIcon> = {
   pressure: PenTool, finger: Pointer, canvas: LayoutDashboard, notebook: Notebook, read: BookOpen,
   pdf: FileType, package: Package, calendar: CalendarDays, folderOpen: FolderOpen, grid: LayoutGrid, list: List, dock: PanelRight, float: PanelsTopLeft,
   layers: Layers, group: Group, ungroup: Ungroup, bringFront: ArrowUpToLine, sendBack: ArrowDownToLine, lock: Lock, unlock: Unlock,
-  space: MoveVertical, autoReturn: CornerUpLeft, paste: ClipboardPaste, moon: Moon, sun: Sun, zoomWindow: ScanSearch, outline: ListTree, returnKey: CornerDownLeft,
-  tape: EyeOff, eye: Eye, eyeOff: EyeOff, ruler: Ruler, sticker: Sparkles, gridSnap: Magnet, saveSticker: BookmarkPlus,
+  space: MoveVertical, autoReturn: PenLine, paste: ClipboardPaste, moon: Moon, sun: Sun, zoomWindow: ScanSearch, outline: ListTree, returnKey: CornerDownLeft,
+  tape: Bandage, eye: Eye, eyeOff: EyeOff, ruler: Ruler, sticker: Sparkles, gridSnap: Magnet, saveSticker: Sparkles,
+  rotate: RotateCw, pin: Pin, pinOff: PinOff, toolbox: Wrench, pending: Clock, info: Info,
 };
 export const hasIcon = (name: string) => name in icons;
 export function InkIcon({ name, className = '' }: { name: string; className?: string }) {

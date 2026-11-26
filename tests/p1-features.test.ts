@@ -168,28 +168,34 @@ describe('P1: Zoom Window geometry & auto-advance', () => {
 
 describe('P1: normalizePreferences new fields', () => {
   it('accepts valid P1 preferences and falls back safely on invalid input', () => {
+    assert.equal(DEFAULT_PREFERENCES.pen.stabilize, 1);
+    assert.equal(DEFAULT_PREFERENCES.autoCollapseDock, false);
     const ok = normalizePreferences({
       pen: { stabilize: 2 },
       shape: { strokeStyle: 'dotted', fillColor: '#dcecff' },
       nightPaper: true,
+      autoCollapseDock: true,
       sidebar: { tab: 'outline' },
     });
     assert.equal(ok.pen.stabilize, 2);
     assert.equal(ok.shape.strokeStyle, 'dotted');
     assert.equal(ok.shape.fillColor, '#dcecff');
     assert.equal(ok.nightPaper, true);
+    assert.equal(ok.autoCollapseDock, true);
     assert.equal(ok.sidebar.tab, 'outline');
 
     const bad = normalizePreferences({
       pen: { stabilize: 9 },
       shape: { strokeStyle: 'zigzag', fillColor: 'not-a-color' },
       nightPaper: 'yes',
+      autoCollapseDock: 'always',
       sidebar: { tab: 'unknown' },
     });
     assert.equal(bad.pen.stabilize, DEFAULT_PREFERENCES.pen.stabilize);
     assert.equal(bad.shape.strokeStyle, 'solid');
     assert.equal(bad.shape.fillColor, 'transparent');
     assert.equal(bad.nightPaper, false);
+    assert.equal(bad.autoCollapseDock, false);
     assert.equal(bad.sidebar.tab, 'pages');
   });
 });

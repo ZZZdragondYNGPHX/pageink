@@ -14,13 +14,16 @@ const PIXEL_BUDGET = 16_000_000;
 export const fittingScale = (width: number, height: number, preferred = 2) => Math.min(preferred, Math.sqrt(PIXEL_BUDGET / Math.max(1, width * height)));
 
 /** Transparent PNG of the given objects. */
-export async function png(session: Session, elements: readonly Element[]): Promise<{ blob: Blob; scale: number }> {
+export async function png(session: Session, elements: readonly Element[], signal?: AbortSignal): Promise<{ blob: Blob; scale: number }> {
+  signal?.throwIfAborted();
   const live = elements.filter(e => !e.isDeleted);
   if (!live.length) throw Error('没有可导出的内容。');
   await session.loadFiles(live);
+  signal?.throwIfAborted();
   const b = bounds(live)!, padding = live.reduce((max, e) => Math.max(max, e.strokeWidth * 4), 8);
   const scale = fittingScale(b.width + padding * 2, b.height + padding * 2);
   const blob = await exportToBlob({ elements: live, files: { ...session.files }, mimeType: 'image/png', appState: { exportBackground: false, exportWithDarkMode: false }, exportPadding: padding, getDimensions: (w: number, h: number) => ({ width: w * scale, height: h * scale, scale }) });
+  signal?.throwIfAborted();
   return { blob, scale };
 }
 

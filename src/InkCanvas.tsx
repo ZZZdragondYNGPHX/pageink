@@ -32,6 +32,7 @@ export interface CanvasTool {
   scribble?: boolean;
   circleLasso?: boolean;
   holdToShape?: boolean;
+  lassoFilter?: LassoFilter;
   marquee?: { shape: 'rect' | 'lasso'; purpose: MarqueePurpose; filter?: LassoFilter };
 }
 export interface SelectionInfo {
@@ -88,7 +89,7 @@ interface Props {
   session: Session; pdf?: PdfService; kind: Kind;
   /** Changes whenever page geometry or paper appearance changes. */
   pagesKey: string;
-  tool: CanvasTool; fingerDraws: boolean; zoomLock?: boolean; nightPaper?: boolean; gridSnap?: boolean; ruler?: RulerState | null; theme: 'light' | 'dark';
+  tool: CanvasTool; fingerDraws: boolean; zoomLock?: boolean; nightPaper?: boolean; gridSnap?: boolean; ruler?: RulerState | null; rulerRef?: React.RefObject<RulerState | null>; theme: 'light' | 'dark';
   readOnly?: boolean;
   initialView?: ViewMemory;
   onReady: (handle: CanvasHandle) => void;
@@ -100,6 +101,8 @@ interface Props {
   onViewChange?: () => void;
   onCardEdit?: (element: Element) => void;
   onScribble?: () => void;
+  onShapeRecognized?: (info: { kind: RecognizedShape['kind']; revert: (undoNow: () => Promise<void>) => Promise<void> }) => void;
+  onWritingChange?: (writing: boolean) => void;
   onEraseEnd?: () => void;
   onInsertSpace?: (pageId: string, sceneY: number, deltaY: number) => void;
   onToggleTape?: (id: string) => void;
@@ -112,12 +115,13 @@ export const selectedContent = (api: ExcalidrawImperativeAPI): Element[] => {
   return elements.filter(e => ids[e.id] || e.type === 'text' && e.containerId && ids[e.containerId]);
 };
 
-export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(function InkCanvas(props, forwarded) {
+export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>(function InkCanvas(props, forwarded) {
   const { session, pdf, kind } = props;
   const scene = useRef<PageScene>();
   const pages = (): readonly Page[] => kind === 'pages' ? session.manifest.pages : kind === 'canvas' ? [session.manifest.pages[0]] : [SCRATCH_PAGE];
-  const geometryKey = kind === 'pages' ? session.manifest.pages.map(p => `${p.id}:${p.width}x${p.height}:${p.margins.top},${p.margins.right},${p.margins.bottom},${p.margins.left}`).join('|') : kind;
-  const layout = useMemo(() => layoutPages(pages()), [geometryKey, props.pagesKey]);
+  const pagesGeometry = kind === 'pages' ? session.manifest.pages.map(p => `${p.id}:${p.width}x${p.height}:${p.margins.top},${p.margins.right},${p.margins.bottom},${p.margins.left}`).join('|') : kind;
+  const layout = useMemo(() => layoutPages(pages()), [pagesGeometry, props.pagesKey]);
+  const geometryKey = kind === 'pages' ? geometryOf(layout) : kind;
   const latest = useRef(props); latest.current = props;
   // Coordinates map through the layout the kernel scene was built with, until the next rebuild.
   const layoutRef = useRef(layout); layoutRef.current = scene.current?.layout ?? layout;
@@ -134,12 +138,27 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const [spaceBand, setSpaceBand] = useState<{ y: number; dy: number; sceneDy: number } | null>(null);
   const [tapePreview, setTapePreview] = useState<{ left: number; top: number; width: number; height: number; color: string } | null>(null);
   const [rulerLine, setRulerLine] = useState<{ x1: number; y1: number; x2: number; y2: number; color: string; width: number; opacity: number } | null>(null);
+  const [holdRing, setHoldRing] = useState<{ x: number; y: number } | null>(null);
   const [penLassoActive, setPenLassoActive] = useState(false);
   const penLassoRef = useRef(false);
+  const writingRef = useRef(false);
   const lockedZoom = useRef<number | null>(null);
   const busy = useRef(false), timer = useRef<number>();
   const flushedRevision = useRef<number>();
   const owner = kind === 'scratch' ? 'scratch' : 'body';
+  const topInset = () => {
+    if (kind !== 'pages') return 24;
+    if (latest.current.readOnly) return 68;
+    const bar = root.current?.closest('.ink-workspace')?.querySelector<HTMLElement>('.ink-writing-bar:not(.is-floating-dock):not([hidden])');
+    return bar && bar.offsetHeight > 0 ? Math.max(124, Math.ceil(bar.offsetTop + bar.offsetHeight + 12)) : 124;
+  };
+  const setWritingState = (active: boolean) => {
+    session.setWriting(owner, active);
+    if (writingRef.current !== active) {
+      writingRef.current = active;
+      latest.current.onWritingChange?.(active);
+    }
+  };
   const setPenLasso = (active: boolean) => {
     if (penLassoRef.current === active) return;
     penLassoRef.current = active;
@@ -199,7 +218,8 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
         return state({ zoom, scrollX: -(target.paper.x + memory.dx), scrollY: -(target.paper.y + memory.dy) });
       }
       const zoom = clampZoom(Math.min(1.25, (width - 48) / layout.maxWidth), 0.1), first = layout.placements[0].paper;
-      return state({ zoom, ...clampToDocument({ ...view, zoom, scrollX: -(first.x + first.width / 2 - width / zoom / 2), scrollY: -(first.y - 20 / zoom) }, layout.bounds) });
+      const topPad = topInset();
+      return state({ zoom, ...clampToDocument({ ...view, zoom, scrollX: -(first.x + first.width / 2 - width / zoom / 2), scrollY: -(first.y - topPad / zoom) }, layout.bounds, 24, latest.current.onAddPage ? 96 : 0, topPad) });
     }
     if (memory) return state({ zoom: clampZoom(memory.zoom), scrollX: -memory.dx, scrollY: -memory.dy });
     const content = bounds(elements);
@@ -261,8 +281,10 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     scene.current.settle(api.getSceneElements());
     absorb();
     if (kind === 'pages') clampView();
+    const pending = deferredReveal.current;
+    if (pending) { deferredReveal.current = null; reveal(pending.pageId, pending.rect, pending.highlight); }
   }
-  useEffect(() => { if (ready.current && kind === 'pages' && scene.current && scene.current.layout !== layout && geometryKey !== geometryOf(scene.current.layout)) void rebuild(); }, [geometryKey]);
+  useEffect(() => { if (isReady && ready.current && kind === 'pages' && scene.current && scene.current.layout !== layout && geometryKey !== geometryOf(scene.current.layout)) void rebuild(); }, [geometryKey, isReady]);
 
   // ---------- ready ----------
   useEffect(() => {
@@ -289,7 +311,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       if (gestureClaimed.current === event.pointerId) {
         gestureClaimed.current = null;
         scribble.current = null;
-        session.setWriting(owner, false);
+        setWritingState(false);
         return;
       }
       if (scribble.current?.id === event.pointerId) scribble.current.finished = true;
@@ -300,12 +322,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
         if (!active || api.getAppState().newElement) return;
         const erased = finishScribble();
         if (!erased) rememberClosedLoop();
-        window.clearTimeout(timer.current); session.setWriting(owner, false); void flush().catch(() => {});
+        window.clearTimeout(timer.current); setWritingState(false); void flush().catch(() => {});
       });
     });
     // The parent flushes before closing. Reading an already-unmounted engine here can return an
     // empty scene and must never be persisted as a deletion.
-    return () => { active = false; unsubscribe(); pointerUp(); window.clearInterval(fallback); window.clearTimeout(timer.current); session.setWriting(owner, false); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
+    return () => { active = false; ready.current = false; unsubscribe(); pointerUp(); window.clearInterval(fallback); window.clearTimeout(timer.current); setWritingState(false); if (session.flushers.get(owner)) session.flushers.delete(owner); for (const id of [...session.surfaces.keys()]) session.releaseSurface(id); };
   }, [api, initial]);
 
   // ---------- tool ----------
@@ -331,7 +353,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   function clampView() {
     if (!api || kind !== 'pages') return false;
     const s = api.getAppState(), v = { ...views.get(), scrollX: s.scrollX, scrollY: s.scrollY, zoom: s.zoom.value };
-    const next = clampToDocument(v, layoutRef.current.bounds, 24, latest.current.onAddPage ? 96 : 0);
+    const next = clampToDocument(v, layoutRef.current.bounds, 24, latest.current.onAddPage ? 96 : 0, topInset());
     if (Math.abs(next.scrollX - v.scrollX) < .5 && Math.abs(next.scrollY - v.scrollY) < .5) return false;
     api.updateScene({ appState: { scrollX: next.scrollX, scrollY: next.scrollY }, captureUpdate: NEVER });
     return true;
@@ -365,14 +387,22 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     const content = bounds(api?.getSceneElements() ?? []);
     if (content) setView(fitRect(v, content, 48, kind === 'pages' ? 2 : 1.5));
   }
+  const deferredReveal = useRef<{ pageId: string; rect?: Rect; highlight: boolean } | null>(null);
   function reveal(pageId: string, rect?: Rect, highlight = false) {
-    const target = layoutRef.current.byId.get(pageId); if (!target) return;
+    const target = layoutRef.current.byId.get(pageId);
+    if (!target) {
+      if (kind === 'pages' && session.manifest.pages.some(p => p.id === pageId)) {
+        deferredReveal.current = { pageId, rect, highlight };
+      }
+      return;
+    }
+    deferredReveal.current = null;
     const v = views.get();
     if (rect) {
       const area = toSceneRect(rect, target);
       setView(fitRect(v, { x: area.x - 24, y: area.y - 24, width: area.width + 48, height: area.height + 48 }, 32, Math.max(v.zoom, 1.25)));
       if (highlight) setFlash({ rect: area, token: String(performance.now()) });
-    } else setView({ zoom: v.zoom, scrollX: v.scrollX, scrollY: -(target.paper.y - 20 / v.zoom) });
+    } else setView({ zoom: v.zoom, scrollX: v.scrollX, scrollY: -(target.paper.y - topInset() / v.zoom) });
   }
   useEffect(() => { if (!flash) return; const t = window.setTimeout(() => setFlash(null), 1600); return () => window.clearTimeout(t); }, [flash]);
   useEffect(() => { if (!lassoFlash) return; const t = window.setTimeout(() => setLassoFlash(null), 650); return () => window.clearTimeout(t); }, [lassoFlash]);
@@ -532,7 +562,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     selected: () => api ? selectedContent(api) : [], replaceSelected, transformScene, selectIds, memory,
     clearSelection: () => { setPenLasso(false); api?.updateScene({ appState: { selectedElementIds: {} }, captureUpdate: NEVER }); },
   };
-  useImperativeHandle(forwarded, () => handle);
+  useImperativeHandle<CanvasHandle | null, CanvasHandle | null>(forwarded, () => (api && ready.current ? handle : null));
 
   // ---------- pointer input ----------
   const touches = useRef(new Map<number, { x: number; y: number }>());
@@ -545,8 +575,9 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const eraseQueue = useRef<ScenePoint[]>([]), eraseFrame = useRef(0);
   const scribble = useRef<{ id: number; started: number; zoom: number; finished: boolean; previous?: string } | null>(null);
   const recentLoop = useRef<{ id: string; versionNonce: number; polygon: ScenePoint[]; time: number } | null>(null);
-  const loopHold = useRef<{ id: number; start: ScenePoint; loopId: string; polygon: ScenePoint[]; timer: number } | null>(null);
-  const drawHold = useRef<{ id: number; last: ScenePoint; anchor: ScenePoint; travel: number; timer: number } | null>(null);
+  const loopHold = useRef<{ id: number; start: ScenePoint; loopId: string; polygon: ScenePoint[]; timer: number; ringTimer: number } | null>(null);
+  const drawHold = useRef<{ id: number; last: ScenePoint; anchor: ScenePoint; travel: number; timer: number; ringTimer: number } | null>(null);
+  const drawHoldGen = useRef(0);
   const gestureClaimed = useRef<number | null>(null);
   const marquee = useRef<{ id: number; points: ScenePoint[] } | null>(null);
   const eraserCursor = useRef<HTMLDivElement>(null);
@@ -557,8 +588,10 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const drawsWith = (event: React.PointerEvent) => event.pointerType !== 'touch' || props.fingerDraws;
 
   function cancelHolds() {
-    if (loopHold.current) { window.clearTimeout(loopHold.current.timer); loopHold.current = null; }
-    if (drawHold.current) { window.clearTimeout(drawHold.current.timer); drawHold.current = null; }
+    drawHoldGen.current++;
+    if (loopHold.current) { window.clearTimeout(loopHold.current.timer); window.clearTimeout(loopHold.current.ringTimer); loopHold.current = null; }
+    if (drawHold.current) { window.clearTimeout(drawHold.current.timer); window.clearTimeout(drawHold.current.ringTimer); drawHold.current = null; }
+    setHoldRing(null);
   }
 
   function flashLassoPolygon(scenePolygon: readonly ScenePoint[]) {
@@ -681,9 +714,10 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
 
   function triggerCircleLasso(pointerId: number, removeIds: string[], polygon: ScenePoint[]) {
     if (!api) return;
+    const filter = latest.current.tool.lassoFilter ?? 'all';
     const exclude = new Set(removeIds);
     const candidates = (api as InkApi).inkQuery(polygonBounds(polygon));
-    const hasHits = candidates.some(e => !exclude.has(e.id) && lassoHits(e, polygon));
+    const hasHits = candidates.some(e => !exclude.has(e.id) && lassoMatches(e, filter) && lassoHits(e, polygon));
     if (!hasHits) return;
     gestureClaimed.current = pointerId;
     scribble.current = null;
@@ -693,7 +727,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     const patches = new Map<string, Element[]>();
     for (const id of removeIds) patches.set(id, []);
     if (patches.size) (api as InkApi).inkErase(patches);
-    const count = lassoSelect(polygon, 'all', exclude);
+    const count = lassoSelect(polygon, filter, exclude);
     if (count > 0) {
       setPenLasso(true);
       flashLassoPolygon(polygon);
@@ -706,29 +740,102 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     const live = api.getAppState().newElement;
     if (!live || live.type !== 'freedraw') return;
     const activeTool = latest.current.tool;
+    const filter = activeTool.lassoFilter ?? 'all';
     const zoom = api.getAppState().zoom.value;
     const worldPts = strokeWorldPoints(live);
     const closed = closedLoopPolygon(worldPts, zoom);
     const exclude = new Set([live.id]);
-    const enclosesContent = !!(closed && (api as InkApi).inkQuery(polygonBounds(closed)).some(e => !exclude.has(e.id) && lassoHits(e, closed)));
+    const enclosesContent = !!(closed && (api as InkApi).inkQuery(polygonBounds(closed)).some(e => !exclude.has(e.id) && lassoMatches(e, filter) && lassoHits(e, closed)));
     const shape = activeTool.holdToShape ? recognizeShape(worldPts, zoom, { lineOnly: activeTool.inkKind === 'highlighter', enclosesContent }) : null;
     if (shape) {
       gestureClaimed.current = pointerId;
       scribble.current = null;
       cancelHolds();
+      const gen = ++drawHoldGen.current;
       const created = createShapeElement(shape, live, activeTool.inkKind);
+      // Snapshot initial coordinates before Excalidraw can mutate the elements in place during drag.
+      const originCoords = new Map(created.map(e => [e.id, { x: e.x, y: e.y }]));
+      const rawStroke = { ...live };
       // Commit the raw hand-drawn stroke to history first so Undo restores the original raw points & pressures.
       api.updateScene({ appState: { newElement: null }, captureUpdate: NEVER });
       void flush().then(() => {
-        if (!ready.current || !api.getSceneElementsIncludingDeleted().some(e => e.id === live.id && !e.isDeleted)) return;
+        if (gen !== drawHoldGen.current || !ready.current || !api.getSceneElementsIncludingDeleted().some(e => e.id === live.id && !e.isDeleted)) return;
         const remaining = api.getSceneElementsIncludingDeleted().filter(e => e.id !== live.id);
         api.updateScene({ elements: [...remaining, ...created], captureUpdate: NEVER });
-        return flush();
+        return flush().then(() => {
+          if (gen !== drawHoldGen.current || !ready.current) return;
+          const shapeIds = new Set(created.map(e => e.id));
+          const timeline = owner === 'scratch' ? session.scratchHistory : session.bodyHistory;
+          const revAfter = (api as InkApi).inkRevision();
+          const historyRevAfter = timeline.revision;
+          const revert = async (undoNow: () => Promise<void>) => {
+            if (!api || !ready.current || latest.current.readOnly) return;
+            await flush();
+            if (!api || !ready.current || latest.current.readOnly) return;
+            if ((api as InkApi).inkRevision() === revAfter && timeline.revision === historyRevAfter) {
+              await undoNow();
+              return;
+            }
+            if (!api.getSceneElementsIncludingDeleted().some(e => shapeIds.has(e.id) && !e.isDeleted)) return;
+            const curSelected = api.getAppState().selectedElementIds;
+            const hadSelectedShape = Object.keys(curSelected).some(id => curSelected[id] && shapeIds.has(id));
+            const nextSelection = hadSelectedShape
+              ? Object.fromEntries(Object.entries(curSelected).filter(([id, v]) => v && !shapeIds.has(id))) as Record<string, true>
+              : undefined;
+            await transformScene(elements => {
+              const foundIndex = elements.findIndex(e => shapeIds.has(e.id) && !e.isDeleted);
+              if (foundIndex < 0) return { elements: [...elements], changed: false };
+              const found = elements[foundIndex];
+              const originPos = originCoords.get(found.id);
+              const dx = originPos ? found.x - originPos.x : 0;
+              const dy = originPos ? found.y - originPos.y : 0;
+              const now = Date.now();
+              const restored: Element = {
+                ...rawStroke,
+                x: rawStroke.x + dx,
+                y: rawStroke.y + dy,
+                index: found.index,
+                isDeleted: false,
+                version: rawStroke.version + 1,
+                versionNonce: Math.floor(Math.random() * 2 ** 30),
+                updated: now,
+              };
+              const next: Element[] = [];
+              let inserted = false;
+              for (const el of elements) {
+                if (shapeIds.has(el.id)) {
+                  if (!inserted) { next.push(restored); inserted = true; }
+                  continue;
+                }
+                const copy: MutableElement = { ...el };
+                let detached = false;
+                if (copy.type === 'text' && copy.containerId && shapeIds.has(copy.containerId)) {
+                  copy.containerId = null;
+                  detached = true;
+                }
+                if (copy.boundElements?.some(b => shapeIds.has(b.id))) {
+                  copy.boundElements = copy.boundElements.filter(b => !shapeIds.has(b.id));
+                  detached = true;
+                }
+                if ('startBinding' in copy) {
+                  for (const key of ['startBinding', 'endBinding'] as const) {
+                    if (copy[key] && shapeIds.has(copy[key].elementId)) { copy[key] = null; detached = true; }
+                  }
+                }
+                next.push(detached ? { ...copy, version: el.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 30), updated: now } : el);
+              }
+              return { elements: next, changed: true };
+            }, nextSelection);
+          };
+          latest.current.onShapeRecognized?.({ kind: shape.kind, revert });
+        });
       }).catch(() => {});
       return;
     }
     if (activeTool.circleLasso && closed && enclosesContent) {
       triggerCircleLasso(pointerId, [live.id], closed);
+    } else {
+      setHoldRing(null);
     }
   }
 
@@ -768,6 +875,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   }
   function startInertia(vx: number, vy: number) {
     window.cancelAnimationFrame(inertia.current);
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     let last = performance.now();
     const step = (now: number) => {
       const dt = Math.min(32, now - last); last = now;
@@ -782,7 +890,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     window.cancelAnimationFrame(inertia.current);
     if (busy.current) { event.stopPropagation(); event.preventDefault(); return; }
-    if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); event.preventDefault(); return; }
+    if (event.pointerType === 'touch' && (penDown.current || event.width > 36 || event.height > 36)) { event.stopPropagation(); event.preventDefault(); return; }
     if (event.pointerType === 'touch' && !props.fingerDraws) {
       // Fingers navigate (Pencil writes); with finger drawing on, the kernel handles touch itself.
       event.stopPropagation(); event.preventDefault();
@@ -802,7 +910,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     gestureClaimed.current = null;
     finishScribble();
     window.clearTimeout(timer.current);
-    session.setWriting(owner, true);
+    setWritingState(true);
     if (tool.scribble && tool.kernel === 'freedraw' && !penLassoRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
       const elements = api.getSceneElements();
       scribble.current = { id: event.pointerId, started: performance.now(), zoom: api.getAppState().zoom.value, finished: false, previous: elements[elements.length - 1]?.id };
@@ -839,8 +947,9 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       marquee.current = { id: event.pointerId, points: [local(event)] }; setMarqueePath([...marquee.current.points]);
       return;
     }
-    if (props.ruler && tool.kernel === 'freedraw' && !penLassoRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      const hit = rulerEdgeProjection(local(event), props.ruler);
+    const activeRuler = latest.current.rulerRef?.current ?? props.ruler;
+    if (activeRuler && tool.kernel === 'freedraw' && !penLassoRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const hit = rulerEdgeProjection(local(event), activeRuler);
       if (hit) {
         event.stopPropagation(); event.preventDefault();
         if (rulerDrag.current) return;
@@ -848,7 +957,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
         scribble.current = null;
         const s = api.getAppState();
         const startScene: ScenePoint = [hit.projected[0] / s.zoom.value - s.scrollX, hit.projected[1] / s.zoom.value - s.scrollY];
-        const snapRuler = { ...props.ruler };
+        const snapRuler = { ...activeRuler };
         rulerDrag.current = {
           id: event.pointerId, edge: hit.edge, ruler: snapRuler,
           startScreen: hit.projected, curScreen: hit.projected, startScene,
@@ -864,17 +973,18 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
         const hitLoop = findClosedLoopAt(scenePoint(event), api.getAppState().zoom.value);
         if (hitLoop) {
           const pointerId = event.pointerId;
+          const ringTimer = window.setTimeout(() => { if (loopHold.current?.id === pointerId) setHoldRing({ x: screenPt[0], y: screenPt[1] }); }, 140);
           const t = window.setTimeout(() => {
             if (loopHold.current?.id !== pointerId || !api) return;
             const liveId = api.getAppState().newElement?.id;
             const removeIds = liveId && liveId !== hitLoop.id ? [hitLoop.id, liveId] : [hitLoop.id];
             triggerCircleLasso(pointerId, removeIds, hitLoop.polygon);
           }, 340);
-          loopHold.current = { id: pointerId, start: screenPt, loopId: hitLoop.id, polygon: hitLoop.polygon, timer: t };
+          loopHold.current = { id: pointerId, start: screenPt, loopId: hitLoop.id, polygon: hitLoop.polygon, timer: t, ringTimer };
         }
       }
       if (tool.holdToShape || tool.circleLasso) {
-        drawHold.current = { id: event.pointerId, last: screenPt, anchor: screenPt, travel: 0, timer: 0 };
+        drawHold.current = { id: event.pointerId, last: screenPt, anchor: screenPt, travel: 0, timer: 0, ringTimer: 0 };
       }
     }
   };
@@ -934,7 +1044,8 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (rulerDrag.current?.id === event.pointerId) {
       event.stopPropagation();
       const rd = rulerDrag.current;
-      const proj = projectAlongRulerEdge(local(event), rd.ruler, rd.edge);
+      const activeRuler = latest.current.rulerRef?.current ?? rd.ruler;
+      const proj = projectAlongRulerEdge(local(event), activeRuler, rd.edge);
       rd.curScreen = proj;
       const zoom = api?.getAppState().zoom.value ?? 1;
       setRulerLine({ x1: rd.startScreen[0], y1: rd.startScreen[1], x2: proj[0], y2: proj[1], color: rd.color, width: Math.max(1.5, rd.width * zoom), opacity: rd.opacity / 100 });
@@ -955,7 +1066,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (loopHold.current?.id === event.pointerId) {
       const cur = local(event);
       if (Math.hypot(cur[0] - loopHold.current.start[0], cur[1] - loopHold.current.start[1]) > 8) {
-        window.clearTimeout(loopHold.current.timer); loopHold.current = null;
+        window.clearTimeout(loopHold.current.timer); window.clearTimeout(loopHold.current.ringTimer); loopHold.current = null; setHoldRing(null);
       }
     }
     if (drawHold.current?.id === event.pointerId && gestureClaimed.current !== event.pointerId) {
@@ -964,9 +1075,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       h.last = cur;
       if (Math.hypot(cur[0] - h.anchor[0], cur[1] - h.anchor[1]) > 5) {
         h.anchor = cur;
-        window.clearTimeout(h.timer);
+        window.clearTimeout(h.timer); window.clearTimeout(h.ringTimer); setHoldRing(null);
         if (h.travel >= 24) {
           const pointerId = event.pointerId;
+          h.ringTimer = window.setTimeout(() => {
+            if (drawHold.current?.id === pointerId) setHoldRing({ x: drawHold.current.last[0], y: drawHold.current.last[1] });
+          }, 160);
           h.timer = window.setTimeout(() => { if (drawHold.current?.id === pointerId) triggerDrawHold(pointerId); }, 450);
         }
       }
@@ -992,7 +1106,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     if (touches.current.has(event.pointerId)) return finishTouch(event);
     if (event.pointerType === 'pen') penDown.current = false;
     cancelHolds();
-    session.setWriting(owner, false);
+    setWritingState(false);
     if (spaceDrag.current?.id === event.pointerId) {
       event.stopPropagation();
       const drag = spaceDrag.current;
@@ -1022,7 +1136,8 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       event.stopPropagation();
       const rd = rulerDrag.current;
       rulerDrag.current = null; setRulerLine(null);
-      const proj = projectAlongRulerEdge(local(event), rd.ruler, rd.edge);
+      const activeRuler = latest.current.rulerRef?.current ?? rd.ruler;
+      const proj = projectAlongRulerEdge(local(event), activeRuler, rd.edge);
       if (api && Math.hypot(proj[0] - rd.startScreen[0], proj[1] - rd.startScreen[1]) >= 2) {
         const s = api.getAppState();
         const endScene: ScenePoint = [proj[0] / s.zoom.value - s.scrollX, proj[1] / s.zoom.value - s.scrollY];
@@ -1053,24 +1168,36 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       else latest.current.onMarquee?.(points, tool.marquee.purpose);
     }
   };
+  const clearToolDrags = (pointerId?: number) => {
+    if (pointerId === undefined || spaceDrag.current?.id === pointerId) { spaceDrag.current = null; setSpaceBand(null); }
+    if (pointerId === undefined || tapeDrag.current?.id === pointerId) { tapeDrag.current = null; setTapePreview(null); }
+    if (pointerId === undefined || rulerDrag.current?.id === pointerId) { rulerDrag.current = null; setRulerLine(null); }
+    if (pointerId === undefined || erasing.current === pointerId) {
+      if (erasing.current !== null) {
+        erasing.current = null;
+        window.cancelAnimationFrame(eraseFrame.current); flushErase();
+        void flush().catch(() => {});
+      }
+    }
+    if (pointerId === undefined || marquee.current?.id === pointerId) { marquee.current = null; setMarqueePath(null); }
+  };
   const onPointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); return; }
     if (touches.current.has(event.pointerId)) return finishTouch(event);
     penDown.current = false;
     cancelHolds();
     gestureClaimed.current = null;
-    scribble.current = null; session.setWriting(owner, false);
-    if (spaceDrag.current?.id === event.pointerId) { spaceDrag.current = null; setSpaceBand(null); }
-    if (tapeDrag.current?.id === event.pointerId) { tapeDrag.current = null; setTapePreview(null); }
-    if (rulerDrag.current?.id === event.pointerId) { rulerDrag.current = null; setRulerLine(null); }
-    if (erasing.current === event.pointerId) {
-      erasing.current = null;
-      window.cancelAnimationFrame(eraseFrame.current); flushErase();
-      void flush().catch(() => {});
-    }
-    if (marquee.current?.id === event.pointerId) { marquee.current = null; setMarqueePath(null); }
+    scribble.current = null; setWritingState(false);
+    clearToolDrags(event.pointerId);
   };
-  useEffect(() => () => { window.cancelAnimationFrame(inertia.current); window.cancelAnimationFrame(eraseFrame.current); cancelHolds(); }, []);
+  const resetInputRef = useRef<() => void>(() => {});
+  resetInputRef.current = () => { penDown.current = false; touches.current.clear(); gesture.current = null; cancelHolds(); clearToolDrags(); setWritingState(false); };
+  useEffect(() => {
+    const win = root.current?.ownerDocument.defaultView ?? window;
+    const onBlur = () => resetInputRef.current();
+    win.addEventListener('blur', onBlur);
+    return () => { win.removeEventListener('blur', onBlur); window.cancelAnimationFrame(inertia.current); window.cancelAnimationFrame(eraseFrame.current); cancelHolds(); };
+  }, []);
 
   const dark = props.theme === 'dark' && kind !== 'pages';
   const nightPaper = kind === 'pages' && !!props.nightPaper;
@@ -1087,6 +1214,15 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
       if (card) { event.stopPropagation(); event.preventDefault(); latest.current.onCardEdit(card); }
     }}
     onPointerLeave={() => { eraserCursor.current?.classList.remove('is-visible'); }}
+    onLostPointerCapture={event => {
+      const hadToolDrag = spaceDrag.current?.id === event.pointerId || tapeDrag.current?.id === event.pointerId || rulerDrag.current?.id === event.pointerId || erasing.current === event.pointerId || marquee.current?.id === event.pointerId;
+      if (event.pointerType === 'pen') penDown.current = false;
+      if (loopHold.current?.id === event.pointerId || drawHold.current?.id === event.pointerId) cancelHolds();
+      touches.current.delete(event.pointerId);
+      if (!touches.current.size) gesture.current = null;
+      clearToolDrags(event.pointerId);
+      if (event.pointerType === 'pen' || hadToolDrag || (!penDown.current && !touches.current.size)) setWritingState(false);
+    }}
     onPointerDownCapture={onPointerDown} onPointerMoveCapture={onPointerMove} onPointerUpCapture={onPointerUp} onPointerCancelCapture={onPointerCancel}>
     {kind === 'pages' ? <PaperLayer layout={layout} views={views} pdf={pdf} sourceIssue={session.sourceIssue}/> : <GridLayer views={views} template={kind === 'canvas' ? session.manifest.pages[0].template : 'blank'} dark={dark}/>}
     {initial ? <Excalidraw langCode="zh-CN" excalidrawAPI={setApi} theme={dark ? 'dark' : 'light'} viewModeEnabled={props.readOnly ?? false} gridModeEnabled={!!props.gridSnap}
@@ -1106,6 +1242,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
     {tapePreview && <div className="ink-tape-preview" aria-hidden="true" style={{ left: tapePreview.left, top: tapePreview.top, width: tapePreview.width, height: tapePreview.height, background: tapePreview.color }}/>}
     {rulerLine && <svg className="ink-marquee" aria-hidden="true"><line x1={rulerLine.x1} y1={rulerLine.y1} x2={rulerLine.x2} y2={rulerLine.y2} stroke={rulerLine.color} strokeWidth={rulerLine.width} strokeOpacity={rulerLine.opacity} strokeLinecap="round"/></svg>}
     {lassoFlash && <svg key={lassoFlash.token} className="ink-marquee ink-lasso-flash" aria-hidden="true"><polygon points={lassoFlash.points.map(p => p.join(',')).join(' ')}/></svg>}
+    {holdRing && <div className="ink-hold-ring" aria-hidden="true" style={{ transform: `translate(${holdRing.x}px, ${holdRing.y}px)` }}><span/></div>}
     {penLassoActive && <div className="ink-mode-hint ink-pen-lasso-hint" role="status">套索已选中，拖动或使用操作栏；点空白处继续书写<button type="button" onClick={() => handle.clearSelection()}>继续书写</button></div>}
     {renderPending && <div className="ink-render-status" role="status"><span className="ink-spinner"/>正在绘制</div>}
     {tool.erase && <div ref={eraserCursor} className="ink-eraser-cursor" aria-hidden="true"/>}
@@ -1114,7 +1251,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle, Props>(functi
   a.ruler?.x === b.ruler?.x && a.ruler?.y === b.ruler?.y && a.ruler?.angle === b.ruler?.angle && a.ruler?.length === b.ruler?.length && a.theme === b.theme && a.readOnly === b.readOnly &&
   a.tool.kernel === b.tool.kernel && a.tool.inkKind === b.tool.inkKind && a.tool.space === b.tool.space && a.tool.tape?.color === b.tool.tape?.color && a.tool.tape?.height === b.tool.tape?.height && a.tool.color === b.tool.color && a.tool.width === b.tool.width && a.tool.opacity === b.tool.opacity && a.tool.fontSize === b.tool.fontSize && a.tool.pressure === b.tool.pressure &&
   a.tool.strokeStyle === b.tool.strokeStyle && a.tool.fillColor === b.tool.fillColor && a.tool.stabilize === b.tool.stabilize &&
-  a.tool.scribble === b.tool.scribble && a.tool.circleLasso === b.tool.circleLasso && a.tool.holdToShape === b.tool.holdToShape &&
+  a.tool.scribble === b.tool.scribble && a.tool.circleLasso === b.tool.circleLasso && a.tool.holdToShape === b.tool.holdToShape && a.tool.lassoFilter === b.tool.lassoFilter &&
   a.tool.erase?.whole === b.tool.erase?.whole && a.tool.erase?.radius === b.tool.erase?.radius && a.tool.erase?.highlighterOnly === b.tool.erase?.highlighterOnly &&
   a.tool.marquee?.shape === b.tool.marquee?.shape && a.tool.marquee?.purpose === b.tool.marquee?.purpose && a.tool.marquee?.filter === b.tool.marquee?.filter && !!a.onAddPage === !!b.onAddPage);
 
@@ -1129,4 +1266,4 @@ function createShapeElement(shape: RecognizedShape, template: { strokeColor: str
   return convertToExcalidrawElements([{ type: shape.kind, x: shape.x, y: shape.y, width: Math.max(4, shape.width), height: Math.max(4, shape.height), ...style }]);
 }
 const rectPath = (a: ScenePoint, b: ScenePoint): ScenePoint[] => [a, [b[0], a[1]], b, [a[0], b[1]]];
-const geometryOf = (layout: PageLayout) => layout.placements.map(({ page: p }) => `${p.id}:${p.width}x${p.height}:${p.margins.top},${p.margins.right},${p.margins.bottom},${p.margins.left}`).join('|');
+const geometryOf = (layout: PageLayout) => layout.placements.map(({ page: p, x, y, paper }) => `${p.id}:${x},${y}:${paper.x},${paper.y},${paper.width}x${paper.height}`).join('|');

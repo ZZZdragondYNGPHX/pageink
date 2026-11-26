@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Element } from './model';
 import { cardReference, cardTitle } from './cards';
 import { ViewStore, useView, toScreen } from './view';
+import { InkIcon } from './InkIcon';
 
 export function CardsPanel({ elements, selected, busy, onInsertText, onInsertInk, onEdit, onRefresh, onRecover, onReveal, onConnect, onGroup, onUngroup }: {
   elements: readonly Element[]; selected: readonly Element[]; busy: boolean;
@@ -13,23 +14,23 @@ export function CardsPanel({ elements, selected, busy, onInsertText, onInsertInk
     <div className="ink-popover-title">画布卡片</div>
     <p className="ink-popover-note">把文字与手写放在一起，拖动整理，连接想法。</p>
     <div className="ink-mixed-actions">
-      <button type="button" className="mod-cta" disabled={busy} onClick={onInsertText}>插入文字卡片</button>
-      <button type="button" disabled={busy} onClick={onInsertInk}>插入手写卡片</button>
+      <button type="button" className="mod-cta" disabled={busy} onClick={onInsertText}><InkIcon name="docText"/>插入文字卡片</button>
+      <button type="button" disabled={busy} onClick={onInsertInk}><InkIcon name="pen"/>插入手写卡片</button>
     </div>
     {selected.length > 0 && <div className="ink-card-selection">
       <span>已选 {selectedCards.length} 张卡片</span>
-      <button type="button" disabled={busy || selectedCards.length !== 2} onClick={onConnect}>连接所选卡片</button>
-      <button type="button" disabled={busy || selected.length < 2} onClick={onGroup}>组合所选</button>
-      <button type="button" disabled={busy || !selected.some(e => e.groupIds.length)} onClick={onUngroup}>取消组合</button>
+      <button type="button" disabled={busy || selectedCards.length !== 2} onClick={onConnect}><InkIcon name="arrow"/>连接所选卡片</button>
+      <button type="button" disabled={busy || selected.length < 2} onClick={onGroup}><InkIcon name="group"/>组合所选</button>
+      <button type="button" disabled={busy || !selected.some(e => e.groupIds.length)} onClick={onUngroup}><InkIcon name="ungroup"/>取消组合</button>
     </div>}
     {!cards.length && <p className="ink-mixed-empty">先放入一张卡片。双击文字卡片，就能在这里修改段落。</p>}
     <ol className="ink-mixed-list">{cards.map(e => <li key={e.id}>
       <button type="button" className="ink-card-list-title" onClick={() => onReveal(e)}>{cardTitle(e, elements)}</button>
       <small>{cardReference(e)?.kind === 'ink' ? '手写区域 · 含完整原件备份' : '共享文字段落'}</small>
       <div className="ink-mixed-row-actions">
-        <button type="button" disabled={busy} onClick={() => onEdit(e)}>{cardReference(e)?.kind === 'ink' ? '打开手写原件' : '在卡片内编辑'}</button>
-        <button type="button" disabled={busy} onClick={() => onRefresh(e)}>更新卡片</button>
-        {cardReference(e)?.kind === 'ink' && <button type="button" disabled={busy} onClick={() => onRecover(e)}>恢复引用时的原件</button>}
+        <button type="button" disabled={busy} onClick={() => onEdit(e)}><InkIcon name={cardReference(e)?.kind === 'ink' ? 'external' : 'pen'}/>{cardReference(e)?.kind === 'ink' ? '打开手写原件' : '在卡片内编辑'}</button>
+        <button type="button" disabled={busy} onClick={() => onRefresh(e)}><InkIcon name="relink"/>更新卡片</button>
+        {cardReference(e)?.kind === 'ink' && <button type="button" disabled={busy} onClick={() => onRecover(e)}><InkIcon name="history"/>恢复引用时的原件</button>}
       </div>
     </li>)}</ol>
     <p className="ink-popover-note">原件修改后，点「更新卡片」载入。选择两张卡片可连线；框选后可组合移动。</p>

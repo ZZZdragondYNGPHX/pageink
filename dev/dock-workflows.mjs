@@ -75,6 +75,10 @@ try {
   checks.push('Dragging an expanded palette between edges changes its orientation without requiring minimization');
 
   await reset(); const idlePosition = await bar().boundingBox(); const idleCanvas = await workspace().locator('.ink-canvas-area').boundingBox();
+  await leave(); await page.waitForTimeout(8500); await collapsed(false);
+  checks.push('By default (autoCollapseDock=false), the toolbox stays open while reading or pausing');
+
+  await page.evaluate(() => window.app.plugins.plugins.pageink.prefs.update({ autoCollapseDock: true }));
   await leave(); await page.waitForTimeout(4000); await collapsed(false);
   await page.waitForFunction(() => document.querySelector('.workspace-leaf.mod-active .ink-writing-bar').classList.contains('is-collapsed'), null, { timeout: 6500 });
   await compactButton(); assert.deepEqual(await workspace().locator('.ink-canvas-area').boundingBox(), idleCanvas);
@@ -85,17 +89,18 @@ try {
   await leave(); await page.waitForTimeout(8500); await collapsed(false);
   await page.keyboard.press('Escape'); await leave();
   await page.waitForFunction(() => document.querySelector('.workspace-leaf.mod-active .ink-writing-bar').classList.contains('is-collapsed'), null, { timeout: 10000 });
-  checks.push('Eight seconds of toolbox inactivity minimizes it in place; an open settings popup pauses minimization, then closing it resumes the timer');
+  checks.push('When autoCollapseDock is enabled, eight seconds of toolbox inactivity minimizes it in place; an open settings popup pauses minimization, then closing it resumes the timer');
 
   await grip().click(); await collapsed(false);
   await workspace().getByRole('button', { name: '荧光笔', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.workspace-leaf.mod-active .ink-writing-bar').classList.contains('is-collapsed'), null, { timeout: 10000 });
   await compactButton();
-  checks.push('A stationary pointer and mouse focus after selecting a tool do not block idle minimization');
+  checks.push('A stationary pointer and mouse focus after selecting a tool do not block opt-in idle minimization');
 
   await grip().click(); await collapsed(false); await grip().focus(); await page.keyboard.press('ArrowDown');
   assert.ok(await grip().evaluate(el => el === el.ownerDocument.activeElement));
   await page.waitForTimeout(8500); assert.equal((await state()).collapsed, false);
+  await page.evaluate(() => window.app.plugins.plugins.pageink.prefs.update({ autoCollapseDock: false }));
   checks.push('Keyboard focus prevents automatic minimization while operating the toolbox');
 
   await moveTo('right'); await grip().click(); await compactButton(); const readingPosition = await bar().boundingBox();

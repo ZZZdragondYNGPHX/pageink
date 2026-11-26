@@ -12,6 +12,7 @@ export class History {
   private undoStack: Step[] = [];
   private redoStack: Step[] = [];
   private heads = new Map<string, readonly Element[]>();
+  private rev = 0;
   constructor(private limit = 100) {}
   push(surface: string, before: readonly Element[], after: readonly Element[]) { this.pushMany([{ surface, before, after }]); }
   pushMany(changes: readonly { surface: string; before: readonly Element[]; after: readonly Element[] }[], beforeLayout?: Layout, afterLayout?: Layout) {
@@ -25,9 +26,9 @@ export class History {
       this.heads.set(surface, after);
     }
     if (!parts.length && !beforeLayout) return;
-    this.undoStack.push({ parts, beforeLayout, afterLayout }); this.redoStack = []; this.trim();
+    this.undoStack.push({ parts, beforeLayout, afterLayout }); this.redoStack = []; this.rev++; this.trim();
   }
-  layout(beforeLayout: Layout, afterLayout: Layout) { this.undoStack.push({ parts: [], beforeLayout, afterLayout }); this.redoStack = []; this.trim(); }
+  layout(beforeLayout: Layout, afterLayout: Layout) { this.undoStack.push({ parts: [], beforeLayout, afterLayout }); this.redoStack = []; this.rev++; this.trim(); }
   private trim() {
     if (this.undoStack.length > this.limit) this.undoStack.shift();
     const retained = new Set([...this.undoStack, ...this.redoStack].flatMap(step => step.parts.map(c => c.surface)));
@@ -43,9 +44,10 @@ export class History {
     });
     return { parts, layout: redo ? step.afterLayout : step.beforeLayout, surface: parts[0]?.surface ?? '@layout', elements: parts[0]?.elements ?? [] };
   }
-  undo() { const step = this.undoStack.pop(); if (step) { this.redoStack.push(step); return this.apply(step, false); } }
-  redo() { const step = this.redoStack.pop(); if (step) { this.undoStack.push(step); return this.apply(step, true); } }
-  clear() { this.undoStack = []; this.redoStack = []; this.heads.clear(); }
+  undo() { const step = this.undoStack.pop(); if (step) { this.redoStack.push(step); this.rev++; return this.apply(step, false); } }
+  redo() { const step = this.redoStack.pop(); if (step) { this.undoStack.push(step); this.rev++; return this.apply(step, true); } }
+  clear() { this.undoStack = []; this.redoStack = []; this.heads.clear(); this.rev++; }
+  get revision() { return this.rev; }
   get canUndo() { return this.undoStack.length > 0; }
   get canRedo() { return this.redoStack.length > 0; }
 }

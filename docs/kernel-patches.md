@@ -6,7 +6,7 @@
 
 | 范围 | 实现 |
 | --- | --- |
-| 输入与压力 | `ink-input.ts` 汇集同一帧的移动和合并采样，一次更新完整坐标与压力，保留同位置的压力变化；支持可选低延迟指数滑动平均防抖（`data-stabilize`：0 关 / 1 轻 / 2 中，默认关闭，开启时同步把完整原始采样坐标保留在 `customData.inkRawPoints`）。`InkCanvas.tsx` 隔离书写时的其他触摸，从完成笔迹派生涂划识别路径。默认等宽，可启用设备压感。 |
+| 输入与压力 | `ink-input.ts` 汇集同一帧的移动和合并采样，一次更新完整坐标与压力，保留同位置的压力变化；支持低延迟指数滑动平均防抖（`data-stabilize`：0 关 / 1 轻 / 2 中，默认轻度防抖 1，开启时同步把完整原始采样坐标保留在 `customData.inkRawPoints`）。`InkCanvas.tsx` 隔离书写时的其他触摸，从完成笔迹派生涂划识别路径。默认等宽，可启用设备压感。 |
 | 历史 | `history.ts` / `session.ts` 管理正文跨页和草稿纸独立历史；内核保留编辑快照，跳过内部撤销记录。 |
 | 不可变几何 | `element-snapshot.ts` 冻结并共享点与压力；几何编辑创建新数组。冻结点数组的 bounds 使用 WeakMap 缓存，恢复笔迹保留 `lastCommittedPoint`。 |
 | 增量提交 | `kernel-journal.ts` 跟踪变更和单调修订号。`InkCanvas.tsx` 跳过无变化提交，`layout.ts` 为单表面直接投影局部坐标。 |

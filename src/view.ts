@@ -34,10 +34,10 @@ export function zoomAround(v: View, zoom: number, sx = v.width / 2, sy = v.heigh
 }
 
 /** Keeps a paged document in view: centred when narrower than the screen, edges bounded otherwise. */
-export function clampToDocument(v: View, doc: Rect, padding = 24, tail = 0): Pick<View, 'scrollX' | 'scrollY'> {
+export function clampToDocument(v: View, doc: Rect, padding = 24, tail = 0, topPadding = padding): Pick<View, 'scrollX' | 'scrollY'> {
   if (!v.width || !v.height) return { scrollX: v.scrollX, scrollY: v.scrollY };
-  const pad = padding / v.zoom, vw = v.width / v.zoom, vh = v.height / v.zoom;
-  const left = doc.x - pad, right = doc.x + doc.width + pad, top = doc.y - pad, bottom = doc.y + doc.height + pad + tail / v.zoom;
+  const pad = padding / v.zoom, topPad = topPadding / v.zoom, vw = v.width / v.zoom, vh = v.height / v.zoom;
+  const left = doc.x - pad, right = doc.x + doc.width + pad, top = doc.y - topPad, bottom = doc.y + doc.height + pad + tail / v.zoom;
   let x = -v.scrollX, y = -v.scrollY;
   x = right - left <= vw ? (left + right) / 2 - vw / 2 : Math.max(left, Math.min(x, right - vw));
   y = bottom - top <= vh ? Math.max(bottom - vh, Math.min(y, top)) : Math.max(top, Math.min(y, bottom - vh));

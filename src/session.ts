@@ -24,6 +24,7 @@ export class Session {
   private generation = 0;
   private dirtySince?: number;
   private writing = new Set<string>();
+  private acceptingFiles = new Map<string, Promise<void>>();
   /** Editors that hold unflushed kernel state, keyed by owner (e.g. body, scratch). */
   flushers = new Map<string, () => Promise<void>>();
   /** Predicates for surfaces that mounted editors keep in memory. */
@@ -147,11 +148,17 @@ export class Session {
   async acceptFiles(files: BinaryFiles) {
     for (const [id, file] of Object.entries(files)) {
       if (this.manifest.assets[id]) continue;
-      const dir = `${this.manifest.resourceDir}/assets`; await ensureDir(this.store.io, dir);
-      const path = `${dir}/${uid()}.bin`;
-      await this.store.io.writeBinary(path, dataUrlBytes(file.dataURL));
-      this.manifest.assets[id] = { path, mimeType: file.mimeType, created: file.created }; this.files[id] = file;
-      this.metadataChanged();
+      const inflight = this.acceptingFiles.get(id);
+      if (inflight) { await inflight; continue; }
+      const job = (async () => {
+        const dir = `${this.manifest.resourceDir}/assets`; await ensureDir(this.store.io, dir);
+        const path = `${dir}/${uid()}.bin`;
+        await this.store.io.writeBinary(path, dataUrlBytes(file.dataURL));
+        this.manifest.assets[id] = { path, mimeType: file.mimeType, created: file.created }; this.files[id] = file;
+        this.metadataChanged();
+      })();
+      this.acceptingFiles.set(id, job);
+      try { await job; } finally { if (this.acceptingFiles.get(id) === job) this.acceptingFiles.delete(id); }
     }
   }
   async save(): Promise<void> {

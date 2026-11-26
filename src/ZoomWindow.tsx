@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { exportToSvg, getCommonBounds } from '@excalidraw/excalidraw';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { exportToSvg, getCommonBounds, getFreeDrawSvgPath } from '@excalidraw/excalidraw';
 import type { Rect } from './model';
 import { pageRect } from './model';
 import type { ScenePoint } from './geometry';
@@ -11,14 +11,14 @@ import { placementAt } from './layout';
 import { templateDots, templateLines, templateSpec } from './templates';
 import { toScreen, useView, View, ViewStore } from './view';
 import { InkStabilizer } from './ink-input';
-import { IconButton } from './InkIcon';
-import { Segmented } from './ui';
+import { IconButton, InkIcon } from './InkIcon';
+import { Segmented, Switch } from './ui';
+import { isolateFloatingInput } from './pointer-input';
 import {
   advanceZoomBox,
   buildZoomFreedrawElement,
   clampZoomBox,
   newlineZoomBox,
-  sceneToZoomCanvas,
   shouldAutoAdvance,
   zoomBoxSize,
   zoomCanvasToScene,
@@ -26,6 +26,12 @@ import {
 } from './zoom-window';
 
 interface LiveStroke {
+  id?: string;
+  seq: number;
+  committing?: boolean;
+  pathD?: string;
+  elX?: number;
+  elY?: number;
   points: ScenePoint[];
   rawPoints?: ScenePoint[];
   rawPressures?: number[];
@@ -34,6 +40,7 @@ interface LiveStroke {
   width: number;
   opacity: number;
   inkKind: 'pen' | 'highlighter';
+  usePressure: boolean;
 }
 
 function readPressure(value: unknown): number {
@@ -49,53 +56,96 @@ function darkPreviewColor(hex: string): string {
 }
 
 /** Draggable translucent target frame shown on the main canvas when Zoom Window is open. */
-export function ZoomBoxOverlay({ views, box, autoAdvance, onChange }: {
+export function ZoomBoxOverlay({ views, box, liveRef, onLiveMove, autoAdvance, onChange }: {
   views: ViewStore;
   box: Rect;
+  liveRef?: React.MutableRefObject<Rect>;
+  onLiveMove?: () => void;
   autoAdvance: boolean;
   onChange: (next: Rect) => void;
 }) {
+  const boxRef = useRef<HTMLDivElement>(null);
   const screen = useView(views, (v: View) => {
     const [x, y] = toScreen(v, box.x, box.y);
     return `${x},${y},${box.width * v.zoom},${box.height * v.zoom},${v.zoom}`;
   });
   const [sx, sy, sw, sh, zoom] = screen.split(',').map(Number);
-  const drag = useRef<{ id: number; startX: number; startY: number; origin: Rect } | null>(null);
+  const latestBox = useRef(box); latestBox.current = box;
+  const drag = useRef<{ id: number; startX: number; startY: number; lastX: number; lastY: number; origin: Rect; next: Rect } | null>(null);
+
+  useEffect(() => isolateFloatingInput(boxRef.current!), []);
+  useLayoutEffect(() => {
+    if (drag.current) {
+      drag.current = {
+        ...drag.current,
+        startX: drag.current.lastX,
+        startY: drag.current.lastY,
+        origin: box,
+        next: box,
+      };
+    }
+    if (liveRef) liveRef.current = box;
+    if (boxRef.current) boxRef.current.style.transform = '';
+  }, [box, liveRef]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button > 0) return;
     event.stopPropagation();
     event.preventDefault();
     if (drag.current) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { id: event.pointerId, startX: event.clientX, startY: event.clientY, origin: box };
+    drag.current = { id: event.pointerId, startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, origin: latestBox.current, next: latestBox.current };
   };
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d || d.id !== event.pointerId) return;
     event.stopPropagation();
+    d.lastX = event.clientX;
+    d.lastY = event.clientY;
+    const dx = event.clientX - d.startX, dy = event.clientY - d.startY;
     const z = Math.max(0.05, zoom);
-    onChange({
-      ...d.origin,
-      x: d.origin.x + (event.clientX - d.startX) / z,
-      y: d.origin.y + (event.clientY - d.startY) / z,
-    });
+    d.next = { ...d.origin, x: d.origin.x + dx / z, y: d.origin.y + dy / z };
+    if (liveRef) liveRef.current = d.next;
+    onLiveMove?.();
+    if (boxRef.current) boxRef.current.style.transform = `translate(${dx}px, ${dy}px)`;
   };
-  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (drag.current?.id === event.pointerId) {
-      event.stopPropagation();
-      drag.current = null;
+  const endDrag = (event: React.PointerEvent<HTMLDivElement>, cancelled: boolean) => {
+    const d = drag.current;
+    if (!d || d.id !== event.pointerId) return;
+    event.stopPropagation();
+    drag.current = null;
+    if (boxRef.current) boxRef.current.style.transform = '';
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (cancelled) {
+      if (liveRef) liveRef.current = d.origin;
+      onLiveMove?.();
+      return;
     }
+    if (d.next.x !== d.origin.x || d.next.y !== d.origin.y) onChange(d.next);
+  };
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    const step = (event.shiftKey ? 36 : 12) / Math.max(0.25, zoom);
+    const moves: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    if (!moves[event.key]) return;
+    event.preventDefault(); event.stopPropagation();
+    const [dx, dy] = moves[event.key];
+    onChange({ ...box, x: box.x + dx, y: box.y + dy });
   };
 
   return <div
+    ref={boxRef}
     className="ink-zoom-target-box"
+    tabIndex={0}
     style={{ left: sx, top: sy, width: Math.max(24, sw), height: Math.max(16, sh) }}
+    onKeyDown={onKeyDown}
     onPointerDown={onPointerDown}
     onPointerMove={onPointerMove}
-    onPointerUp={onPointerUp}
-    onPointerCancel={onPointerUp}
+    onPointerUp={e => endDrag(e, false)}
+    onPointerCancel={e => endDrag(e, true)}
+    onLostPointerCapture={e => endDrag(e, false)}
     role="region"
-    aria-label="放大书写取景框（拖动调整位置）"
+    aria-label="放大书写取景框（拖动或方向键调整位置）"
   >
     {autoAdvance && <div className="ink-zoom-target-zone" aria-hidden="true"/>}
   </div>;
@@ -115,11 +165,15 @@ export function ZoomWindow({
   dark,
   nightPaper,
   box,
+  liveBoxRef,
+  paintRef,
   factor,
   autoAdvance,
   onBoxChange,
   onFactorChange,
   onAutoAdvanceChange,
+  onSwitchToPen,
+  onWritingChange,
   onClose,
   onEraseEnd,
 }: {
@@ -132,36 +186,57 @@ export function ZoomWindow({
   dark: boolean;
   nightPaper: boolean;
   box: Rect;
+  liveBoxRef?: React.RefObject<Rect>;
+  paintRef?: React.MutableRefObject<(() => void) | null>;
   factor: ZoomFactor;
   autoAdvance: boolean;
   onBoxChange: (next: Rect) => void;
   onFactorChange: (next: ZoomFactor) => void;
   onAutoAdvanceChange: (next: boolean) => void;
+  onSwitchToPen?: () => void;
+  onWritingChange?: (writing: boolean) => void;
   onClose: () => void;
   onEraseEnd?: () => void;
 }) {
+  const windowRef = useRef<HTMLElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const backdropRef = useRef<HTMLCanvasElement | null>(null);
   const backdropBoxRef = useRef<Rect | null>(null);
   const [stripSize, setStripSize] = useState({ width: 640, height: 180 });
   const [sceneTick, setSceneTick] = useState(0);
+  const [advancing, setAdvancing] = useState(false);
   const activeStroke = useRef<LiveStroke | null>(null);
   const pendingStrokes = useRef<LiveStroke[]>([]);
+  const strokeSeq = useRef(0);
   const pointerState = useRef<{
     id: number;
     mode: 'draw' | 'erase' | 'pan';
-    strokeBox: Rect;
     stabilizer?: InkStabilizer;
     lastScreen?: [number, number];
     erasePath?: ScenePoint[];
   } | null>(null);
   const advanceTimer = useRef<number>();
+  const backdropBusy = useRef(false);
+  const backdropDirty = useRef(false);
+  const backdropAbort = useRef<AbortController | null>(null);
+  const unmounted = useRef(false);
+  const latestRenderDeps = useRef({ paged, pdf, dark, session, handle });
+  latestRenderDeps.current = { paged, pdf, dark, session, handle };
   const latestBox = useRef(box); latestBox.current = box;
   const latestSize = useRef(stripSize); latestSize.current = stripSize;
+  const currentBox = () => liveBoxRef?.current ?? latestBox.current;
+  const supported = tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'hand';
+
+  useEffect(() => isolateFloatingInput(windowRef.current!), []);
+
+  const cancelAutoAdvance = () => {
+    window.clearTimeout(advanceTimer.current);
+    setAdvancing(false);
+  };
 
   useEffect(() => {
-    if (!autoAdvance) window.clearTimeout(advanceTimer.current);
+    if (!autoAdvance) cancelAutoAdvance();
   }, [autoAdvance]);
 
   useEffect(() => {
@@ -187,12 +262,34 @@ export function ZoomWindow({
   }, [stripSize.width, stripSize.height, factor]);
 
   useEffect(() => {
-    const bump = () => setSceneTick(n => n + 1);
+    const bump = () => {
+      if (pendingStrokes.current.length) {
+        // Read live IDs from session.surfaces first so undo/redo (which notifies listeners before handle.rebuild()) drops ghost strokes immediately.
+        const liveIds = new Set<string>();
+        for (const p of session.manifest.pages) {
+          for (const e of session.surfaces.get(p.id) ?? []) if (!e.isDeleted) liveIds.add(e.id);
+        }
+        const next = pendingStrokes.current.filter(s => s.committing || !s.id || liveIds.has(s.id));
+        if (next.length !== pendingStrokes.current.length) {
+          pendingStrokes.current = next;
+          paintComposite();
+        }
+      }
+      setSceneTick(n => n + 1);
+    };
     session.listeners.add(bump);
     return () => { session.listeners.delete(bump); };
-  }, [session]);
+  }, [session, handle]);
 
-  useEffect(() => () => { window.clearTimeout(advanceTimer.current); }, []);
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
+      unmounted.current = true;
+      backdropAbort.current?.abort();
+      window.clearTimeout(advanceTimer.current);
+      onWritingChange?.(false);
+    };
+  }, []);
 
   function pageContextFor(target: Rect) {
     if (!paged) return { limit: undefined as Rect | undefined, lineStep: undefined as number | undefined };
@@ -221,8 +318,8 @@ export function ZoomWindow({
   }
 
   function stepBox(action: 'prev' | 'next' | 'newline') {
-    window.clearTimeout(advanceTimer.current);
-    const cur = latestBox.current;
+    cancelAutoAdvance();
+    const cur = currentBox();
     const { limit, lineStep } = pageContextFor(cur);
     const next = action === 'newline'
       ? newlineZoomBox(cur, limit, lineStep)
@@ -268,31 +365,29 @@ export function ZoomWindow({
 
   function drawStrokeOnCtx(ctx: CanvasRenderingContext2D, stroke: LiveStroke, w: number, h: number, targetBox: Rect) {
     if (!stroke.points.length) return;
+    let pathD = stroke.pathD, elX = stroke.elX ?? 0, elY = stroke.elY ?? 0;
+    if (!pathD) {
+      const el = buildZoomFreedrawElement(stroke.points, stroke.pressures, {
+        color: stroke.color,
+        width: stroke.width,
+        opacity: stroke.opacity,
+        inkKind: stroke.inkKind,
+        fixedPressure: !stroke.usePressure,
+      });
+      if (!el || el.type !== 'freedraw') return;
+      pathD = getFreeDrawSvgPath(el);
+      elX = el.x;
+      elY = el.y;
+    }
+    if (!pathD) return;
     ctx.save();
     ctx.globalAlpha = stroke.opacity / 100;
     if (!dark && stroke.inkKind === 'highlighter') ctx.globalCompositeOperation = 'multiply';
-    const drawColor = dark && stroke.inkKind === 'pen' ? darkPreviewColor(stroke.color) : stroke.color;
-    ctx.strokeStyle = drawColor;
-    ctx.fillStyle = drawColor;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    const scaleX = w / Math.max(1, targetBox.width);
-    const lineW = Math.max(1.5, stroke.width * 2.2 * scaleX);
-    ctx.lineWidth = lineW;
-    if (stroke.points.length === 1) {
-      const [cx, cy] = sceneToZoomCanvas(stroke.points[0][0], stroke.points[0][1], w, h, targetBox);
-      ctx.beginPath();
-      ctx.arc(cx, cy, lineW / 2, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.beginPath();
-      stroke.points.forEach(([sx, sy], i) => {
-        const [cx, cy] = sceneToZoomCanvas(sx, sy, w, h, targetBox);
-        if (i === 0) ctx.moveTo(cx, cy);
-        else ctx.lineTo(cx, cy);
-      });
-      ctx.stroke();
-    }
+    ctx.fillStyle = dark && stroke.inkKind === 'pen' ? darkPreviewColor(stroke.color) : stroke.color;
+    const scaleX = w / Math.max(1, targetBox.width), scaleY = h / Math.max(1, targetBox.height);
+    ctx.translate((elX - targetBox.x) * scaleX, (elY - targetBox.y) * scaleY);
+    ctx.scale(scaleX, scaleY);
+    ctx.fill(new Path2D(pathD));
     ctx.restore();
   }
 
@@ -309,7 +404,7 @@ export function ZoomWindow({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const targetBox = latestBox.current;
+    const targetBox = currentBox();
     drawBaseSurface(ctx, w, h, targetBox);
     if (backdropRef.current && backdropBoxRef.current) {
       // Project the cached backdrop into exact world-aligned coordinates of `targetBox`
@@ -325,31 +420,27 @@ export function ZoomWindow({
     if (activeStroke.current) drawStrokeOnCtx(ctx, activeStroke.current, w, h, targetBox);
   }
 
-  // Re-project immediately whenever `box` moves so the display updates synchronously before async PDF/SVG finishes.
-  useEffect(() => {
-    paintComposite();
-  }, [box.x, box.y, box.width, box.height, stripSize.width, stripSize.height, dark]);
-
-  // Render crisp offscreen backdrop of paper/PDF + existing scene elements inside `box`.
-  useEffect(() => {
-    const abort = new AbortController();
-    const { width: w, height: h } = stripSize;
-    if (w < 40 || h < 40 || box.width <= 0 || box.height <= 0) return;
+  async function renderBackdropOnce(signal: AbortSignal) {
+    const { width: w, height: h } = latestSize.current;
+    const target = currentBox();
+    const { paged: isPaged, pdf: pdfSvc, dark: isDark, session: sess, handle: hdl } = latestRenderDeps.current;
+    if (w < 40 || h < 40 || target.width <= 0 || target.height <= 0) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const bw = Math.max(1, Math.round(w * dpr)), bh = Math.max(1, Math.round(h * dpr));
-    const scaleX = bw / box.width, scaleY = bh / box.height;
-    const snapBox: Rect = { ...box };
+    const scaleX = bw / target.width, scaleY = bh / target.height;
+    const snapBox: Rect = { ...target };
 
-    void (async () => {
-      const off = createEl('canvas');
-      off.width = bw;
-      off.height = bh;
+    const off = createEl('canvas');
+    off.width = bw;
+    off.height = bh;
+    let committed = false;
+    try {
       const ctx = off.getContext('2d')!;
-      ctx.fillStyle = dark ? '#1f2329' : paged ? '#e7e4de' : '#faf9f5';
+      ctx.fillStyle = isDark ? '#1f2329' : isPaged ? '#e7e4de' : '#faf9f5';
       ctx.fillRect(0, 0, bw, bh);
 
-      if (paged) {
-        const placements = handle.layout().placements.filter(p =>
+      if (isPaged) {
+        const placements = hdl.layout().placements.filter(p =>
           p.paper.x < snapBox.x + snapBox.width && p.paper.x + p.paper.width > snapBox.x &&
           p.paper.y < snapBox.y + snapBox.height && p.paper.y + p.paper.height > snapBox.y,
         );
@@ -358,7 +449,7 @@ export function ZoomWindow({
           const pw = p.paper.width * scaleX, ph = p.paper.height * scaleY;
           ctx.fillStyle = p.page.pdfPage ? '#ffffff' : '#fcfbf7';
           ctx.fillRect(px, py, pw, ph);
-          if (p.page.pdfPage && pdf) {
+          if (p.page.pdfPage && pdfSvc) {
             const left = Math.max(0, snapBox.x - p.x);
             const top = Math.max(0, snapBox.y - p.y);
             const right = Math.min(p.page.width, snapBox.x + snapBox.width - p.x);
@@ -367,8 +458,8 @@ export function ZoomWindow({
               const pdfCanvas = createEl('canvas');
               const renderScale = Math.min(3, Math.max(scaleX, scaleY));
               try {
-                await pdf.render(p.page, pdfCanvas, renderScale, { x: left, y: top, width: right - left, height: bottom - top }, abort.signal);
-                if (abort.signal.aborted) return;
+                await pdfSvc.render(p.page, pdfCanvas, renderScale, { x: left, y: top, width: right - left, height: bottom - top }, signal);
+                if (signal.aborted || unmounted.current) return;
                 ctx.drawImage(
                   pdfCanvas,
                   (p.x + left - snapBox.x) * scaleX,
@@ -401,20 +492,22 @@ export function ZoomWindow({
         }
       }
 
-      const sceneEls = handle.elements().filter(e => {
+      const startedAtSeq = strokeSeq.current;
+      const sceneEls = hdl.elements().filter(e => {
         if (e.isDeleted) return false;
         const [x1, y1, x2, y2] = getCommonBounds([e]);
         return x2 > snapBox.x - 16 && y2 > snapBox.y - 16 && x1 < snapBox.x + snapBox.width + 16 && y1 < snapBox.y + snapBox.height + 16;
       });
+      const exportedIds = new Set(sceneEls.map(e => e.id));
       if (sceneEls.length) {
         const [ox, oy] = getCommonBounds(sceneEls);
         const svg = await exportToSvg({
           elements: sceneEls,
-          files: { ...session.files, ...handle.api.getFiles() },
-          appState: { exportBackground: false, exportWithDarkMode: dark },
+          files: { ...sess.files, ...hdl.api.getFiles() },
+          appState: { exportBackground: false, exportWithDarkMode: isDark },
           exportPadding: 0,
         });
-        if (abort.signal.aborted) return;
+        if (signal.aborted || unmounted.current) return;
         svg.setAttribute('viewBox', `${snapBox.x - ox} ${snapBox.y - oy} ${snapBox.width} ${snapBox.height}`);
         svg.setAttribute('width', String(bw));
         svg.setAttribute('height', String(bh));
@@ -423,23 +516,76 @@ export function ZoomWindow({
           const img = new Image();
           img.src = url;
           await img.decode();
-          if (abort.signal.aborted) return;
+          if (signal.aborted || unmounted.current) return;
           ctx.drawImage(img, 0, 0, bw, bh);
         } finally {
           URL.revokeObjectURL(url);
         }
       }
 
-      if (abort.signal.aborted) return;
+      if (signal.aborted || unmounted.current) return;
       if (backdropRef.current) backdropRef.current.width = backdropRef.current.height = 0;
       backdropRef.current = off;
       backdropBoxRef.current = snapBox;
-      pendingStrokes.current = [];
+      committed = true;
+      const liveIds = new Set(hdl.elements().filter(e => !e.isDeleted).map(e => e.id));
+      const liveBox = currentBox();
+      const coversLiveBox = snapBox.x === liveBox.x && snapBox.y === liveBox.y && snapBox.width === liveBox.width && snapBox.height === liveBox.height;
+      pendingStrokes.current = pendingStrokes.current.filter(s => {
+        if (s.committing) return true;
+        if (s.id && !liveIds.has(s.id)) return false;
+        if (!coversLiveBox && s.id && !exportedIds.has(s.id)) return true;
+        return s.seq > startedAtSeq;
+      });
       paintComposite();
-    })().catch(() => {});
+    } finally {
+      if (!committed) off.width = off.height = 0;
+    }
+  }
 
-    return () => abort.abort();
-  }, [box.x, box.y, box.width, box.height, stripSize.width, stripSize.height, sceneTick, paged, pdf, dark]);
+  function requestBackdrop(restart = false) {
+    if (unmounted.current) return;
+    backdropDirty.current = true;
+    if (restart && backdropBusy.current) backdropAbort.current?.abort();
+    if (backdropBusy.current) return;
+    backdropBusy.current = true;
+    void (async () => {
+      try {
+        while (backdropDirty.current && !unmounted.current) {
+          backdropDirty.current = false;
+          const ac = new AbortController();
+          backdropAbort.current = ac;
+          await renderBackdropOnce(ac.signal).catch(() => {});
+        }
+      } finally {
+        backdropBusy.current = false;
+        backdropAbort.current = null;
+      }
+    })();
+  }
+
+  // Re-project immediately whenever `box` moves so the display updates synchronously before async PDF/SVG finishes,
+  // and run a single-flight backdrop loop so continuous drags on slow PDFs never starve offscreen rendering.
+  useEffect(() => {
+    if (!paintRef) return;
+    const onLiveMove = () => {
+      paintComposite();
+      requestBackdrop(false);
+    };
+    paintRef.current = onLiveMove;
+    return () => { if (paintRef.current === onLiveMove) paintRef.current = null; };
+  });
+  useEffect(() => {
+    paintComposite();
+  }, [box.x, box.y, box.width, box.height, stripSize.width, stripSize.height, dark]);
+
+  const prevBackdropStruct = useRef({ w: stripSize.width, h: stripSize.height, paged, pdf, dark });
+  useEffect(() => {
+    const prev = prevBackdropStruct.current;
+    const restart = prev.w !== stripSize.width || prev.h !== stripSize.height || prev.paged !== paged || prev.pdf !== pdf || prev.dark !== dark;
+    prevBackdropStruct.current = { w: stripSize.width, h: stripSize.height, paged, pdf, dark };
+    requestBackdrop(restart);
+  }, [box.x, box.y, box.width, box.height, sceneTick, stripSize.width, stripSize.height, paged, pdf, dark]);
 
   useEffect(() => () => {
     if (backdropRef.current) {
@@ -467,19 +613,21 @@ export function ZoomWindow({
         return;
       }
     }
-    window.clearTimeout(advanceTimer.current);
+    cancelAutoAdvance();
     event.currentTarget.setPointerCapture(event.pointerId);
     const [cx, cy] = toLocalCss(event.clientX, event.clientY);
-    const strokeBox: Rect = { ...latestBox.current };
+    const activeBox = currentBox();
 
     if ((event.pointerType === 'touch' && !prefs.fingerDraws) || tool === 'hand') {
-      pointerState.current = { id: event.pointerId, mode: 'pan', strokeBox, lastScreen: [cx, cy] };
+      pointerState.current = { id: event.pointerId, mode: 'pan', lastScreen: [cx, cy] };
       return;
     }
+    if (!supported) return;
 
-    const pt = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, strokeBox);
+    const pt = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox);
+    onWritingChange?.(true);
     if (tool === 'eraser') {
-      pointerState.current = { id: event.pointerId, mode: 'erase', strokeBox, erasePath: [pt] };
+      pointerState.current = { id: event.pointerId, mode: 'erase', erasePath: [pt] };
       return;
     }
 
@@ -487,8 +635,10 @@ export function ZoomWindow({
     const stabilize = isHi ? 0 : prefs.pen.stabilize;
     const stabilizer = new InkStabilizer(stabilize);
     const startPt = stabilizer.start(pt[0], pt[1]);
-    const pressure = isHi || !prefs.pen.pressure ? 0.5 : readPressure(event.pressure);
+    const usePressure = !isHi && prefs.pen.pressure;
+    const pressure = usePressure ? readPressure(event.pressure) : 0.5;
     activeStroke.current = {
+      seq: 0,
       points: [startPt],
       rawPoints: stabilize > 0 ? [pt] : undefined,
       rawPressures: stabilize > 0 ? [pressure] : undefined,
@@ -497,8 +647,9 @@ export function ZoomWindow({
       width: isHi ? prefs.highlighter.width : prefs.pen.width,
       opacity: isHi ? 35 : 100,
       inkKind: isHi ? 'highlighter' : 'pen',
+      usePressure,
     };
-    pointerState.current = { id: event.pointerId, mode: 'draw', strokeBox, stabilizer };
+    pointerState.current = { id: event.pointerId, mode: 'draw', stabilizer };
     paintComposite();
   };
 
@@ -522,13 +673,14 @@ export function ZoomWindow({
       return;
     }
 
+    const activeBox = currentBox();
     const coalesced = event.nativeEvent.getCoalescedEvents?.();
     const samples = coalesced?.length ? coalesced : [event.nativeEvent];
 
     if (state.mode === 'erase' && state.erasePath) {
       for (const s of samples) {
         const [cx, cy] = toLocalCss(s.clientX, s.clientY);
-        state.erasePath.push(zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, state.strokeBox));
+        state.erasePath.push(zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox));
       }
       return;
     }
@@ -537,7 +689,7 @@ export function ZoomWindow({
     if (!stroke || !state.stabilizer) return;
     for (const s of samples) {
       const [cx, cy] = toLocalCss(s.clientX, s.clientY);
-      const raw = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, state.strokeBox);
+      const raw = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox);
       const filtered = state.stabilizer.next(raw[0], raw[1]);
       const pressure = stroke.inkKind === 'highlighter' || !prefs.pen.pressure ? 0.5 : readPressure(s.pressure);
       const last = stroke.points[stroke.points.length - 1];
@@ -563,14 +715,16 @@ export function ZoomWindow({
     if (!state || state.id !== event.pointerId) return;
     event.stopPropagation();
     pointerState.current = null;
+    if (state.mode !== 'pan') onWritingChange?.(false);
 
     if (state.mode === 'pan') return;
 
+    const activeBox = currentBox();
     if (state.mode === 'erase') {
       const path = [...(state.erasePath ?? [])];
       if (!cancelled) {
         const [cx, cy] = toLocalCss(event.clientX, event.clientY);
-        path.push(zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, state.strokeBox));
+        path.push(zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox));
       }
       if (!cancelled && path.length) {
         const radius = prefs.eraser.size / factor;
@@ -590,7 +744,7 @@ export function ZoomWindow({
     }
     if (state.stabilizer) {
       const [cx, cy] = toLocalCss(event.clientX, event.clientY);
-      const rawEnd = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, state.strokeBox);
+      const rawEnd = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox);
       const endPt = state.stabilizer.finish(rawEnd[0], rawEnd[1]);
       const endPressure = stroke.inkKind === 'highlighter' || !prefs.pen.pressure ? 0.5 : readPressure(event.pressure);
       const last = stroke.points[stroke.points.length - 1];
@@ -623,39 +777,55 @@ export function ZoomWindow({
       paintComposite();
       return;
     }
+    stroke.id = el.id;
+    stroke.seq = ++strokeSeq.current;
+    stroke.committing = true;
+    if (el.type === 'freedraw') {
+      stroke.pathD = getFreeDrawSvgPath(el);
+      stroke.elX = el.x;
+      stroke.elY = el.y;
+    }
     pendingStrokes.current = [...pendingStrokes.current, stroke];
     paintComposite();
-    void handle.appendElements([el]).then(() => setSceneTick(n => n + 1)).catch(() => {});
+    void handle.appendElements([el]).then(() => {
+      stroke.committing = false;
+      setSceneTick(n => n + 1);
+    }).catch(() => {
+      pendingStrokes.current = pendingStrokes.current.filter(s => s.id !== el.id);
+      paintComposite();
+    });
 
     if (autoAdvance) {
       const maxX = stroke.points.reduce((m, [x]) => Math.max(m, x), -Infinity);
-      if (shouldAutoAdvance(maxX, state.strokeBox)) {
-        const expectedX = state.strokeBox.x, expectedY = state.strokeBox.y;
-        window.clearTimeout(advanceTimer.current);
+      if (shouldAutoAdvance(maxX, activeBox)) {
+        const expectedX = activeBox.x, expectedY = activeBox.y;
+        cancelAutoAdvance();
+        setAdvancing(true);
         advanceTimer.current = window.setTimeout(() => {
-          if (latestBox.current.x === expectedX && latestBox.current.y === expectedY) stepBox('next');
-        }, 550);
+          setAdvancing(false);
+          const cur = currentBox();
+          if (cur.x === expectedX && cur.y === expectedY) stepBox('next');
+        }, 750);
       }
     }
   };
 
-  const activeLabel = tool === 'eraser' ? '橡皮擦' : tool === 'highlighter' ? '荧光笔' : tool === 'hand' ? '拖动框' : '书写笔';
+  const activeLabel = tool === 'eraser' ? '橡皮擦' : tool === 'highlighter' ? '荧光笔' : tool === 'hand' ? '拖动框' : tool === 'pen' ? '书写笔' : '未支持工具';
 
-  return <section className={`ink-zoom-window${nightPaper ? ' is-night-paper' : ''}`} aria-label="放大书写框">
+  return <section ref={windowRef} tabIndex={-1} className={`ink-zoom-window${nightPaper ? ' is-night-paper' : ''}`} aria-label="放大书写框">
     <div className="ink-zoom-window-bar">
       <div className="ink-zoom-window-meta">
         <strong>放大书写框</strong>
-        <span className="ink-zoom-window-badge">{activeLabel}</span>
+        <span className={`ink-zoom-window-badge${!supported ? ' is-warning' : ''}`}>{activeLabel}</span>
         <Segmented
           label="放大倍率"
           value={factor}
           onChange={onFactorChange}
           options={[{ value: 2, label: '2×' }, { value: 3, label: '3×' }, { value: 4, label: '4×' }]}
         />
-        <label className="ink-zoom-auto-toggle">
-          <input type="checkbox" checked={autoAdvance} onChange={e => onAutoAdvanceChange(e.target.checked)}/>
-          <span>自动推进</span>
-        </label>
+        <div className="ink-zoom-auto-toggle">
+          <Switch label="自动推进" checked={autoAdvance} onChange={onAutoAdvanceChange}/>
+        </div>
       </div>
       <div className="ink-zoom-window-nav">
         <IconButton icon="left" label="向左移动取景框" onClick={() => stepBox('prev')}/>
@@ -668,13 +838,22 @@ export function ZoomWindow({
       <canvas
         ref={canvasRef}
         className="ink-zoom-window-canvas"
-        style={{ cursor: tool === 'hand' ? 'grab' : 'crosshair' }}
+        style={{ cursor: !supported ? 'default' : tool === 'hand' ? 'grab' : 'crosshair' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={e => finishPointer(e, false)}
         onPointerCancel={e => finishPointer(e, true)}
+        onLostPointerCapture={e => finishPointer(e, true)}
       />
-      {autoAdvance && <div className="ink-zoom-advance-zone" aria-hidden="true"><span>写到此区域自动推进</span></div>}
+      {!supported && <div className="ink-zoom-unsupported" role="status">
+        <InkIcon name="info"/>
+        <span>放大书写框仅支持笔、荧光笔、橡皮擦和拖动</span>
+        {onSwitchToPen && <button type="button" className="mod-cta" onClick={() => { onSwitchToPen(); windowRef.current?.focus({ preventScroll: true }); }}><InkIcon name="pen"/>切回笔</button>}
+      </div>}
+      {autoAdvance && supported && <div className={`ink-zoom-advance-zone${advancing ? ' is-advancing' : ''}`} aria-hidden="true">
+        {advancing && <div className="ink-zoom-advance-progress"/>}
+        <span>{advancing ? '即将推进（落笔可取消）' : '写到此区域自动推进'}</span>
+      </div>}
     </div>
   </section>;
 }

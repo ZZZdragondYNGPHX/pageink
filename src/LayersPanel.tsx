@@ -47,7 +47,7 @@ export function LayersPanel({
   return <div className="ink-layers-panel">
     <div className="ink-layers-head">
       <div className="ink-popover-title">{pageLabel ? `图层与编组 · ${pageLabel}` : '图层与编组'}</div>
-      {lockedCount > 0 && !readOnly && <button type="button" className="ink-layers-unlock-all" onClick={onUnlockAll}>全部解锁 ({lockedCount})</button>}
+      {lockedCount > 0 && !readOnly && <button type="button" className="ink-layers-unlock-all" onClick={onUnlockAll}><InkIcon name="unlock"/>全部解锁 ({lockedCount})</button>}
     </div>
     {selectedIds.length > 0 && !readOnly && <div className="ink-layers-selection">
       <span className="ink-layers-selection-title">当前选中 {selectedIds.length} 项</span>

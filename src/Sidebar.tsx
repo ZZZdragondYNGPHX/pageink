@@ -75,7 +75,7 @@ export function BookmarkList({ regions, pageNumber, onOpen, onMenu, onAdd, onSav
     {regions.length === 0 && <div className="ink-empty"><InkIcon name="bookmark"/><strong>{onSaveView ? '让想法有迹可循' : '把重点留在手边'}</strong><p>{onSaveView ? '保存画布上的一处视野，下次一点就能回到这里。' : '框住题目、笔记或图表，添加书签后随时跳回。'}</p></div>}
     {regions.map(region => <div key={region.id} className="ink-bookmark">
       {renaming === region.id ? <form className="ink-rename" onSubmit={event => { event.preventDefault(); onRename(region, new FormData(event.currentTarget).get('title') as string); }}>
-        <input name="title" defaultValue={region.title} aria-label="书签名称" data-autofocus autoFocus onFocus={event => event.currentTarget.select()} onBlur={event => onRename(region, event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onRename(region, null); } }}/>
+        <input name="title" defaultValue={region.title} aria-label="书签名称" data-autofocus autoFocus onFocus={event => event.currentTarget.select()} onBlur={event => onRename(region, event.currentTarget.value)} onKeyDown={event => { if (!event.nativeEvent.isComposing && event.key === 'Escape') { event.preventDefault(); onRename(region, null); } }}/>
       </form> : <button type="button" className="ink-bookmark-open" onClick={() => onOpen(region)}>
         <InkIcon name="bookmark"/><span className="ink-bookmark-title">{region.title || '未命名书签'}</span>{pageNumber(region.pageId) > 0 && <small>第 {pageNumber(region.pageId)} 页</small>}
       </button>}
@@ -183,7 +183,7 @@ export function OutlineList({ pdf, pages, currentPdfPage, onSelect }: {
     const hasChildren = node.items.length > 0;
     const isCollapsed = !!collapsed[key];
     const target = node.pdfPage !== null ? pageByPdf.get(node.pdfPage) : undefined;
-    return <li key={key} className="ink-outline-node">
+    return <li key={key} className="ink-outline-node" role="treeitem" aria-expanded={hasChildren ? !isCollapsed : undefined} data-outline-key={key}>
       <div className={`ink-outline-row${key === activeKey ? ' is-active' : ''}`} style={{ paddingLeft: 4 + Math.min(depth, 5) * 14 }}>
         {hasChildren ? <button type="button" className="ink-outline-toggle" aria-expanded={!isCollapsed} aria-label={isCollapsed ? `展开 ${node.title}` : `收起 ${node.title}`}
           onClick={() => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }))}><InkIcon name={isCollapsed ? 'right' : 'down'}/></button>
@@ -194,13 +194,39 @@ export function OutlineList({ pdf, pages, currentPdfPage, onSelect }: {
           {target && <small>{target.index + 1}</small>}
         </button>
       </div>
-      {hasChildren && !isCollapsed && <ul className="ink-outline-children">{renderNodes(node.items, key, depth + 1)}</ul>}
+      {hasChildren && !isCollapsed && <ul className="ink-outline-children" role="group">{renderNodes(node.items, key, depth + 1)}</ul>}
     </li>;
   });
 
+  const onTreeKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const doc = event.currentTarget.ownerDocument;
+    const jumps = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('.ink-outline-jump:not(:disabled)')];
+    if (!jumps.length) return;
+    const current = (doc.activeElement as HTMLElement | null)?.closest('.ink-outline-row')?.querySelector<HTMLButtonElement>('.ink-outline-jump');
+    const index = current ? jumps.indexOf(current) : -1;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      const node = (doc.activeElement as HTMLElement | null)?.closest<HTMLLIElement>('[data-outline-key]');
+      const key = node?.dataset.outlineKey;
+      if (!key) return;
+      const expanded = node.getAttribute('aria-expanded');
+      if (event.key === 'ArrowRight' && expanded === 'false') { event.preventDefault(); setCollapsed(prev => ({ ...prev, [key]: false })); return; }
+      if (event.key === 'ArrowLeft' && expanded === 'true') { event.preventDefault(); setCollapsed(prev => ({ ...prev, [key]: true })); return; }
+      if (event.key === 'ArrowLeft') {
+        const parentJump = node.parentElement?.closest<HTMLLIElement>('[data-outline-key]')?.querySelector<HTMLButtonElement>(':scope > .ink-outline-row > .ink-outline-jump:not(:disabled)');
+        if (parentJump) { event.preventDefault(); parentJump.focus(); }
+      }
+      return;
+    }
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? jumps.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + jumps.length) % jumps.length;
+    jumps[next]?.focus();
+  };
+
   if (items === null) return <div className="ink-empty"><span className="ink-spinner" aria-label="正在读取目录"/><p>正在读取 PDF 目录…</p></div>;
   if (!items.length) return <div className="ink-empty"><InkIcon name="outline"/><strong>没有内置目录</strong><p>这份 PDF 未包含大纲目录，可使用「书签」自行标记重点章节。</p></div>;
-  return <ul className="ink-outline-list" role="tree" aria-label="PDF 目录">{renderNodes(items, '0', 0)}</ul>;
+  return <ul className="ink-outline-list" role="tree" aria-label="PDF 目录" onKeyDown={onTreeKeyDown}>{renderNodes(items, '0', 0)}</ul>;
 }
 
 export function SidebarTabs({ tab, onTab, paged, hasOutline, id }: { tab: SidebarTab; onTab: (tab: SidebarTab) => void; paged: boolean; hasOutline?: boolean; id: string }) {

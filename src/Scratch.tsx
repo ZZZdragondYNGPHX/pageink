@@ -55,11 +55,13 @@ export function ScratchWindow({ open, frame, area, onFrame, onClose, docked, onD
     onFrame(next, true);
   };
   const nudge = (event: React.KeyboardEvent) => {
+    if (event.nativeEvent.isComposing) return;
     const step = event.shiftKey ? 40 : 16, f = latest.current;
     const moves: Record<string, Partial<ScratchFrame>> = { ArrowLeft: { right: f.right + step }, ArrowRight: { right: f.right - step }, ArrowUp: { top: f.top - step }, ArrowDown: { top: f.top + step } };
     if (!docked && event.target === event.currentTarget && moves[event.key]) { event.preventDefault(); onFrame(containFrame({ ...f, ...moves[event.key] }, area), true); }
   };
   const resizeWithKeys = (event: React.KeyboardEvent) => {
+    if (event.nativeEvent.isComposing) return;
     const step = event.shiftKey ? 40 : 16, f = latest.current;
     const sizes: Record<string, Partial<ScratchFrame>> = { ArrowLeft: { width: f.width + step }, ArrowRight: { width: f.width - step }, ArrowUp: { height: f.height - step }, ArrowDown: { height: f.height + step } };
     if (sizes[event.key]) { event.preventDefault(); onFrame(containFrame({ ...f, ...sizes[event.key] }, area), true); }

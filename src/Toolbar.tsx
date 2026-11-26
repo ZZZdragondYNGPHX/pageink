@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
-import { Menu, Popover, radioKeys, Segmented, Swatches, useAnchor } from './ui';
+import { Menu, Popover, radioKeys, Segmented, Swatches, Switch, useAnchor } from './ui';
 import { ERASER_SIZES, HIGHLIGHTER_COLORS, HIGHLIGHTER_WIDTHS, PEN_COLORS, PEN_WIDTHS, PenPreset, Preferences, PreferenceStore, SHAPE_FILLS, SHAPE_WIDTHS, ShapeKind, TAPE_COLORS, TEXT_SIZES, ToolId } from './preferences';
 
 interface ToolDef { id: ToolId; icon: string; label: string; key: string }
@@ -10,9 +10,11 @@ export const WRITING_TOOLS: ToolDef[] = [
   { id: 'eraser', icon: 'eraser', label: '橡皮擦', key: 'E' },
   { id: 'lasso', icon: 'lasso', label: '圈选', key: 'L' },
   { id: 'select', icon: 'select', label: '选择', key: 'V' },
+  { id: 'hand', icon: 'hand', label: '移动', key: 'H' },
+];
+export const EXTRA_TOOLS: ToolDef[] = [
   { id: 'space', icon: 'space', label: '插空', key: 'K' },
   { id: 'tape', icon: 'tape', label: '胶带', key: 'A' },
-  { id: 'hand', icon: 'hand', label: '移动', key: 'H' },
 ];
 export const INSERT_TOOLS: ToolDef[] = [
   { id: 'text', icon: 'text', label: '文字', key: 'T' },
@@ -35,6 +37,8 @@ export function ToolButtons({ tool, onTool, onImage, capture }: { tool: ToolId; 
     const observer = new ResizeObserver(reveal); observer.observe(element);
     return () => observer.disconnect();
   }, [tool]);
+  const activeExtra = EXTRA_TOOLS.find(t => t.id === tool);
+  const visibleWriting = activeExtra ? [...WRITING_TOOLS, activeExtra] : WRITING_TOOLS;
   const button = (t: ToolDef) => <IconButton key={t.id} icon={t.icon} label={t.label} shortcut={t.key} tabIndex={tool === t.id ? 0 : -1} aria-pressed={tool === t.id} className="ink-tool" onClick={event => onTool(t.id, event.currentTarget)}><span>{t.label}</span></IconButton>;
   return <div ref={tools} className="ink-tools" role="toolbar" aria-label="书写工具" onKeyDown={event => {
     if (event.nativeEvent.isComposing || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
@@ -43,7 +47,7 @@ export function ToolButtons({ tool, onTool, onImage, capture }: { tool: ToolId; 
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + buttons.length) % buttons.length;
     buttons[next]?.focus();
   }}>
-    <div className="ink-tool-group">{WRITING_TOOLS.map(button)}</div>
+    <div className="ink-tool-group">{visibleWriting.map(button)}</div>
     <div className="ink-tool-group">{INSERT_TOOLS.map(button)}<IconButton icon="image" label="插入图片" shortcut="I" tabIndex={-1} className="ink-tool" onClick={onImage}><span>图片</span></IconButton>{capture && button(CAPTURE_TOOL)}</div>
   </div>;
 }
@@ -53,10 +57,11 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store, onReve
   tool: ToolId; onTool: (tool: ToolId) => void; onImage: () => void; capture: boolean; prefs: Preferences; store: PreferenceStore; onRevealAllTapes?: (revealed: boolean) => void;
 }) {
   const pop = useAnchor<'options' | 'tools'>();
-  const definition = [...WRITING_TOOLS, ...INSERT_TOOLS, CAPTURE_TOOL].find(t => t.id === tool)!;
+  const definition = [...WRITING_TOOLS, ...EXTRA_TOOLS, ...INSERT_TOOLS, CAPTURE_TOOL].find(t => t.id === tool)!;
   const color = tool === 'highlighter' ? prefs.highlighter.color : tool === 'tape' ? prefs.tape.color : tool === 'text' ? prefs.text.color : tool === 'shape' ? prefs.shape.color : prefs.pen.color;
   const colors = tool === 'highlighter' ? HIGHLIGHTER_COLORS : tool === 'tape' ? TAPE_COLORS : PEN_COLORS;
   const colored = ['pen', 'highlighter', 'tape', 'text', 'shape'].includes(tool);
+  const usesPenSlots = tool === 'pen' || tool === 'highlighter';
   const configurable = colored || tool === 'eraser' || tool === 'capture' || tool === 'lasso';
   const updateActiveSlot = (kind: 'pen' | 'highlighter', patch: Partial<Pick<PenPreset, 'color' | 'width'>>) => {
     const idx = prefs.activeSlot;
@@ -83,10 +88,11 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store, onReve
     });
     onTool(slot.kind);
   };
-  const detail = tool === 'eraser' ? (prefs.eraser.highlighterOnly ? '仅荧光笔' : prefs.eraser.mode === 'partial' ? '局部擦除' : '整笔擦除')
-    : tool === 'lasso' ? (prefs.lasso.filter === 'ink' ? '仅笔迹' : prefs.lasso.filter === 'highlighter' ? '仅荧光笔' : '全部内容')
-    : tool === 'capture' ? prefs.capture.shape === 'rect' ? '矩形' : '自由形状'
+  const detail = tool === 'eraser' ? (prefs.eraser.highlighterOnly ? '仅荧光笔' : prefs.eraser.mode === 'partial' ? '局部擦' : '整笔擦')
+    : tool === 'lasso' ? (prefs.lasso.filter === 'ink' ? '仅笔迹' : prefs.lasso.filter === 'highlighter' ? '仅荧光笔' : '全部')
+    : tool === 'capture' ? (prefs.capture.shape === 'rect' ? '矩形' : '自由')
     : tool === 'text' ? `${prefs.text.size}` : tool === 'pen' ? `${prefs.pen.width}` : tool === 'highlighter' ? `${prefs.highlighter.width}` : `${prefs.shape.width}`;
+  const showTriggerLabel = tool === 'eraser' || tool === 'capture';
   return <div className="ink-tool-shelf">
     <ToolButtons tool={tool} onTool={(next, anchor) => {
       if (tool === next && configurable) pop.toggle('options', anchor);
@@ -95,12 +101,12 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store, onReve
     <IconButton icon="more" label="更多工具" className="ink-tools-more" aria-expanded={pop.open === 'tools'} onClick={event => pop.toggle('tools', event.currentTarget)}/>
     {pop.open === 'tools' && <Popover anchor={pop.anchor} onClose={pop.close} label="全部工具" align="end">
       <Menu onDone={pop.close} items={[
-        ...[...WRITING_TOOLS, ...INSERT_TOOLS, ...(capture ? [CAPTURE_TOOL] : [])].map(t => ({ icon: t.icon, label: t.label, checked: tool === t.id, onSelect: () => onTool(t.id) })),
+        ...[...WRITING_TOOLS, ...EXTRA_TOOLS, ...INSERT_TOOLS, ...(capture ? [CAPTURE_TOOL] : [])].map(t => ({ icon: t.icon, label: t.label, checked: tool === t.id, onSelect: () => onTool(t.id) })),
         { icon: 'image', label: '插入图片', onSelect: onImage },
       ]}/>
     </Popover>}
     {configurable && <div className="ink-quick-style" role="group" aria-label={`${definition.label}快捷设置`}>
-      {(tool === 'pen' || tool === 'highlighter') && (() => {
+      {usesPenSlots && (() => {
         const hasCheckedSlot = prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === tool;
         return <div className="ink-pen-slots" role="radiogroup" aria-label="常用笔袋" onKeyDown={radioKeys}>
           {prefs.penSlots.map((slot, index) => {
@@ -109,21 +115,24 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store, onReve
               className={`ink-pen-slot${slot.kind === 'highlighter' ? ' is-highlighter' : ''}`}
               title={`${slot.kind === 'highlighter' ? '荧光笔' : '笔'} · ${slot.width}px`} aria-label={`笔袋 ${index + 1}：${slot.kind === 'highlighter' ? '荧光笔' : '笔'} ${slot.width}px`}
               onClick={() => selectSlot(index)}>
-              <span className="ink-pen-slot-dot" style={{ background: slot.color, width: Math.min(18, 6 + slot.width * 2.2), height: Math.min(18, 6 + slot.width * 2.2) }}/>
+              <span className="ink-pen-slot-dot" style={{ background: slot.color, width: Math.min(18, 7 + slot.width * 2.2), height: Math.min(18, 7 + slot.width * 2.2) }}/>
+              <span className="ink-pen-slot-badge" aria-hidden="true"><InkIcon name={slot.kind === 'highlighter' ? 'highlighter' : 'pen'}/></span>
             </button>;
           })}
         </div>;
       })()}
-      <button type="button" className="ink-style-trigger" aria-label={`${definition.label}设置`} aria-expanded={pop.open === 'options'} onClick={event => pop.toggle('options', event.currentTarget)}>
-        {colored ? <span className="ink-style-dot" style={{ background: color }} aria-hidden="true"/> : <InkIcon name={definition.icon}/>}<span>{tool === 'eraser' || tool === 'capture' || tool === 'lasso' ? detail : definition.label}</span><InkIcon name="down"/>
+      <button type="button" className={`ink-style-trigger${showTriggerLabel ? ' has-label' : ''}`} aria-label={`${definition.label}设置`} aria-expanded={pop.open === 'options'} onClick={event => pop.toggle('options', event.currentTarget)}>
+        {colored ? <span className="ink-style-dot" style={{ background: color }} aria-hidden="true"/> : <InkIcon name={definition.icon}/>}
+        {showTriggerLabel && <span className="ink-style-label">{detail}</span>}
+        <InkIcon name="down"/>
       </button>
       {tool === 'pen' && <Widths values={PEN_WIDTHS.slice(0, 3)} value={prefs.pen.width} color="var(--ink-text)" onChange={width => setWidth('pen', width)} label="快捷粗细"/>}
       {tool === 'highlighter' && <Widths values={HIGHLIGHTER_WIDTHS} value={prefs.highlighter.width} color="var(--ink-text)" onChange={width => setWidth('highlighter', width)} label="快捷粗细"/>}
       {tool === 'shape' && <Widths values={SHAPE_WIDTHS} value={prefs.shape.width} color="var(--ink-text)" onChange={width => store.update({ shape: { width } })} label="快捷线宽"/>}
-      {tool === 'eraser' && <><EraserSizes prefs={prefs} store={store}/><IconButton icon="highlighter" label={prefs.eraser.highlighterOnly ? '仅擦荧光笔已开启' : '仅擦荧光笔'} aria-pressed={prefs.eraser.highlighterOnly} className="ink-toggle" onClick={() => store.update({ eraser: { highlighterOnly: !prefs.eraser.highlighterOnly } })}/><IconButton icon="autoReturn" label={prefs.eraser.autoReturn ? '擦完自动回笔已开启' : '擦完自动回笔'} aria-pressed={prefs.eraser.autoReturn} className="ink-toggle" onClick={() => store.update({ eraser: { autoReturn: !prefs.eraser.autoReturn } })}/></>}
+      {tool === 'eraser' && <><EraserSizes prefs={prefs} store={store}/><IconButton icon="highlighter" label={prefs.eraser.highlighterOnly ? '仅擦荧光笔已开启' : '仅擦荧光笔'} aria-pressed={prefs.eraser.highlighterOnly} className="ink-toggle-icon" onClick={() => store.update({ eraser: { highlighterOnly: !prefs.eraser.highlighterOnly } })}/><IconButton icon="autoReturn" label={prefs.eraser.autoReturn ? '擦完自动回笔已开启' : '擦完自动回笔'} aria-pressed={prefs.eraser.autoReturn} className="ink-toggle-icon" onClick={() => store.update({ eraser: { autoReturn: !prefs.eraser.autoReturn } })}/></>}
       {tool === 'lasso' && <Segmented label="圈选范围" value={prefs.lasso.filter} onChange={filter => store.update({ lasso: { filter } })} options={[{ value: 'all', label: '全部' }, { value: 'ink', label: '笔迹' }, { value: 'highlighter', label: '荧光笔' }]}/>}
-      {tool === 'tape' && onRevealAllTapes && <><IconButton icon="eye" label="揭开当前页所有胶带" className="ink-toggle" onClick={() => onRevealAllTapes(true)}/><IconButton icon="eyeOff" label="重新遮盖当前页所有胶带" className="ink-toggle" onClick={() => onRevealAllTapes(false)}/></>}
-      {colored && <div className="ink-quick-colors"><Swatches colors={colors.slice(0, 4)} value={color} onChange={setColor} label="常用颜色" custom={false}/></div>}
+      {tool === 'tape' && onRevealAllTapes && <><IconButton icon="eye" label="揭开当前页所有胶带" className="ink-toggle-icon" onClick={() => onRevealAllTapes(true)}/><IconButton icon="eyeOff" label="重新遮盖当前页所有胶带" className="ink-toggle-icon" onClick={() => onRevealAllTapes(false)}/></>}
+      {colored && !usesPenSlots && <div className="ink-quick-colors"><Swatches colors={colors.slice(0, 4)} value={color} onChange={setColor} label="常用颜色" custom={false}/></div>}
     </div>}
     {pop.open === 'options' && <Popover anchor={pop.anchor} onClose={pop.close} label={`${definition.label}设置`} align="end" className="ink-tool-popover">
       <div className="ink-popover-title">{definition.label}</div>
@@ -135,7 +144,7 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store, onReve
 function Widths({ values, value, color, onChange, scale = 1, label }: { values: readonly number[]; value: number; color: string; onChange: (width: number) => void; scale?: number; label: string }) {
   return <div className="ink-widths" role="radiogroup" aria-label={label} onKeyDown={radioKeys}>{values.map((width, index) =>
     <button key={width} type="button" role="radio" tabIndex={width === value || !values.includes(value) && index === 0 ? 0 : -1} aria-checked={width === value} aria-label={`${label} ${width}`} title={`${label} ${width}`} onClick={() => onChange(width)}>
-      <span style={{ width: Math.min(22, 4 + width * 3 * scale), height: Math.max(2, Math.min(14, width * 2.4 * scale)), background: color }}/>
+      <span style={{ width: Math.min(20, 6 + width * 3.2 * scale), height: Math.max(3, Math.min(12, 2 + width * 2.1 * scale)), background: color }}/>
     </button>)}</div>;
 }
 
@@ -171,27 +180,28 @@ export function ToolOptions({ tool, prefs, store, onRevealAllTapes }: { tool: To
       <IconButton icon="pressure" label={prefs.pen.pressure ? '压感已开启' : '压感已关闭（等宽）'} aria-pressed={prefs.pen.pressure} className="ink-toggle" onClick={() => store.update({ pen: { pressure: !prefs.pen.pressure } })}><span>压感</span></IconButton>
       <div className="ink-option-row"><span>笔迹防抖</span><Segmented label="笔迹防抖" value={prefs.pen.stabilize} onChange={stabilize => store.update({ pen: { stabilize } })} options={[{ value: 0, label: '关' }, { value: 1, label: '轻' }, { value: 2, label: '中' }]}/></div>
       <div className="ink-slot-manage">
-        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('pen')}>存入笔袋 ({prefs.penSlots.length}/6)</button>
-        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'pen' && <button type="button" onClick={removeSlot}>移除当前槽</button>}
+        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('pen')}><InkIcon name="plus"/>存入笔袋 ({prefs.penSlots.length}/6)</button>
+        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'pen' && <button type="button" onClick={removeSlot}><InkIcon name="trash"/>移除当前槽</button>}
       </div>
-      {divider}<label className="ink-option-switch"><span><strong>画圈长按套索</strong><small>画闭合圈后长按该笔划（或圈住内容停顿），直接无边选中</small></span><input type="checkbox" role="switch" aria-label="画圈长按套索" checked={prefs.pen.circleLasso} onChange={event => store.update({ pen: { circleLasso: event.target.checked } })}/></label>
-      <label className="ink-option-switch"><span><strong>一笔成形</strong><small>画直线、箭头、圆、矩形或菱形末尾停顿，自动规整</small></span><input type="checkbox" role="switch" aria-label="一笔成形" checked={prefs.pen.holdToShape} onChange={event => store.update({ pen: { holdToShape: event.target.checked } })}/></label>
-      <label className="ink-option-switch"><span><strong>涂划擦除</strong><small>来回快速涂划即可清除涂划范围内的全部笔迹</small></span><input type="checkbox" role="switch" aria-label="涂划擦除" checked={prefs.pen.scribble} onChange={event => store.update({ pen: { scribble: event.target.checked } })}/></label>
+      {divider}
+      <Switch label="画圈长按套索" hint="画闭合圈后长按该笔划（或圈住内容停顿），直接无边选中" checked={prefs.pen.circleLasso} onChange={circleLasso => store.update({ pen: { circleLasso } })}/>
+      <Switch label="一笔成形" hint="画直线、箭头、圆、矩形或菱形末尾停顿，自动规整" checked={prefs.pen.holdToShape} onChange={holdToShape => store.update({ pen: { holdToShape } })}/>
+      <Switch label="涂划擦除" hint="来回快速涂划即可清除涂划范围内的全部笔迹" checked={prefs.pen.scribble} onChange={scribble => store.update({ pen: { scribble } })}/>
     </>;
     case 'highlighter': return <>
       <Swatches colors={HIGHLIGHTER_COLORS} value={prefs.highlighter.color} onChange={color => { const penSlots = syncSlot('highlighter', { color }); store.update({ highlighter: { color }, ...(penSlots ? { penSlots } : {}) }); }} label="荧光笔颜色"/>{divider}
       <Widths values={HIGHLIGHTER_WIDTHS} value={prefs.highlighter.width} color="var(--ink-text)" onChange={width => { const penSlots = syncSlot('highlighter', { width }); store.update({ highlighter: { width }, ...(penSlots ? { penSlots } : {}) }); }} label="粗细"/>{divider}
       <div className="ink-slot-manage">
-        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('highlighter')}>存入笔袋 ({prefs.penSlots.length}/6)</button>
-        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'highlighter' && <button type="button" onClick={removeSlot}>移除当前槽</button>}
+        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('highlighter')}><InkIcon name="plus"/>存入笔袋 ({prefs.penSlots.length}/6)</button>
+        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'highlighter' && <button type="button" onClick={removeSlot}><InkIcon name="trash"/>移除当前槽</button>}
       </div>
       <span className="ink-hint">采用正片叠底不遮黑字；划线末尾停顿可自动拉直</span>
     </>;
     case 'eraser': return <>
       <Segmented label="擦除方式" value={prefs.eraser.mode} onChange={mode => store.update({ eraser: { mode } })} options={[{ value: 'partial', label: '局部擦除' }, { value: 'stroke', label: '整笔擦除' }]}/>{divider}
       <EraserSizes prefs={prefs} store={store}/>{divider}
-      <label className="ink-option-switch"><span><strong>仅擦除荧光笔</strong><small>擦除高亮时保护普通手写笔迹</small></span><input type="checkbox" role="switch" aria-label="仅擦除荧光笔" checked={prefs.eraser.highlighterOnly} onChange={event => store.update({ eraser: { highlighterOnly: event.target.checked } })}/></label>
-      <label className="ink-option-switch"><span><strong>擦完自动回笔</strong><small>抬手后自动切回上一支书写工具，防止误擦</small></span><input type="checkbox" role="switch" aria-label="擦完自动回笔" checked={prefs.eraser.autoReturn} onChange={event => store.update({ eraser: { autoReturn: event.target.checked } })}/></label>
+      <Switch label="仅擦除荧光笔" hint="擦除高亮时保护普通手写笔迹" checked={prefs.eraser.highlighterOnly} onChange={highlighterOnly => store.update({ eraser: { highlighterOnly } })}/>
+      <Switch label="擦完自动回笔" hint="抬手后自动切回上一支书写工具，防止误擦" checked={prefs.eraser.autoReturn} onChange={autoReturn => store.update({ eraser: { autoReturn } })}/>
     </>;
     case 'shape': return <>
       <Segmented label="形状" value={prefs.shape.kind} onChange={kind => store.update({ shape: { kind } })} options={SHAPES}/>{divider}
@@ -217,8 +227,8 @@ export function ToolOptions({ tool, prefs, store, onRevealAllTapes }: { tool: To
       <Swatches colors={TAPE_COLORS} value={prefs.tape.color} onChange={color => store.update({ tape: { color } })} label="胶带颜色"/>{divider}
       <div className="ink-option-row"><span>胶带高度</span><Segmented label="胶带高度" value={prefs.tape.height} onChange={height => store.update({ tape: { height } })} options={[{ value: 22, label: '细' }, { value: 28, label: '中' }, { value: 40, label: '宽' }]}/></div>
       {onRevealAllTapes && <div className="ink-slot-manage">
-        <button type="button" onClick={() => onRevealAllTapes(true)}>全部揭开</button>
-        <button type="button" onClick={() => onRevealAllTapes(false)}>全部遮盖</button>
+        <button type="button" onClick={() => onRevealAllTapes(true)}><InkIcon name="eye"/>全部揭开</button>
+        <button type="button" onClick={() => onRevealAllTapes(false)}><InkIcon name="eyeOff"/>全部遮盖</button>
       </div>}
       <span className="ink-hint">拖动盖住答案或公式，轻点胶带即可揭开/遮盖自测</span>
     </>;

@@ -14,9 +14,9 @@ export function MixedPanel({ elements, busy, selectionCount, readOnly, paged, on
     <p className="ink-popover-note">从文字笔记摘入文字，在旁边写下想法。绑定的笔迹会随段落一起移动。</p>
     <div className="ink-mixed-actions">
       <button type="button" className="mod-cta" disabled={busy || readOnly} onClick={onInsert}><InkIcon name="plus"/>插入文字段落</button>
-      <button type="button" disabled={busy || readOnly || !paragraphs.length} onClick={onRefresh}>{paged ? '更新本页文字' : '更新画布文字'}</button>
+      <button type="button" disabled={busy || readOnly || !paragraphs.length} onClick={onRefresh}><InkIcon name="relink"/>{paged ? '更新本页文字' : '更新画布文字'}</button>
     </div>
-    {selectionCount > 0 && <div className="ink-mixed-selection" role="status">已选中 {selectionCount} 条笔迹，可绑定到下面的段落。<button type="button" disabled={busy || readOnly} onClick={onDetach}>解除所选绑定</button></div>}
+    {selectionCount > 0 && <div className="ink-mixed-selection" role="status">已选中 {selectionCount} 条笔迹，可绑定到下面的段落。<button type="button" disabled={busy || readOnly} onClick={onDetach}><InkIcon name="unlink"/>解除所选绑定</button></div>}
     {!paragraphs.length && <p className="ink-mixed-empty">把一段文字放到纸上，再在旁边批注。</p>}
     <ol className="ink-mixed-list">{paragraphs.map((e, index) => {
       const reference = textReference(e)!, count = elements.filter(ink => !ink.isDeleted && inkAnchor(ink)?.elementId === e.id).length;
@@ -24,11 +24,11 @@ export function MixedPanel({ elements, busy, selectionCount, readOnly, paged, on
         <p>{e.type === 'text' ? e.originalText : ''}</p>
         <small title={reference.path}>{reference.path.split('/').pop()} · {count} 条绑定笔迹</small>
         <div className="ink-mixed-row-actions">
-          <button type="button" disabled={busy} onClick={() => onEdit(e)}>编辑原文</button>
-          <button type="button" disabled={busy || readOnly || !selectionCount} onClick={() => onAttach(e)}>绑定所选笔迹</button>
-          <button type="button" aria-label={`上移段落 ${index + 1}`} disabled={busy || readOnly || index === 0} onClick={() => onMove(e, 'up')}>上移</button>
-          <button type="button" aria-label={`下移段落 ${index + 1}`} disabled={busy || readOnly || index === paragraphs.length - 1} onClick={() => onMove(e, 'down')}>下移</button>
-          <button type="button" disabled={busy || readOnly} onClick={() => onRemove(e)}>移除</button>
+          <button type="button" disabled={busy} onClick={() => onEdit(e)}><InkIcon name="external"/>编辑原文</button>
+          <button type="button" disabled={busy || readOnly || !selectionCount} onClick={() => onAttach(e)}><InkIcon name="link"/>绑定所选笔迹</button>
+          <button type="button" aria-label={`上移段落 ${index + 1}`} disabled={busy || readOnly || index === 0} onClick={() => onMove(e, 'up')}><InkIcon name="moveUp"/>上移</button>
+          <button type="button" aria-label={`下移段落 ${index + 1}`} disabled={busy || readOnly || index === paragraphs.length - 1} onClick={() => onMove(e, 'down')}><InkIcon name="moveDown"/>下移</button>
+          <button type="button" disabled={busy || readOnly} onClick={() => onRemove(e)}><InkIcon name="trash"/>移除</button>
         </div>
       </li>;
     })}</ol>

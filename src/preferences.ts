@@ -26,6 +26,7 @@ export interface Preferences {
   zoomLock: boolean;
   nightPaper: boolean;
   gridSnap: boolean;
+  autoCollapseDock: boolean;
   sidebar: { pages: boolean; canvas: boolean; tab: SidebarTab };
   scratch: ScratchFrame;
   scratchPlacement: 'docked' | 'floating';
@@ -50,7 +51,7 @@ export const DEFAULT_PEN_SLOTS: readonly PenPreset[] = [
 
 export const DEFAULT_PREFERENCES: Preferences = {
   tool: 'pen',
-  pen: { color: PEN_COLORS[0], width: 1, pressure: false, scribble: true, circleLasso: true, holdToShape: true, stabilize: 0 },
+  pen: { color: PEN_COLORS[0], width: 1, pressure: false, scribble: true, circleLasso: true, holdToShape: true, stabilize: 1 },
   highlighter: { color: HIGHLIGHTER_COLORS[0], width: 4 },
   penSlots: DEFAULT_PEN_SLOTS.map(s => ({ ...s })),
   activeSlot: 0,
@@ -64,6 +65,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   zoomLock: false,
   nightPaper: false,
   gridSnap: false,
+  autoCollapseDock: false,
   sidebar: { pages: false, canvas: false, tab: 'pages' },
   scratch: { right: 24, top: 24, width: 420, height: 340 },
   scratchPlacement: 'docked',
@@ -131,6 +133,7 @@ export function normalizePreferences(raw: unknown): Preferences {
     zoomLock: pick(value.zoomLock, d.zoomLock, v => typeof v === 'boolean'),
     nightPaper: pick(value.nightPaper, d.nightPaper, v => typeof v === 'boolean'),
     gridSnap: pick(value.gridSnap, d.gridSnap, v => typeof v === 'boolean'),
+    autoCollapseDock: pick(value.autoCollapseDock, d.autoCollapseDock, v => typeof v === 'boolean'),
     sidebar: { pages: pick(sidebar.pages, d.sidebar.pages, v => typeof v === 'boolean'), canvas: pick(sidebar.canvas, d.sidebar.canvas, v => typeof v === 'boolean'), tab: pick(sidebar.tab, d.sidebar.tab, v => ['pages', 'outline', 'bookmarks', 'search'].includes(v as string)) },
     scratch: { right: pick(scratch.right, d.scratch.right, v => isNumber(v, 0, 10000)), top: pick(scratch.top, d.scratch.top, v => isNumber(v, 0, 10000)), width: pick(scratch.width, d.scratch.width, v => isNumber(v, 260, 4000)), height: pick(scratch.height, d.scratch.height, v => isNumber(v, 200, 4000)) },
     scratchPlacement: pick(value.scratchPlacement, d.scratchPlacement, v => v === 'docked' || v === 'floating'),

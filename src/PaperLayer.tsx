@@ -4,6 +4,7 @@ import type { PdfService } from './pdf';
 import type { PageLayout, PagePlacement } from './layout';
 import { paperStyle, templateSpec } from './templates';
 import { View, ViewStore, sceneViewport, useView } from './view';
+import { InkIcon } from './InkIcon';
 
 const RASTER_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2];
 const rasterScale = (zoom: number) => { const wanted = Math.min(2, zoom * devicePixelRatio); return RASTER_STEPS.find(step => step >= wanted - 0.01) ?? 2; };
@@ -123,7 +124,7 @@ export function PageOverlay({ layout, views, onAddPage, flash }: { layout: PageL
   const [x, y] = anchor ? anchor.split(',').map(Number) : [0, 0];
   const [fx, fy, fw, fh] = flashBox ? flashBox.split(',').map(Number) : [0, 0, 0, 0];
   return <div className="ink-page-overlay">
-    {anchor && onAddPage && <button type="button" className="ink-add-page" style={{ left: x, top: y + 20 }} onClick={onAddPage}><span>＋</span>添加页面</button>}
+    {anchor && onAddPage && <button type="button" className="ink-add-page" style={{ left: x, top: y + 20 }} onClick={onAddPage}><InkIcon name="plus"/><span>添加页面</span></button>}
     {flashBox && <div key={flash!.token} className="ink-flash" style={{ left: fx, top: fy, width: fw, height: fh }}/>}
   </div>;
 }
