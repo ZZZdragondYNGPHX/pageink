@@ -50,20 +50,28 @@ export class Session {
     const tracker = new SurfaceBlocks(id); tracker.reset(elements); this.trackers.set(id, tracker);
     return elements;
   }
-  private apply(id: string, elements: readonly Element[]): Applied | undefined {
+  private assertEditable(id: string) {
     if (!this.surfaces.has(id) && Object.keys(this.manifest.chunks).some(key => key.startsWith(`${id}/`))) throw Error('编辑前必须加载该页，不能把未加载内容当作空页。');
+  }
+  private apply(id: string, elements: readonly Element[]): Applied | undefined {
+    this.assertEditable(id);
     const previous = this.surfaces.get(id) ?? [];
-    if (previous.length === elements.length && previous.every((e, i) => e.id === elements[i].id && e.version === elements[i].version)) return;
+    let prefix = 0;
+    while (prefix < previous.length && prefix < elements.length && previous[prefix] === elements[prefix]) prefix++;
+    if (previous.length === elements.length && (prefix === elements.length || previous.every((e, i) => e === elements[i] || e.id === elements[i].id && e.version === elements[i].version))) return;
     const tracker = this.trackers.get(id) ?? new SurfaceBlocks(id);
     this.trackers.set(id, tracker);
     // Kernel elements can be mutated in place. Keep committed/history objects independent,
     // copying only changed objects rather than all sample points in the surface.
     let prior: Map<string, Element> | undefined;
-    const snapshot = elements.map((e, i) => {
+    const snapshot = elements.slice(0, prefix);
+    for (let i = prefix; i < elements.length; i++) {
+      const e = elements[i];
+      if (previous[i] === e) { snapshot.push(e); continue; }
       let old = previous[i];
       if (old && old.id !== e.id) { prior ??= new Map(previous.map(item => [item.id, item])); old = prior.get(e.id)!; }
-      return old?.id === e.id && old.version === e.version ? old : snapshotElement(e);
-    });
+      snapshot.push(old?.id === e.id && old.version === e.version ? old : snapshotElement(e));
+    }
     const changes = tracker.changes(snapshot);
     if (!changes.size) return;
     this.surfaces.set(id, snapshot);
@@ -74,6 +82,7 @@ export class Session {
   change(id: string, elements: readonly Element[], record = true) { this.changeMany(new Map([[id, elements]]), record); }
   /** Commits several surfaces as one undo step (ink moved between pages stays one action). */
   changeMany(groups: ReadonlyMap<string, readonly Element[]>, record = true) {
+    for (const id of groups.keys()) this.assertEditable(id);
     const applied: Applied[] = [];
     for (const [id, elements] of groups) { const change = this.apply(id, elements); if (change) applied.push(change); }
     if (!applied.length) return;
@@ -95,6 +104,7 @@ export class Session {
   editContent(groups: ReadonlyMap<string, readonly Element[]>, edit: () => void = () => {}) {
     if (groups.has('scratch')) throw Error('正文排版不能修改草稿纸历史。');
     const before = structuredClone({ pages: this.manifest.pages, regions: this.manifest.regions });
+    for (const id of groups.keys()) this.assertEditable(id);
     const applied: Applied[] = [];
     for (const [id, elements] of groups) { const change = this.apply(id, elements); if (change) applied.push(change); }
     edit();

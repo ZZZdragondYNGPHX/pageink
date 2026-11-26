@@ -65,8 +65,13 @@ export function strokeWorldPoints(element: Element): ScenePoint[] {
 /** Returns true if `point` lies within `tolerance` scene units of the freedraw stroke path. */
 export function hitStrokePath(element: Element, point: ScenePoint, tolerance: number): boolean {
   if (element.type !== 'freedraw' || element.isDeleted || !element.points.length) return false;
-  const pts = strokeWorldPoints(element);
   const pad = tolerance + element.strokeWidth * 2.2;
+  // Points span width/height from the first sample; rotation can move them by
+  // at most another diagonal. Reject distant strokes before allocating points.
+  const first = element.points[0];
+  const radius = 2 * Math.hypot(element.width, element.height) + Math.hypot(first[0], first[1]) + pad;
+  if (point[0] < element.x - radius || point[0] > element.x + radius || point[1] < element.y - radius || point[1] > element.y + radius) return false;
+  const pts = strokeWorldPoints(element);
   const box = polygonBounds(pts);
   if (point[0] < box.x - pad || point[0] > box.x + box.width + pad || point[1] < box.y - pad || point[1] > box.y + box.height + pad) return false;
   if (pts.length === 1) return dist(point, pts[0]) <= pad;

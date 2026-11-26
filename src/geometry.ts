@@ -8,11 +8,16 @@ export function polygonBounds(points: readonly Point[]): Rect {
   for (const p of points) { x = Math.min(x, p[0]); y = Math.min(y, p[1]); right = Math.max(right, p[0]); bottom = Math.max(bottom, p[1]); }
   return { x, y, width: right - x, height: bottom - y };
 }
+const frozenLocalBoxes = new WeakMap<readonly Point[], Rect>();
 function localBox(e: Element) {
   if ('points' in e && e.points.length) {
+    const cached = frozenLocalBoxes.get(e.points);
+    if (cached) return cached;
     let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
     for (const p of e.points) { x = Math.min(x, p[0]); y = Math.min(y, p[1]); right = Math.max(right, p[0]); bottom = Math.max(bottom, p[1]); }
-    return { x, y, width: right - x, height: bottom - y };
+    const box = { x, y, width: right - x, height: bottom - y };
+    if (Object.isFrozen(e.points)) frozenLocalBoxes.set(e.points, box);
+    return box;
   }
   return { x: 0, y: 0, width: e.width, height: e.height };
 }

@@ -81,6 +81,8 @@ test('single-surface partition retains off-paper ink, reuses snapshots and follo
   assert.deepEqual(scene.partition([]).get(page.id), []);
   assert.equal(scene.pageOf('ink'), undefined);
   scene.partition(built); assert.equal(scene.pageOf('ink'), page.id);
+  scene.invalidateCache();
+  assert.deepEqual(scene.partition(built, []).get(page.id)!.map(e => e.id), ['ink']);
 });
 
 test('moving ink between pages is one undo step that restores both pages', () => {
@@ -90,4 +92,77 @@ test('moving ink between pages is one undo step that restores both pages', () =>
   const step = session.bodyHistory.undo()!;
   assert.deepEqual(step.parts.map(p => [p.surface, p.elements.map(e => e.y)]).sort(), [['p1', [0]], ['p2', []]]);
   assert.equal(session.bodyHistory.canUndo, false);
+});
+
+test('incremental partition only visits the new tail and returns copied lists for affected pages', () => {
+  const a = newPage(), b = newPage(), scene = new PageScene(layoutPages([a, b]));
+  const initial = scene.build(id => id === a.id ? [el('old', 1, 2)] : []);
+  const before = scene.partition(initial);
+  const one = el('one', 10, scene.layout.placements[1].y + 30);
+  const two = el('two', 20, scene.layout.placements[1].y + 60);
+  const appended = [...initial, one, two];
+  const tailOnly = new Proxy(appended, { get(target, key, receiver) {
+    if (key === '0') throw Error('unchanged prefix was scanned');
+    return Reflect.get(target, key, receiver);
+  } });
+  const result = scene.partition(tailOnly, [one, two]);
+  assert.deepEqual([...result.keys()], [b.id]);
+  assert.deepEqual(result.get(b.id)!.map(e => [e.id, e.y]), [['one', 30], ['two', 60]]);
+  assert.equal(scene.pageOf('one'), b.id);
+  assert.deepEqual(before.get(b.id), []);
+  assert.equal(scene.partition(tailOnly, []).size, 0);
+  const next = el('three', 30, scene.layout.placements[1].y + 80);
+  const later = scene.partition([...appended, next], [next]);
+  assert.deepEqual(later.get(b.id)!.map(e => e.id), ['one', 'two', 'three']);
+  assert.deepEqual(result.get(b.id)!.map(e => e.id), ['one', 'two']);
+  assert.equal(scene.partition([...appended, next]).size, 2);
+});
+
+test('incremental partition falls back on reset, movement, deletion, reordering and unsafe append', () => {
+  const a = newPage(), b = newPage(), scene = new PageScene(layoutPages([a, b]));
+  let elements = scene.build(() => []);
+  assert.equal(scene.partition(elements, []).size, 2); // build invalidates the baseline
+  const first = el('first', 0, 20), second = el('second', 0, scene.layout.placements[1].y + 20);
+  elements = [first, second];
+  assert.equal(scene.partition(elements, [first, second]).size, 2);
+  const moved = { ...first, y: second.y + 40, version: 2 } as Element;
+  elements = [moved, second];
+  let parts = scene.partition(elements, [moved]);
+  assert.deepEqual(parts.get(a.id), []);
+  assert.equal(scene.pageOf(first.id), b.id);
+  parts = scene.partition([second, moved], [second, moved]);
+  assert.deepEqual(parts.get(b.id)!.map(e => e.id), ['second', 'first']);
+  const deleted = { ...moved, isDeleted: true };
+  parts = scene.partition([second, deleted], [deleted]);
+  assert.deepEqual(parts.get(b.id)!.map(e => e.id), ['second']);
+  assert.equal(scene.pageOf(first.id), undefined);
+  assert.equal(scene.partition([second, deleted], null).size, 2);
+
+  for (const extra of [
+    { groupIds: ['g'] },
+    { boundElements: [{ id: 'text', type: 'text' }] },
+    { type: 'text', containerId: 'second' },
+    { type: 'freedraw', points: [[0, 0]], pressures: [.5], customData: { pageinkAnchor: { elementId: 'second' } } },
+    { isDeleted: true },
+  ]) {
+    scene.partition([second]);
+    const unsafe = el('unsafe', 10, 20, extra);
+    assert.equal(scene.partition([second, unsafe], [unsafe]).size, 2);
+  }
+  scene.partition([second]);
+  const added = el('new', 0, 20);
+  assert.equal(scene.partition([second, added], [{ ...added } as Element]).size, 2); // tail reference mismatch
+  assert.equal(scene.partition([second, added, second], [second]).size, 2); // existing identity
+  scene.build(() => []);
+  assert.equal(scene.partition([], []).size, 2);
+});
+
+test('incremental single-surface append retains off-paper ink and full fallback removes tombstones', () => {
+  const page = newPage(), scene = new PageScene(layoutPages([page]));
+  scene.build(() => []); scene.partition([]);
+  const ink = el('ink', -100, 3000);
+  const parts = scene.partition([ink], [ink]);
+  assert.equal(parts.get(page.id)![0].y, 3000);
+  assert.equal(scene.partition([ink], []).size, 0);
+  assert.deepEqual(scene.partition([], []).get(page.id), []);
 });

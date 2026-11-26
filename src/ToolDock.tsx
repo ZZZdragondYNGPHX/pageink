@@ -6,13 +6,19 @@ type Dock = { x: number; y: number; edge: 'none' | 'left' | 'right' | 'top' | 'b
 type Drag = { id: number; x: number; y: number; pointerX: number; pointerY: number; baseX: number; baseY: number; nextX: number; nextY: number; active: boolean; previous: Dock | null };
 const IDLE_DELAY = 8000;
 
+export interface WritingSignal {
+  get(): boolean;
+  subscribe(listener: () => void): () => void;
+}
+
 /** Tool controls keep their own input; only the grip moves the toolbox. */
-export function ToolDock({ layer, visible, autoCollapse = false, writing = false, onDrag, children }: { layer: HTMLDivElement | null; visible: boolean; autoCollapse?: boolean; writing?: boolean; onDrag: () => void; children: React.ReactNode }) {
+export function ToolDock({ layer, visible, autoCollapse = false, writing = false, writingSignal, onDrag, children }: { layer: HTMLDivElement | null; visible: boolean; autoCollapse?: boolean; writing?: boolean; writingSignal?: WritingSignal; onDrag: () => void; children: React.ReactNode }) {
   const root = useRef<HTMLDivElement>(null), grip = useRef<HTMLButtonElement>(null);
   const [dock, setDock] = useState<Dock | null>(null), [dragging, setDragging] = useState(false);
   const latest = useRef(dock); latest.current = dock;
   const autoCollapseRef = useRef(autoCollapse); autoCollapseRef.current = autoCollapse;
-  const writingRef = useRef(writing); writingRef.current = writing;
+  const writingRef = useRef(writingSignal ? writingSignal.get() : writing);
+  if (!writingSignal) writingRef.current = writing;
   const drag = useRef<Drag | null>(null), suppressClick = useRef(false);
   const idleTimer = useRef<number>(), pressed = useRef(false);
   const keyboardActive = useRef(false);
@@ -33,11 +39,20 @@ export function ToolDock({ layer, visible, autoCollapse = false, writing = false
     idleTimer.current = window.setTimeout(() => {
       const doc = root.current?.ownerDocument;
       const keyboardFocus = root.current?.contains(doc?.activeElement ?? null) && (keyboardActive.current || doc?.activeElement?.matches(':focus-visible'));
-      if (!autoCollapseRef.current || writingRef.current || drag.current || pressed.current || keyboardFocus || doc?.visibilityState !== 'visible' || layer?.querySelector('.ink-popover, .ink-card-editor')) { armIdle(); return; }
+      if (!autoCollapseRef.current || writingRef.current || drag.current || pressed.current || keyboardFocus || doc?.visibilityState !== 'visible' || (root.current?.closest('.ink-workspace') ?? layer)?.querySelector('.ink-popover, .ink-card-editor')) { armIdle(); return; }
       collapse();
     }, IDLE_DELAY);
   };
   useEffect(() => { armIdle(); return stopIdle; }, [layer, visible, dock?.collapsed, autoCollapse, writing]);
+  useEffect(() => {
+    if (!writingSignal) return;
+    writingRef.current = writingSignal.get();
+    armIdle();
+    return writingSignal.subscribe(() => {
+      writingRef.current = writingSignal.get();
+      armIdle();
+    });
+  }, [writingSignal, layer, visible, dock?.collapsed, autoCollapse]);
   useEffect(() => {
     const doc = root.current?.ownerDocument;
     const release = () => { if (pressed.current) { pressed.current = false; armIdle(); } };
@@ -49,7 +64,7 @@ export function ToolDock({ layer, visible, autoCollapse = false, writing = false
     const maxX = Math.max(8, layer.clientWidth - root.current.offsetWidth - 8);
     const maxY = Math.max(8, layer.clientHeight - root.current.offsetHeight - 8);
     const verticalDock = anchor && !value.collapsed && (value.edge === 'left' || value.edge === 'right');
-    const minY = verticalDock ? Math.min(62, maxY) : 8;
+    const minY = verticalDock ? Math.min(12, maxY) : 8;
     const clampedMaxY = verticalDock ? Math.max(minY, Math.min(maxY, layer.clientHeight - root.current.offsetHeight - 60)) : maxY;
     return { ...value,
       x: anchor && value.edge === 'right' ? maxX : anchor && value.edge === 'left' ? 8 : Math.max(8, Math.min(maxX, value.x)),

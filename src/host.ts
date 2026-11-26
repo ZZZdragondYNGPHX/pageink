@@ -8,8 +8,34 @@ import type { CardsHost } from './cards-host';
 export interface ViewMemory { page?: string; dx: number; dy: number; zoom: number }
 export type ViewSurface = 'body' | 'scratch';
 
+/** Live view state synced to Obsidian's native view header and pane menu. */
+export interface WorkspaceChromeState {
+  paged: boolean;
+  sidebar: boolean;
+  reading: boolean;
+  scratchOpen: boolean;
+  focus: boolean;
+  hasPdfPage: boolean;
+  hasPdfSource: boolean;
+}
+
 /** Workspace operations exposed to host commands and menus. */
-export interface WorkspaceActions { exportPdf(): void; exportPackage(): void; toggleScratch(): void; toggleFocus(): void; search(): void }
+export interface WorkspaceActions {
+  exportPdf(): void;
+  exportPackage(): void;
+  openExport(): void;
+  openPageSettings(): void;
+  openMixed(): void;
+  toggleSidebar(): void;
+  toggleReading(): void;
+  toggleScratch(): void;
+  toggleFocus(): void;
+  search(): void;
+  copyCurrentLink(): void;
+  copyCurrentPageText(): void;
+  selectCurrentPageText(): void;
+  bookmarkCurrentView(): void;
+}
 
 /** Everything the workspace needs from Obsidian. Keeps UI code free of host APIs and testable. */
 export interface WorkspaceHost {
@@ -35,4 +61,8 @@ export interface WorkspaceHost {
   onThemeChange(listener: () => void): () => void;
   /** Lets host commands reach the mounted workspace; returns a disconnect function. */
   connect(actions: WorkspaceActions): () => void;
+  /** Syncs workspace view state to Obsidian's native view-header actions and pane menu. */
+  syncChrome?(state: WorkspaceChromeState): void;
+  /** Restores keyboard focus to Obsidian's native sidebar toggle button when present. */
+  focusSidebarAction?(): void;
 }

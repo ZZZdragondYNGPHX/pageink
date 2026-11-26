@@ -155,6 +155,7 @@ export class SurfaceBlocks {
     const dirty = new Set<number>();
     for (let i = 0; i < Math.max(elements.length, this.previous.length); i++) {
       const e = elements[i];
+      if (e === this.previous[i]) continue;
       if (!e || e.id !== this.previous[i]?.id || this.previous[i]?.version !== e.version) dirty.add(Math.floor(i / this.size));
     }
     const result = new Map<string, readonly Element[]>();

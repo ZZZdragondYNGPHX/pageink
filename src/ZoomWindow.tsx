@@ -1,8 +1,9 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { exportToSvg, getCommonBounds, getFreeDrawSvgPath } from '@excalidraw/excalidraw';
-import type { Rect } from './model';
+import type { Element, Rect } from './model';
 import { pageRect } from './model';
-import type { ScenePoint } from './geometry';
+import { bounds, isHighlighterElement, type ScenePoint } from './geometry';
+import type { InkApi } from './kernel-api';
 import type { Session } from './session';
 import type { PdfService } from './pdf';
 import type { CanvasHandle } from './InkCanvas';
@@ -29,7 +30,8 @@ interface LiveStroke {
   id?: string;
   seq: number;
   committing?: boolean;
-  pathD?: string;
+  path2d?: Path2D;
+  pathCount?: number;
   elX?: number;
   elY?: number;
   points: ScenePoint[];
@@ -41,6 +43,50 @@ interface LiveStroke {
   opacity: number;
   inkKind: 'pen' | 'highlighter';
   usePressure: boolean;
+}
+
+const committedPathCache = new WeakMap<Element, { version: number; path: Path2D }>();
+
+function getCommittedFreedrawPath(el: Extract<Element, { type: 'freedraw' }>): Path2D | null {
+  const cached = committedPathCache.get(el);
+  if (cached && cached.version === el.version) return cached.path;
+  const d = getFreeDrawSvgPath(el);
+  if (!d) return null;
+  const path = new Path2D(d);
+  committedPathCache.set(el, { version: el.version, path });
+  return path;
+}
+
+function buildLiveStrokePath(stroke: LiveStroke): { path: Path2D; x: number; y: number } | null {
+  if (!stroke.points.length) return null;
+  if (stroke.path2d && stroke.pathCount === stroke.points.length && stroke.elX !== undefined && stroke.elY !== undefined) {
+    return { path: stroke.path2d, x: stroke.elX, y: stroke.elY };
+  }
+  let minX = Infinity, minY = Infinity;
+  for (const [x, y] of stroke.points) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+  }
+  const localPoints: [number, number][] = stroke.points.map(([x, y]) => [x - minX, y - minY]);
+  if (localPoints.length === 1) localPoints.push([0.01, 0.01]);
+  const pressures = !stroke.usePressure
+    ? localPoints.map(() => 0.5)
+    : localPoints.map((_, i) => stroke.pressures[Math.min(i, stroke.pressures.length - 1)] ?? 0.5);
+  const d = getFreeDrawSvgPath({
+    type: 'freedraw',
+    points: localPoints,
+    pressures,
+    strokeWidth: stroke.width,
+    simulatePressure: false,
+    lastCommittedPoint: null,
+  } as unknown as Parameters<typeof getFreeDrawSvgPath>[0]);
+  if (!d) return null;
+  const path = new Path2D(d);
+  stroke.path2d = path;
+  stroke.pathCount = stroke.points.length;
+  stroke.elX = minX;
+  stroke.elY = minY;
+  return { path, x: minX, y: minY };
 }
 
 function readPressure(value: unknown): number {
@@ -56,10 +102,11 @@ function darkPreviewColor(hex: string): string {
 }
 
 /** Draggable translucent target frame shown on the main canvas when Zoom Window is open. */
-export function ZoomBoxOverlay({ views, box, liveRef, onLiveMove, autoAdvance, onChange }: {
+export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoAdvance, onChange }: {
   views: ViewStore;
   box: Rect;
   liveRef?: React.MutableRefObject<Rect>;
+  syncRef?: React.MutableRefObject<((next: Rect) => void) | null>;
   onLiveMove?: () => void;
   autoAdvance: boolean;
   onChange: (next: Rect) => void;
@@ -70,10 +117,23 @@ export function ZoomBoxOverlay({ views, box, liveRef, onLiveMove, autoAdvance, o
     return `${x},${y},${box.width * v.zoom},${box.height * v.zoom},${v.zoom}`;
   });
   const [sx, sy, sw, sh, zoom] = screen.split(',').map(Number);
+  const zoomRef = useRef(zoom); zoomRef.current = zoom;
   const latestBox = useRef(box); latestBox.current = box;
   const drag = useRef<{ id: number; startX: number; startY: number; lastX: number; lastY: number; origin: Rect; next: Rect } | null>(null);
 
   useEffect(() => isolateFloatingInput(boxRef.current!), []);
+  useEffect(() => {
+    if (!syncRef) return;
+    const sync = (next: Rect) => {
+      const el = boxRef.current;
+      if (!el) return;
+      const dx = (next.x - latestBox.current.x) * zoomRef.current;
+      const dy = (next.y - latestBox.current.y) * zoomRef.current;
+      el.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+    };
+    syncRef.current = sync;
+    return () => { if (syncRef.current === sync) syncRef.current = null; };
+  }, [syncRef]);
   useLayoutEffect(() => {
     if (drag.current) {
       drag.current = {
@@ -103,11 +163,11 @@ export function ZoomBoxOverlay({ views, box, liveRef, onLiveMove, autoAdvance, o
     d.lastX = event.clientX;
     d.lastY = event.clientY;
     const dx = event.clientX - d.startX, dy = event.clientY - d.startY;
-    const z = Math.max(0.05, zoom);
+    const z = Math.max(0.05, zoomRef.current);
     d.next = { ...d.origin, x: d.origin.x + dx / z, y: d.origin.y + dy / z };
     if (liveRef) liveRef.current = d.next;
     onLiveMove?.();
-    if (boxRef.current) boxRef.current.style.transform = `translate(${dx}px, ${dy}px)`;
+    if (boxRef.current) boxRef.current.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
   };
   const endDrag = (event: React.PointerEvent<HTMLDivElement>, cancelled: boolean) => {
     const d = drag.current;
@@ -167,6 +227,7 @@ export function ZoomWindow({
   box,
   liveBoxRef,
   paintRef,
+  boxOverlaySyncRef,
   factor,
   autoAdvance,
   onBoxChange,
@@ -186,8 +247,9 @@ export function ZoomWindow({
   dark: boolean;
   nightPaper: boolean;
   box: Rect;
-  liveBoxRef?: React.RefObject<Rect>;
+  liveBoxRef?: React.MutableRefObject<Rect>;
   paintRef?: React.MutableRefObject<(() => void) | null>;
+  boxOverlaySyncRef?: React.MutableRefObject<((next: Rect) => void) | null>;
   factor: ZoomFactor;
   autoAdvance: boolean;
   onBoxChange: (next: Rect) => void;
@@ -209,11 +271,15 @@ export function ZoomWindow({
   const activeStroke = useRef<LiveStroke | null>(null);
   const pendingStrokes = useRef<LiveStroke[]>([]);
   const strokeSeq = useRef(0);
+  const compositeFrame = useRef(0);
+  const backdropTimer = useRef<number>();
   const pointerState = useRef<{
     id: number;
     mode: 'draw' | 'erase' | 'pan';
     stabilizer?: InkStabilizer;
     lastScreen?: [number, number];
+    panOrigin?: Rect;
+    panCurrent?: Rect;
     erasePath?: ScenePoint[];
   } | null>(null);
   const advanceTimer = useRef<number>();
@@ -227,6 +293,10 @@ export function ZoomWindow({
   const latestSize = useRef(stripSize); latestSize.current = stripSize;
   const currentBox = () => liveBoxRef?.current ?? latestBox.current;
   const supported = tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'hand';
+  const setZoomWriting = (active: boolean) => {
+    session.setWriting('zoom', active);
+    onWritingChange?.(active);
+  };
 
   useEffect(() => isolateFloatingInput(windowRef.current!), []);
 
@@ -287,7 +357,9 @@ export function ZoomWindow({
       unmounted.current = true;
       backdropAbort.current?.abort();
       window.clearTimeout(advanceTimer.current);
-      onWritingChange?.(false);
+      window.clearTimeout(backdropTimer.current);
+      window.cancelAnimationFrame(compositeFrame.current);
+      setZoomWriting(false);
     };
   }, []);
 
@@ -364,31 +436,25 @@ export function ZoomWindow({
   }
 
   function drawStrokeOnCtx(ctx: CanvasRenderingContext2D, stroke: LiveStroke, w: number, h: number, targetBox: Rect) {
-    if (!stroke.points.length) return;
-    let pathD = stroke.pathD, elX = stroke.elX ?? 0, elY = stroke.elY ?? 0;
-    if (!pathD) {
-      const el = buildZoomFreedrawElement(stroke.points, stroke.pressures, {
-        color: stroke.color,
-        width: stroke.width,
-        opacity: stroke.opacity,
-        inkKind: stroke.inkKind,
-        fixedPressure: !stroke.usePressure,
-      });
-      if (!el || el.type !== 'freedraw') return;
-      pathD = getFreeDrawSvgPath(el);
-      elX = el.x;
-      elY = el.y;
-    }
-    if (!pathD) return;
+    const built = buildLiveStrokePath(stroke);
+    if (!built) return;
     ctx.save();
     ctx.globalAlpha = stroke.opacity / 100;
     if (!dark && stroke.inkKind === 'highlighter') ctx.globalCompositeOperation = 'multiply';
     ctx.fillStyle = dark && stroke.inkKind === 'pen' ? darkPreviewColor(stroke.color) : stroke.color;
     const scaleX = w / Math.max(1, targetBox.width), scaleY = h / Math.max(1, targetBox.height);
-    ctx.translate((elX - targetBox.x) * scaleX, (elY - targetBox.y) * scaleY);
+    ctx.translate((built.x - targetBox.x) * scaleX, (built.y - targetBox.y) * scaleY);
     ctx.scale(scaleX, scaleY);
-    ctx.fill(new Path2D(pathD));
+    ctx.fill(built.path);
     ctx.restore();
+  }
+
+  function scheduleComposite() {
+    if (compositeFrame.current) return;
+    compositeFrame.current = window.requestAnimationFrame(() => {
+      compositeFrame.current = 0;
+      paintComposite();
+    });
   }
 
   function paintComposite() {
@@ -405,17 +471,17 @@ export function ZoomWindow({
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const targetBox = currentBox();
-    drawBaseSurface(ctx, w, h, targetBox);
-    if (backdropRef.current && backdropBoxRef.current) {
-      // Project the cached backdrop into exact world-aligned coordinates of `targetBox`
-      // so moving the frame never misaligns visual content with writing coordinates.
-      const prev = backdropBoxRef.current;
-      const dx = ((prev.x - targetBox.x) / Math.max(1, targetBox.width)) * w;
-      const dy = ((prev.y - targetBox.y) / Math.max(1, targetBox.height)) * h;
-      const dw = (prev.width / Math.max(1, targetBox.width)) * w;
-      const dh = (prev.height / Math.max(1, targetBox.height)) * h;
-      ctx.drawImage(backdropRef.current, dx, dy, dw, dh);
+    const backdrop = backdropRef.current, prev = backdropBoxRef.current;
+    let dx = 0, dy = 0, dw = 0, dh = 0, covered = false;
+    if (backdrop && prev) {
+      dx = ((prev.x - targetBox.x) / Math.max(1, targetBox.width)) * w;
+      dy = ((prev.y - targetBox.y) / Math.max(1, targetBox.height)) * h;
+      dw = (prev.width / Math.max(1, targetBox.width)) * w;
+      dh = (prev.height / Math.max(1, targetBox.height)) * h;
+      covered = dx <= 0.5 && dy <= 0.5 && dx + dw >= w - 0.5 && dy + dh >= h - 0.5;
     }
+    if (!covered) drawBaseSurface(ctx, w, h, targetBox);
+    if (backdrop && prev) ctx.drawImage(backdrop, dx, dy, dw, dh);
     for (const s of pendingStrokes.current) drawStrokeOnCtx(ctx, s, w, h, targetBox);
     if (activeStroke.current) drawStrokeOnCtx(ctx, activeStroke.current, w, h, targetBox);
   }
@@ -426,9 +492,20 @@ export function ZoomWindow({
     const { paged: isPaged, pdf: pdfSvc, dark: isDark, session: sess, handle: hdl } = latestRenderDeps.current;
     if (w < 40 || h < 40 || target.width <= 0 || target.height <= 0) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const bw = Math.max(1, Math.round(w * dpr)), bh = Math.max(1, Math.round(h * dpr));
-    const scaleX = bw / target.width, scaleY = bh / target.height;
-    const snapBox: Rect = { ...target };
+    // Render with 25% overscan on each side so dragging/panning the Zoom Box slides over
+    // already-rendered ink and paper at 120fps without flashing blank edges.
+    const overscan = 0.25;
+    const padX = target.width * overscan, padY = target.height * overscan;
+    const snapBox: Rect = {
+      x: target.x - padX,
+      y: target.y - padY,
+      width: target.width + padX * 2,
+      height: target.height + padY * 2,
+    };
+    const pixelScale = Math.min(dpr, Math.sqrt(2_500_000 / Math.max(1, w * h * (1 + overscan * 2) ** 2)));
+    const bw = Math.max(1, Math.round(w * (1 + overscan * 2) * pixelScale));
+    const bh = Math.max(1, Math.round(h * (1 + overscan * 2) * pixelScale));
+    const scaleX = bw / snapBox.width, scaleY = bh / snapBox.height;
 
     const off = createEl('canvas');
     off.width = bw;
@@ -493,13 +570,33 @@ export function ZoomWindow({
       }
 
       const startedAtSeq = strokeSeq.current;
-      const sceneEls = hdl.elements().filter(e => {
+      const queryRect: Rect = { x: snapBox.x - 16, y: snapBox.y - 16, width: snapBox.width + 32, height: snapBox.height + 32 };
+      const candidates = (hdl.api as InkApi).inkQuery(queryRect);
+      const sceneEls = candidates.filter(e => {
         if (e.isDeleted) return false;
-        const [x1, y1, x2, y2] = getCommonBounds([e]);
-        return x2 > snapBox.x - 16 && y2 > snapBox.y - 16 && x1 < snapBox.x + snapBox.width + 16 && y1 < snapBox.y + snapBox.height + 16;
+        const b = bounds([e]);
+        return !!b && b.x + b.width > queryRect.x && b.y + b.height > queryRect.y && b.x < queryRect.x + queryRect.width && b.y < queryRect.y + queryRect.height;
       });
       const exportedIds = new Set(sceneEls.map(e => e.id));
-      if (sceneEls.length) {
+      const directFreedrawOnly = !isDark && sceneEls.length > 0 && sceneEls.every(e =>
+        e.type === 'freedraw' && !e.frameId && Math.abs(e.angle) < 1e-6 && (!e.backgroundColor || e.backgroundColor === 'transparent'),
+      );
+      if (directFreedrawOnly) {
+        for (const e of sceneEls) {
+          if (e.type !== 'freedraw') continue;
+          const path = getCommittedFreedrawPath(e);
+          if (!path) continue;
+          const hi = isHighlighterElement(e);
+          ctx.save();
+          ctx.globalAlpha = e.opacity / 100;
+          if (hi) ctx.globalCompositeOperation = 'multiply';
+          ctx.fillStyle = e.strokeColor;
+          ctx.translate((e.x - snapBox.x) * scaleX, (e.y - snapBox.y) * scaleY);
+          ctx.scale(scaleX, scaleY);
+          ctx.fill(path);
+          ctx.restore();
+        }
+      } else if (sceneEls.length) {
         const [ox, oy] = getCommonBounds(sceneEls);
         const svg = await exportToSvg({
           elements: sceneEls,
@@ -528,23 +625,36 @@ export function ZoomWindow({
       backdropRef.current = off;
       backdropBoxRef.current = snapBox;
       committed = true;
-      const liveIds = new Set(hdl.elements().filter(e => !e.isDeleted).map(e => e.id));
-      const liveBox = currentBox();
-      const coversLiveBox = snapBox.x === liveBox.x && snapBox.y === liveBox.y && snapBox.width === liveBox.width && snapBox.height === liveBox.height;
-      pendingStrokes.current = pendingStrokes.current.filter(s => {
-        if (s.committing) return true;
-        if (s.id && !liveIds.has(s.id)) return false;
-        if (!coversLiveBox && s.id && !exportedIds.has(s.id)) return true;
-        return s.seq > startedAtSeq;
-      });
+      if (pendingStrokes.current.length) {
+        const liveBox = currentBox();
+        const coversLiveBox = snapBox.x <= liveBox.x && snapBox.y <= liveBox.y && snapBox.x + snapBox.width >= liveBox.x + liveBox.width && snapBox.y + snapBox.height >= liveBox.y + liveBox.height;
+        const currentLiveIds = new Set(hdl.elements().filter(e => !e.isDeleted).map(e => e.id));
+        pendingStrokes.current = pendingStrokes.current.filter(s => {
+          if (s.committing) return true;
+          if (s.id && !currentLiveIds.has(s.id)) return false;
+          if (s.seq > startedAtSeq) return true;
+          if (!coversLiveBox && s.id && !exportedIds.has(s.id)) return true;
+          return false;
+        });
+      }
       paintComposite();
     } finally {
       if (!committed) off.width = off.height = 0;
     }
   }
 
+  function scheduleBackdrop(delayMs: number) {
+    window.clearTimeout(backdropTimer.current);
+    backdropTimer.current = window.setTimeout(() => {
+      backdropTimer.current = undefined;
+      requestBackdrop(false);
+    }, delayMs);
+  }
+
   function requestBackdrop(restart = false) {
     if (unmounted.current) return;
+    window.clearTimeout(backdropTimer.current);
+    backdropTimer.current = undefined;
     backdropDirty.current = true;
     if (restart && backdropBusy.current) backdropAbort.current?.abort();
     if (backdropBusy.current) return;
@@ -564,13 +674,13 @@ export function ZoomWindow({
     })();
   }
 
-  // Re-project immediately whenever `box` moves so the display updates synchronously before async PDF/SVG finishes,
-  // and run a single-flight backdrop loop so continuous drags on slow PDFs never starve offscreen rendering.
+  // Re-project via rAF whenever `box` moves so dragging the target frame stays 120fps,
+  // and debounce full backdrop refresh until motion slows/stops so PDF/SVG work never stalls drags.
   useEffect(() => {
     if (!paintRef) return;
     const onLiveMove = () => {
-      paintComposite();
-      requestBackdrop(false);
+      scheduleComposite();
+      scheduleBackdrop(90);
     };
     paintRef.current = onLiveMove;
     return () => { if (paintRef.current === onLiveMove) paintRef.current = null; };
@@ -608,7 +718,13 @@ export function ZoomWindow({
     // but let a stylus preempt an ongoing palm/touch pan so palm-first writing is never lost.
     if (pointerState.current !== null) {
       if (pointerState.current.mode === 'pan' && event.pointerType === 'pen') {
+        const { panCurrent, panOrigin } = pointerState.current;
         pointerState.current = null;
+        if (panCurrent && panOrigin && (panCurrent.x !== panOrigin.x || panCurrent.y !== panOrigin.y)) {
+          if (liveBoxRef) liveBoxRef.current = panCurrent;
+          boxOverlaySyncRef?.current?.(panCurrent);
+          onBoxChange(panCurrent);
+        }
       } else {
         return;
       }
@@ -619,13 +735,13 @@ export function ZoomWindow({
     const activeBox = currentBox();
 
     if ((event.pointerType === 'touch' && !prefs.fingerDraws) || tool === 'hand') {
-      pointerState.current = { id: event.pointerId, mode: 'pan', lastScreen: [cx, cy] };
+      pointerState.current = { id: event.pointerId, mode: 'pan', lastScreen: [cx, cy], panOrigin: activeBox, panCurrent: activeBox };
       return;
     }
     if (!supported) return;
 
     const pt = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox);
-    onWritingChange?.(true);
+    setZoomWriting(true);
     if (tool === 'eraser') {
       pointerState.current = { id: event.pointerId, mode: 'erase', erasePath: [pt] };
       return;
@@ -658,18 +774,23 @@ export function ZoomWindow({
     if (!state || state.id !== event.pointerId) return;
     event.stopPropagation();
 
+    const rect = canvasRef.current!.getBoundingClientRect();
     if (state.mode === 'pan' && state.lastScreen) {
-      const [cx, cy] = toLocalCss(event.clientX, event.clientY);
+      const cx = event.clientX - rect.left, cy = event.clientY - rect.top;
       const dx = cx - state.lastScreen[0], dy = cy - state.lastScreen[1];
       state.lastScreen = [cx, cy];
-      const cur = latestBox.current;
+      const cur = state.panCurrent ?? currentBox();
       const { limit } = pageContextFor(cur);
       const next = clampZoomBox({
         ...cur,
         x: cur.x - (dx / Math.max(1, stripSize.width)) * cur.width,
         y: cur.y - (dy / Math.max(1, stripSize.height)) * cur.height,
       }, limit);
-      onBoxChange(next);
+      state.panCurrent = next;
+      if (liveBoxRef) liveBoxRef.current = next;
+      boxOverlaySyncRef?.current?.(next);
+      scheduleComposite();
+      scheduleBackdrop(100);
       return;
     }
 
@@ -679,8 +800,7 @@ export function ZoomWindow({
 
     if (state.mode === 'erase' && state.erasePath) {
       for (const s of samples) {
-        const [cx, cy] = toLocalCss(s.clientX, s.clientY);
-        state.erasePath.push(zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox));
+        state.erasePath.push(zoomCanvasToScene(s.clientX - rect.left, s.clientY - rect.top, stripSize.width, stripSize.height, activeBox));
       }
       return;
     }
@@ -688,8 +808,7 @@ export function ZoomWindow({
     const stroke = activeStroke.current;
     if (!stroke || !state.stabilizer) return;
     for (const s of samples) {
-      const [cx, cy] = toLocalCss(s.clientX, s.clientY);
-      const raw = zoomCanvasToScene(cx, cy, stripSize.width, stripSize.height, activeBox);
+      const raw = zoomCanvasToScene(s.clientX - rect.left, s.clientY - rect.top, stripSize.width, stripSize.height, activeBox);
       const filtered = state.stabilizer.next(raw[0], raw[1]);
       const pressure = stroke.inkKind === 'highlighter' || !prefs.pen.pressure ? 0.5 : readPressure(s.pressure);
       const last = stroke.points[stroke.points.length - 1];
@@ -707,7 +826,7 @@ export function ZoomWindow({
       stroke.points.push(filtered);
       stroke.pressures.push(pressure);
     }
-    paintComposite();
+    scheduleComposite();
   };
 
   const finishPointer = (event: React.PointerEvent<HTMLCanvasElement>, cancelled = false) => {
@@ -715,9 +834,24 @@ export function ZoomWindow({
     if (!state || state.id !== event.pointerId) return;
     event.stopPropagation();
     pointerState.current = null;
-    if (state.mode !== 'pan') onWritingChange?.(false);
+    window.cancelAnimationFrame(compositeFrame.current);
+    compositeFrame.current = 0;
+    if (state.mode !== 'pan') setZoomWriting(false);
 
-    if (state.mode === 'pan') return;
+    if (state.mode === 'pan') {
+      const finalBox = cancelled ? state.panOrigin : state.panCurrent;
+      if (finalBox && state.panOrigin) {
+        if (liveBoxRef) liveBoxRef.current = finalBox;
+        boxOverlaySyncRef?.current?.(finalBox);
+        if (!cancelled && (finalBox.x !== state.panOrigin.x || finalBox.y !== state.panOrigin.y)) {
+          onBoxChange(finalBox);
+        } else {
+          paintComposite();
+          if (cancelled) requestBackdrop(true);
+        }
+      }
+      return;
+    }
 
     const activeBox = currentBox();
     if (state.mode === 'erase') {
@@ -781,7 +915,11 @@ export function ZoomWindow({
     stroke.seq = ++strokeSeq.current;
     stroke.committing = true;
     if (el.type === 'freedraw') {
-      stroke.pathD = getFreeDrawSvgPath(el);
+      const cached = getCommittedFreedrawPath(el);
+      if (cached) {
+        stroke.path2d = cached;
+        stroke.pathCount = stroke.points.length;
+      }
       stroke.elX = el.x;
       stroke.elY = el.y;
     }

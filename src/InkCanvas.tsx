@@ -10,6 +10,8 @@ import { PdfService } from './pdf';
 import { layoutPages, PageLayout, PageScene, PagePlacement, placementAt, toSceneRect } from './layout';
 import { GridLayer, PageOverlay, PaperLayer } from './PaperLayer';
 import { View, ViewStore, clampToDocument, clampZoom, fitRect, sceneViewport, toScene, toScreen, zoomAround } from './view';
+import { setInkGestureActive } from './ink-viewport';
+import { stabilizedRawPoints } from './ink-input';
 import type { ViewMemory } from './host';
 import { cardReference } from './cards';
 import { scribbleRegion, eraseStrokeInRegion } from './scribble';
@@ -139,6 +141,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   const [tapePreview, setTapePreview] = useState<{ left: number; top: number; width: number; height: number; color: string } | null>(null);
   const [rulerLine, setRulerLine] = useState<{ x1: number; y1: number; x2: number; y2: number; color: string; width: number; opacity: number } | null>(null);
   const [holdRing, setHoldRing] = useState<{ x: number; y: number } | null>(null);
+  const holdRingShown = useRef(false);
+  const updateHoldRing = (next: { x: number; y: number } | null) => {
+    if (!next && !holdRingShown.current) return;
+    holdRingShown.current = !!next;
+    setHoldRing(next);
+  };
   const [penLassoActive, setPenLassoActive] = useState(false);
   const penLassoRef = useRef(false);
   const writingRef = useRef(false);
@@ -146,12 +154,20 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   const busy = useRef(false), timer = useRef<number>();
   const flushedRevision = useRef<number>();
   const owner = kind === 'scratch' ? 'scratch' : 'body';
-  const topInset = () => {
-    if (kind !== 'pages') return 24;
-    if (latest.current.readOnly) return 68;
-    const bar = root.current?.closest('.ink-workspace')?.querySelector<HTMLElement>('.ink-writing-bar:not(.is-floating-dock):not([hidden])');
-    return bar && bar.offsetHeight > 0 ? Math.max(124, Math.ceil(bar.offsetTop + bar.offsetHeight + 12)) : 124;
+  const cachedTopInset = useRef(kind === 'pages' ? (props.readOnly ? 24 : 68) : 24);
+  const measureTopInset = () => {
+    if (kind !== 'pages') return (cachedTopInset.current = 24);
+    const area = root.current;
+    const bar = area?.closest('.ink-workspace')?.querySelector<HTMLElement>('.ink-writing-bar:not([hidden]):not(.is-collapsed):not([data-edge=left]):not([data-edge=right])');
+    if (bar && area) {
+      const barRect = bar.getBoundingClientRect(), areaRect = area.getBoundingClientRect();
+      if (barRect.height > 0 && areaRect.height > 0 && barRect.top - areaRect.top <= 48 && barRect.bottom > areaRect.top) {
+        return (cachedTopInset.current = Math.max(68, Math.ceil(barRect.bottom - areaRect.top + 12)));
+      }
+    }
+    return (cachedTopInset.current = 24);
   };
+  const topInset = () => cachedTopInset.current;
   const setWritingState = (active: boolean) => {
     session.setWriting(owner, active);
     if (writingRef.current !== active) {
@@ -190,11 +206,34 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     const onWheel = (event: WheelEvent) => {
       if (latest.current.zoomLock && (event.ctrlKey || event.metaKey)) { event.preventDefault(); event.stopPropagation(); }
     };
+    // On iPadOS/Safari, two-finger touch pinch fires native gesturestart/gesturechange on Excalidraw's
+    // container even when InkCanvas handles the touch pointers itself. Swallow those duplicate Safari
+    // gesture events during touch interaction so Excalidraw's gesture handler never fights our pinch zoom.
+    const onSafariGesture = (event: Event) => {
+      if (touches.current.size > 0 || performance.now() - lastTouchTime.current < 400) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    // Keep Obsidian's mobile drawer/edge-swipe handlers from stealing host-owned finger drags,
+    // without blocking Excalidraw's own touch handlers when fingerDraws is enabled.
+    const onTouchBubble = (event: TouchEvent) => {
+      if (!touches.current.size) return;
+      event.stopPropagation();
+      if (event.type === 'touchmove' && event.cancelable) event.preventDefault();
+    };
     element.addEventListener('ink-render-status', status);
     element.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    for (const type of ['gesturestart', 'gesturechange', 'gestureend'] as const) element.addEventListener(type, onSafariGesture, { capture: true, passive: false });
+    element.addEventListener('touchstart', onTouchBubble, { passive: true });
+    element.addEventListener('touchmove', onTouchBubble, { passive: false });
     let frame = 0;
+    measureTopInset();
     const observer = new ResizeObserver(entries => {
-      const { width, height } = entries[0].contentRect, previous = views.get();
+      measureTopInset();
+      const rootEntry = entries.find(entry => entry.target === element);
+      if (!rootEntry) return;
+      const { width, height } = rootEntry.contentRect, previous = views.get();
       const fit = Math.min(1.25, (previous.width - 48) / layoutRef.current.maxWidth);
       const followsWidth = kind === 'pages' && ready.current && previous.width > 48 && Math.abs(previous.zoom - fit) < 0.02;
       views.set({ width, height });
@@ -205,8 +244,25 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
       });
     });
     observer.observe(element);
-    return () => { element.removeEventListener('ink-render-status', status); element.removeEventListener('wheel', onWheel, true); observer.disconnect(); window.cancelAnimationFrame(frame); };
+    const bar = kind === 'pages' ? element.closest('.ink-workspace')?.querySelector<HTMLElement>('.ink-writing-bar') : null;
+    let barMutation: MutationObserver | undefined;
+    if (bar) {
+      observer.observe(bar);
+      barMutation = new MutationObserver(() => measureTopInset());
+      barMutation.observe(bar, { attributes: true, attributeFilter: ['hidden', 'class', 'data-edge', 'style'] });
+    }
+    return () => {
+      element.removeEventListener('ink-render-status', status);
+      element.removeEventListener('wheel', onWheel, true);
+      for (const type of ['gesturestart', 'gesturechange', 'gestureend'] as const) element.removeEventListener(type, onSafariGesture, true);
+      element.removeEventListener('touchstart', onTouchBubble);
+      element.removeEventListener('touchmove', onTouchBubble);
+      observer.disconnect();
+      barMutation?.disconnect();
+      window.cancelAnimationFrame(frame);
+    };
   }, [api]);
+  useEffect(() => { measureTopInset(); }, [props.readOnly, kind]);
 
   function initialViewport(elements: readonly Element[]): Partial<AppState> {
     const width = root.current?.clientWidth || 800, height = root.current?.clientHeight || 600;
@@ -230,38 +286,79 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
 
   // ---------- persistence ----------
   function sanitizeOrphanedRefs(elements: readonly Element[]): readonly Element[] {
-    let changed = false;
     const assets = session.manifest.assets;
-    const next = elements.map(e => {
-      if (e.isDeleted || !e.customData) return e;
+    let firstBad = -1;
+    for (let i = 0; i < elements.length; i++) {
+      const e = elements[i];
+      if (e.isDeleted || !e.customData) continue;
+      if ((e.customData.pageinkText && !assets[e.customData.pageinkText.snapshotAsset]) ||
+        (e.customData.pageinkCard?.kind === 'ink' && !assets[e.customData.pageinkCard.archiveAsset])) {
+        firstBad = i;
+        break;
+      }
+    }
+    if (firstBad < 0) return elements;
+    const next = elements.slice();
+    for (let i = firstBad; i < next.length; i++) {
+      const e = next[i];
+      if (e.isDeleted || !e.customData) continue;
       const badText = e.customData.pageinkText && !assets[e.customData.pageinkText.snapshotAsset];
       const badCard = e.customData.pageinkCard?.kind === 'ink' && !assets[e.customData.pageinkCard.archiveAsset];
-      if (!badText && !badCard) return e;
-      changed = true;
+      if (!badText && !badCard) continue;
       const data = { ...e.customData };
       if (badText) delete data.pageinkText;
       if (badCard) delete data.pageinkCard;
-      return { ...e, customData: Object.keys(data).length ? data : undefined };
-    });
-    return changed ? next : elements;
+      next[i] = { ...e, customData: Object.keys(data).length ? data : undefined };
+    }
+    return next;
   }
+  const knownFilesRef = useRef<object | null>(null);
+  const knownFilesCount = useRef(0);
+  const forceFullSync = useRef(false);
   async function flush(record = true) {
     if (!api || !ready.current || !scene.current) return;
     try {
-      await session.acceptFiles(api.getFiles());
+      (api as InkApi).inkSyncRaw();
+      const files = api.getFiles();
+      const filesChanged = files !== knownFilesRef.current || Object.keys(files).length !== knownFilesCount.current;
+      if (filesChanged) {
+        let hasUnaccepted = false;
+        const assets = session.manifest.assets;
+        for (const id in files) { if (!assets[id]) { hasUnaccepted = true; break; } }
+        if (hasUnaccepted) await session.acceptFiles(files);
+        knownFilesRef.current = files;
+        knownFilesCount.current = Object.keys(files).length;
+      }
       const revision = (api as InkApi).inkRevision();
-      if (revision === flushedRevision.current) return;
+      if (!forceFullSync.current && revision === flushedRevision.current) return;
+      const changes = (api as InkApi).inkChanges();
+      const effectiveChanges = forceFullSync.current ? null : changes;
       const raw = api.getSceneElementsIncludingDeleted();
-      const safe = sanitizeOrphanedRefs(raw);
-      if (safe !== raw) api.updateScene({ elements: safe, captureUpdate: NEVER });
-      session.changeMany(scene.current.partition(safe), record);
-      flushedRevision.current = (api as InkApi).inkRevision();
+      const needsSanitizeScan = effectiveChanges === null || effectiveChanges.some(e => !e.isDeleted && !!(e.customData?.pageinkText || e.customData?.pageinkCard?.kind === 'ink'));
+      const safe = needsSanitizeScan ? sanitizeOrphanedRefs(raw) : raw;
+      try {
+        if (safe !== raw) {
+          api.updateScene({ elements: safe, captureUpdate: NEVER });
+          (api as InkApi).inkChanges();
+          session.changeMany(scene.current.partition(safe), record);
+        } else {
+          session.changeMany(scene.current.partition(safe, effectiveChanges), record);
+        }
+        forceFullSync.current = false;
+        flushedRevision.current = (api as InkApi).inkRevision();
+      } catch (inner) {
+        forceFullSync.current = true;
+        scene.current.invalidateCache();
+        throw inner;
+      }
     } catch (error) { latest.current.onError((error as Error).message); throw error; }
   }
   /** Records kernel normalisation (restore, re-indexing) without creating an undo step. */
   function absorb() {
     if (api && scene.current) {
+      (api as InkApi).inkChanges();
       session.changeMany(scene.current.partition(api.getSceneElementsIncludingDeleted()), false);
+      forceFullSync.current = false;
       flushedRevision.current = (api as InkApi).inkRevision();
     }
   }
@@ -470,7 +567,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   }
   async function appendElements(elements: readonly Element[]) {
     if (!api || !elements.length) return;
-    api.updateScene({ elements: [...api.getSceneElementsIncludingDeleted(), ...elements], captureUpdate: NEVER });
+    (api as InkApi).inkAppend(elements);
     await flush();
   }
   async function eraseScenePath(path: readonly ScenePoint[], radius: number, whole: boolean, highlighterOnly = false) {
@@ -566,6 +663,11 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
 
   // ---------- pointer input ----------
   const touches = useRef(new Map<number, { x: number; y: number }>());
+  const appliedTouches = useRef(new Map<number, { x: number; y: number }>());
+  const touchFrame = useRef(0);
+  const touchBox = useRef<{ left: number; top: number } | null>(null);
+  const lastTouchTime = useRef(0);
+  const lastPenTime = useRef(0);
   const gesture = useRef<{ fingers: number; started: number; travel: number; samples: { t: number; x: number; y: number }[] } | null>(null);
   const inertia = useRef(0);
   const penDown = useRef(false), erasing = useRef<number | null>(null), lastErase = useRef<ScenePoint>();
@@ -574,7 +676,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   const rulerDrag = useRef<{ id: number; edge: -1 | 1; ruler: RulerState; startScreen: [number, number]; curScreen: [number, number]; startScene: ScenePoint; color: string; width: number; opacity: number; inkKind: 'pen' | 'highlighter' } | null>(null);
   const eraseQueue = useRef<ScenePoint[]>([]), eraseFrame = useRef(0);
   const scribble = useRef<{ id: number; started: number; zoom: number; finished: boolean; previous?: string } | null>(null);
-  const recentLoop = useRef<{ id: string; versionNonce: number; polygon: ScenePoint[]; time: number } | null>(null);
+  const recentLoop = useRef<{ id: string; versionNonce: number; polygon: ScenePoint[]; bounds: Rect; time: number } | null>(null);
   const loopHold = useRef<{ id: number; start: ScenePoint; loopId: string; polygon: ScenePoint[]; timer: number; ringTimer: number } | null>(null);
   const drawHold = useRef<{ id: number; last: ScenePoint; anchor: ScenePoint; travel: number; timer: number; ringTimer: number } | null>(null);
   const drawHoldGen = useRef(0);
@@ -584,14 +686,14 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   const local = (event: React.PointerEvent): ScenePoint => { const box = root.current!.getBoundingClientRect(); return [event.clientX - box.left, event.clientY - box.top]; };
   const localClient = (clientX: number, clientY: number): ScenePoint => { const box = root.current!.getBoundingClientRect(); return [clientX - box.left, clientY - box.top]; };
   const scenePoint = (event: React.PointerEvent): ScenePoint => { const s = api!.getAppState(), [x, y] = local(event); return [x / s.zoom.value - s.scrollX, y / s.zoom.value - s.scrollY]; };
-  const sceneFromClient = (clientX: number, clientY: number): ScenePoint => { const s = api!.getAppState(), [x, y] = localClient(clientX, clientY); return [x / s.zoom.value - s.scrollX, y / s.zoom.value - s.scrollY]; };
   const drawsWith = (event: React.PointerEvent) => event.pointerType !== 'touch' || props.fingerDraws;
+  const staticCanvas = () => root.current?.querySelector<HTMLCanvasElement>('canvas.static');
 
   function cancelHolds() {
     drawHoldGen.current++;
     if (loopHold.current) { window.clearTimeout(loopHold.current.timer); window.clearTimeout(loopHold.current.ringTimer); loopHold.current = null; }
     if (drawHold.current) { window.clearTimeout(drawHold.current.timer); window.clearTimeout(drawHold.current.ringTimer); drawHold.current = null; }
-    setHoldRing(null);
+    updateHoldRing(null);
   }
 
   function flashLassoPolygon(scenePolygon: readonly ScenePoint[]) {
@@ -633,7 +735,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     const elements = api.getSceneElements(), stroke = elements[elements.length - 1];
     if (!stroke || stroke.type !== 'freedraw' || stroke.locked) return;
     const poly = closedLoopPolygon(strokeWorldPoints(stroke), api.getAppState().zoom.value);
-    if (poly) recentLoop.current = { id: stroke.id, versionNonce: stroke.versionNonce, polygon: poly, time: performance.now() };
+    if (poly) recentLoop.current = { id: stroke.id, versionNonce: stroke.versionNonce, polygon: poly, bounds: polygonBounds(poly), time: performance.now() };
   }
 
   function flushErase() {
@@ -669,11 +771,15 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
 
   function queueErase(event: React.PointerEvent, immediate = false) {
     if (!api || !tool.erase) return;
+    const box = root.current!.getBoundingClientRect();
+    const s = api.getAppState(), invZ = 1 / s.zoom.value;
     const coalesced = event.nativeEvent.getCoalescedEvents?.();
     if (coalesced?.length) {
-      for (const sample of coalesced) eraseQueue.current.push(sceneFromClient(sample.clientX, sample.clientY));
+      for (const sample of coalesced) {
+        eraseQueue.current.push([(sample.clientX - box.left) * invZ - s.scrollX, (sample.clientY - box.top) * invZ - s.scrollY]);
+      }
     } else {
-      eraseQueue.current.push(scenePoint(event));
+      eraseQueue.current.push([(event.clientX - box.left) * invZ - s.scrollX, (event.clientY - box.top) * invZ - s.scrollY]);
     }
     if (immediate) {
       window.cancelAnimationFrame(eraseFrame.current);
@@ -755,7 +861,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
       const created = createShapeElement(shape, live, activeTool.inkKind);
       // Snapshot initial coordinates before Excalidraw can mutate the elements in place during drag.
       const originCoords = new Map(created.map(e => [e.id, { x: e.x, y: e.y }]));
-      const rawStroke = { ...live };
+      (api as InkApi).inkSyncRaw();
+      const liveEl = live as Element;
+      const liveRawPoints = stabilizedRawPoints(live) ?? liveEl.customData?.inkRawPoints;
+      const rawStroke = liveRawPoints && liveEl.customData?.inkRawPoints !== liveRawPoints
+        ? { ...liveEl, customData: { ...liveEl.customData, inkRawPoints: liveRawPoints } }
+        : { ...liveEl };
       // Commit the raw hand-drawn stroke to history first so Undo restores the original raw points & pressures.
       api.updateScene({ appState: { newElement: null }, captureUpdate: NEVER });
       void flush().then(() => {
@@ -835,7 +946,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     if (activeTool.circleLasso && closed && enclosesContent) {
       triggerCircleLasso(pointerId, [live.id], closed);
     } else {
-      setHoldRing(null);
+      updateHoldRing(null);
     }
   }
 
@@ -844,7 +955,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     const tol = 16 / zoom;
     const recent = recentLoop.current;
     if (recent && performance.now() - recent.time < 15000) {
-      const el = api.getSceneElements().find(e => e.id === recent.id && !e.isDeleted && !e.locked);
+      const el = (api as InkApi).inkQuery(recent.bounds).find(e => e.id === recent.id && !e.isDeleted && !e.locked);
       if (el && el.versionNonce === recent.versionNonce) {
         if (hitStrokePath(el, pt, tol) || polygonContains(recent.polygon, pt)) {
           return { id: el.id, polygon: recent.polygon };
@@ -873,6 +984,47 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     const s = api.getAppState();
     api.updateScene({ appState: { scrollX: s.scrollX + dx / s.zoom.value, scrollY: s.scrollY + dy / s.zoom.value }, captureUpdate: NEVER });
   }
+  function flushTouchGesture() {
+    touchFrame.current = 0;
+    if (!api || !touches.current.size) return;
+    const ids = [...touches.current.keys()];
+    if (ids.length >= 2) {
+      const idA = ids[0], idB = ids[1];
+      const curA = touches.current.get(idA)!, curB = touches.current.get(idB)!;
+      const oldA = appliedTouches.current.get(idA) ?? curA, oldB = appliedTouches.current.get(idB) ?? curB;
+      if (curA.x !== oldA.x || curA.y !== oldA.y || curB.x !== oldB.x || curB.y !== oldB.y) {
+        const s = api.getAppState();
+        const oldDist = Math.hypot(oldA.x - oldB.x, oldA.y - oldB.y);
+        const newDist = Math.hypot(curA.x - curB.x, curA.y - curB.y);
+        const zoomValue = latest.current.zoomLock ? s.zoom.value : clampZoom(s.zoom.value * newDist / Math.max(1, oldDist), kind === 'pages' ? 0.1 : undefined);
+        const box = touchBox.current ?? (touchBox.current = root.current!.getBoundingClientRect());
+        const ox = (oldA.x + oldB.x) / 2 - box.left, oy = (oldA.y + oldB.y) / 2 - box.top;
+        const nx = (curA.x + curB.x) / 2 - box.left, ny = (curA.y + curB.y) / 2 - box.top;
+        api.updateScene({ appState: { zoom: { value: zoomValue as AppState['zoom']['value'] }, scrollX: s.scrollX + nx / zoomValue - ox / s.zoom.value, scrollY: s.scrollY + ny / zoomValue - oy / s.zoom.value }, captureUpdate: NEVER });
+      }
+      appliedTouches.current.set(idA, { ...curA });
+      appliedTouches.current.set(idB, { ...curB });
+      for (let i = 2; i < ids.length; i++) appliedTouches.current.set(ids[i], { ...touches.current.get(ids[i])! });
+    } else {
+      const id = ids[0], cur = touches.current.get(id)!, old = appliedTouches.current.get(id) ?? cur;
+      const dx = cur.x - old.x, dy = cur.y - old.y;
+      if (dx || dy) {
+        const s = api.getAppState();
+        const lockHorizontal = latest.current.zoomLock && kind === 'pages' && layoutRef.current.maxWidth * s.zoom.value <= views.get().width - 16;
+        panBy(lockHorizontal ? 0 : dx, dy);
+      }
+      appliedTouches.current.set(id, { ...cur });
+    }
+  }
+  function clearTouches() {
+    window.cancelAnimationFrame(touchFrame.current);
+    touchFrame.current = 0;
+    touches.current.clear();
+    appliedTouches.current.clear();
+    touchBox.current = null;
+    gesture.current = null;
+    setInkGestureActive(staticCanvas(), false);
+  }
   function startInertia(vx: number, vy: number) {
     window.cancelAnimationFrame(inertia.current);
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
@@ -890,12 +1042,31 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     window.cancelAnimationFrame(inertia.current);
     if (busy.current) { event.stopPropagation(); event.preventDefault(); return; }
-    if (event.pointerType === 'touch' && (penDown.current || event.width > 36 || event.height > 36)) { event.stopPropagation(); event.preventDefault(); return; }
+    if (event.pointerType === 'touch') {
+      if (penDown.current) { event.stopPropagation(); event.preventDefault(); return; }
+      const touchSize = Math.max(event.width || 0, event.height || 0);
+      const nearPen = performance.now() - lastPenTime.current < 350;
+      // Normal iPad fingertips routinely report 40-65px contact size; only reject large palm slabs,
+      // or oversized touches while finger drawing / right after Apple Pencil lift.
+      const isPalm = touches.current.size === 0 && (touchSize > 110 || ((props.fingerDraws || nearPen) && touchSize > 68));
+      if (isPalm) { event.stopPropagation(); event.preventDefault(); return; }
+    }
     if (event.pointerType === 'touch' && !props.fingerDraws) {
       // Fingers navigate (Pencil writes); with finger drawing on, the kernel handles touch itself.
       event.stopPropagation(); event.preventDefault();
       if (penDown.current) return; // palm while writing
-      touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      lastTouchTime.current = performance.now();
+      // Settle any pending single-finger pan before adding a second finger so prior pan delta is never misread as pinch zoom.
+      if (touches.current.size > 0) {
+        window.cancelAnimationFrame(touchFrame.current);
+        flushTouchGesture();
+      } else {
+        touchBox.current = root.current!.getBoundingClientRect();
+      }
+      const pt = { x: event.clientX, y: event.clientY };
+      touches.current.set(event.pointerId, pt);
+      appliedTouches.current.set(event.pointerId, { ...pt });
+      if (touches.current.size >= 2) setInkGestureActive(staticCanvas(), true);
       event.currentTarget.setPointerCapture(event.pointerId);
       const g = gesture.current;
       if (!g) gesture.current = { fingers: 1, started: performance.now(), travel: 0, samples: [{ t: performance.now(), x: event.clientX, y: event.clientY }] };
@@ -903,7 +1074,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
       return;
     }
     penDown.current = event.pointerType === 'pen';
-    if (penDown.current) { touches.current.clear(); gesture.current = null; }
+    if (penDown.current) { lastPenTime.current = performance.now(); clearTouches(); }
     if (!api || !drawsWith(event) || event.button > 0) return;
     if (props.readOnly) return;
     cancelHolds();
@@ -968,27 +1139,30 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
       }
     }
     if (tool.kernel === 'freedraw' && !penLassoRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      const screenPt = local(event);
+      const clientPt: ScenePoint = [event.clientX, event.clientY];
       if (tool.circleLasso) {
-        const hitLoop = findClosedLoopAt(scenePoint(event), api.getAppState().zoom.value);
+        const box = root.current!.getBoundingClientRect(), s = api.getAppState();
+        const screenPt: ScenePoint = [event.clientX - box.left, event.clientY - box.top];
+        const hitLoop = findClosedLoopAt([screenPt[0] / s.zoom.value - s.scrollX, screenPt[1] / s.zoom.value - s.scrollY], s.zoom.value);
         if (hitLoop) {
           const pointerId = event.pointerId;
-          const ringTimer = window.setTimeout(() => { if (loopHold.current?.id === pointerId) setHoldRing({ x: screenPt[0], y: screenPt[1] }); }, 140);
+          const ringTimer = window.setTimeout(() => { if (loopHold.current?.id === pointerId) updateHoldRing({ x: screenPt[0], y: screenPt[1] }); }, 140);
           const t = window.setTimeout(() => {
             if (loopHold.current?.id !== pointerId || !api) return;
             const liveId = api.getAppState().newElement?.id;
             const removeIds = liveId && liveId !== hitLoop.id ? [hitLoop.id, liveId] : [hitLoop.id];
             triggerCircleLasso(pointerId, removeIds, hitLoop.polygon);
           }, 340);
-          loopHold.current = { id: pointerId, start: screenPt, loopId: hitLoop.id, polygon: hitLoop.polygon, timer: t, ringTimer };
+          loopHold.current = { id: pointerId, start: clientPt, loopId: hitLoop.id, polygon: hitLoop.polygon, timer: t, ringTimer };
         }
       }
       if (tool.holdToShape || tool.circleLasso) {
-        drawHold.current = { id: event.pointerId, last: screenPt, anchor: screenPt, travel: 0, timer: 0, ringTimer: 0 };
+        drawHold.current = { id: event.pointerId, last: clientPt, anchor: clientPt, travel: 0, timer: 0, ringTimer: 0 };
       }
     }
   };
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'pen') lastPenTime.current = performance.now();
     if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); return; }
     const stroke = scribble.current;
     if (stroke?.id === event.pointerId && !stroke.finished && performance.now() - stroke.started > 3500) scribble.current = null;
@@ -1002,20 +1176,17 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
       event.stopPropagation();
       cancelHolds();
       if (!api) return;
-      const g = gesture.current!, s = api.getAppState(), peers = [...touches.current.entries()].filter(([id]) => id !== event.pointerId);
+      lastTouchTime.current = performance.now();
+      const g = gesture.current!;
       g.travel += Math.hypot(event.clientX - old.x, event.clientY - old.y);
-      if (peers.length) {
-        const other = peers[0][1], distance = Math.hypot(old.x - other.x, old.y - other.y), nextDistance = Math.hypot(event.clientX - other.x, event.clientY - other.y);
-        const zoomValue = props.zoomLock ? s.zoom.value : clampZoom(s.zoom.value * nextDistance / Math.max(1, distance), kind === 'pages' ? 0.1 : undefined);
-        const box = root.current!.getBoundingClientRect();
-        const ox = (old.x + other.x) / 2 - box.left, oy = (old.y + other.y) / 2 - box.top, nx = (event.clientX + other.x) / 2 - box.left, ny = (event.clientY + other.y) / 2 - box.top;
-        api.updateScene({ appState: { zoom: { value: zoomValue as AppState['zoom']['value'] }, scrollX: s.scrollX + nx / zoomValue - ox / s.zoom.value, scrollY: s.scrollY + ny / zoomValue - oy / s.zoom.value }, captureUpdate: NEVER });
-      } else {
+      if (touches.current.size === 1) {
+        const s = api.getAppState();
         const lockHorizontal = props.zoomLock && kind === 'pages' && layoutRef.current.maxWidth * s.zoom.value <= views.get().width - 16;
-        panBy(lockHorizontal ? 0 : event.clientX - old.x, event.clientY - old.y);
-        g.samples.push({ t: performance.now(), x: lockHorizontal ? old.x : event.clientX, y: event.clientY }); if (g.samples.length > 6) g.samples.shift();
+        g.samples.push({ t: lastTouchTime.current, x: lockHorizontal ? old.x : event.clientX, y: event.clientY });
+        if (g.samples.length > 6) g.samples.shift();
       }
       touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (!touchFrame.current) touchFrame.current = window.requestAnimationFrame(flushTouchGesture);
       return;
     }
     if (spaceDrag.current?.id === event.pointerId) {
@@ -1064,22 +1235,26 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
       return;
     }
     if (loopHold.current?.id === event.pointerId) {
-      const cur = local(event);
-      if (Math.hypot(cur[0] - loopHold.current.start[0], cur[1] - loopHold.current.start[1]) > 8) {
-        window.clearTimeout(loopHold.current.timer); window.clearTimeout(loopHold.current.ringTimer); loopHold.current = null; setHoldRing(null);
+      const dx = event.clientX - loopHold.current.start[0], dy = event.clientY - loopHold.current.start[1];
+      if (dx * dx + dy * dy > 64) {
+        window.clearTimeout(loopHold.current.timer); window.clearTimeout(loopHold.current.ringTimer); loopHold.current = null; updateHoldRing(null);
       }
     }
     if (drawHold.current?.id === event.pointerId && gestureClaimed.current !== event.pointerId) {
-      const cur = local(event), h = drawHold.current;
-      h.travel += Math.hypot(cur[0] - h.last[0], cur[1] - h.last[1]);
-      h.last = cur;
-      if (Math.hypot(cur[0] - h.anchor[0], cur[1] - h.anchor[1]) > 5) {
-        h.anchor = cur;
-        window.clearTimeout(h.timer); window.clearTimeout(h.ringTimer); setHoldRing(null);
+      const cx = event.clientX, cy = event.clientY, h = drawHold.current;
+      h.travel += Math.hypot(cx - h.last[0], cy - h.last[1]);
+      h.last = [cx, cy];
+      const adx = cx - h.anchor[0], ady = cy - h.anchor[1];
+      if (adx * adx + ady * ady > 25) {
+        h.anchor = [cx, cy];
+        window.clearTimeout(h.timer); window.clearTimeout(h.ringTimer); updateHoldRing(null);
         if (h.travel >= 24) {
           const pointerId = event.pointerId;
           h.ringTimer = window.setTimeout(() => {
-            if (drawHold.current?.id === pointerId) setHoldRing({ x: drawHold.current.last[0], y: drawHold.current.last[1] });
+            if (drawHold.current?.id === pointerId && root.current) {
+              const [lx, ly] = localClient(drawHold.current.last[0], drawHold.current.last[1]);
+              updateHoldRing({ x: lx, y: ly });
+            }
           }, 160);
           h.timer = window.setTimeout(() => { if (drawHold.current?.id === pointerId) triggerDrawHold(pointerId); }, 450);
         }
@@ -1087,8 +1262,15 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     }
   };
   const finishTouch = (event: React.PointerEvent<HTMLDivElement>) => {
-    event.stopPropagation(); touches.current.delete(event.pointerId);
+    event.stopPropagation();
+    lastTouchTime.current = performance.now();
+    window.cancelAnimationFrame(touchFrame.current);
+    flushTouchGesture();
+    touches.current.delete(event.pointerId);
+    appliedTouches.current.delete(event.pointerId);
+    if (touches.current.size < 2) setInkGestureActive(staticCanvas(), false);
     const g = gesture.current; if (!g || touches.current.size) return;
+    touchBox.current = null;
     gesture.current = null;
     const duration = performance.now() - g.started;
     if (event.type === 'pointerup' && duration < 300 && g.travel < 14 && g.fingers >= 2) { latest.current.onGesture?.(g.fingers === 2 ? 'undo' : 'redo'); return; }
@@ -1104,7 +1286,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); return; }
     if (touches.current.has(event.pointerId)) return finishTouch(event);
-    if (event.pointerType === 'pen') penDown.current = false;
+    if (event.pointerType === 'pen') { penDown.current = false; lastPenTime.current = performance.now(); }
     cancelHolds();
     setWritingState(false);
     if (spaceDrag.current?.id === event.pointerId) {
@@ -1184,6 +1366,7 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
   const onPointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === 'touch' && penDown.current) { event.stopPropagation(); return; }
     if (touches.current.has(event.pointerId)) return finishTouch(event);
+    if (event.pointerType === 'pen') lastPenTime.current = performance.now();
     penDown.current = false;
     cancelHolds();
     gestureClaimed.current = null;
@@ -1191,12 +1374,12 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     clearToolDrags(event.pointerId);
   };
   const resetInputRef = useRef<() => void>(() => {});
-  resetInputRef.current = () => { penDown.current = false; touches.current.clear(); gesture.current = null; cancelHolds(); clearToolDrags(); setWritingState(false); };
+  resetInputRef.current = () => { penDown.current = false; clearTouches(); cancelHolds(); clearToolDrags(); setWritingState(false); };
   useEffect(() => {
     const win = root.current?.ownerDocument.defaultView ?? window;
     const onBlur = () => resetInputRef.current();
     win.addEventListener('blur', onBlur);
-    return () => { win.removeEventListener('blur', onBlur); window.cancelAnimationFrame(inertia.current); window.cancelAnimationFrame(eraseFrame.current); cancelHolds(); };
+    return () => { win.removeEventListener('blur', onBlur); window.cancelAnimationFrame(inertia.current); window.cancelAnimationFrame(eraseFrame.current); window.cancelAnimationFrame(touchFrame.current); setInkGestureActive(staticCanvas(), false); cancelHolds(); };
   }, []);
 
   const dark = props.theme === 'dark' && kind !== 'pages';
@@ -1216,10 +1399,16 @@ export const InkCanvas = React.memo(React.forwardRef<CanvasHandle | null, Props>
     onPointerLeave={() => { eraserCursor.current?.classList.remove('is-visible'); }}
     onLostPointerCapture={event => {
       const hadToolDrag = spaceDrag.current?.id === event.pointerId || tapeDrag.current?.id === event.pointerId || rulerDrag.current?.id === event.pointerId || erasing.current === event.pointerId || marquee.current?.id === event.pointerId;
-      if (event.pointerType === 'pen') penDown.current = false;
+      if (event.pointerType === 'pen') { penDown.current = false; lastPenTime.current = performance.now(); }
       if (loopHold.current?.id === event.pointerId || drawHold.current?.id === event.pointerId) cancelHolds();
-      touches.current.delete(event.pointerId);
-      if (!touches.current.size) gesture.current = null;
+      if (touches.current.has(event.pointerId)) {
+        window.cancelAnimationFrame(touchFrame.current);
+        flushTouchGesture();
+        touches.current.delete(event.pointerId);
+        appliedTouches.current.delete(event.pointerId);
+        if (touches.current.size < 2) setInkGestureActive(staticCanvas(), false);
+        if (!touches.current.size) { touchBox.current = null; gesture.current = null; }
+      }
       clearToolDrags(event.pointerId);
       if (event.pointerType === 'pen' || hadToolDrag || (!penDown.current && !touches.current.size)) setWritingState(false);
     }}

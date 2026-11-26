@@ -14,7 +14,7 @@ import { normalizePreferences, PreferenceStore } from './preferences';
 import { ElementsLibraryStore, normalizeLibraryItems } from './elements-library';
 import { ErrorBoundary } from './ui';
 import { TEMPLATES, paperStyle } from './templates';
-import type { ViewMemory, ViewSurface, WorkspaceActions, WorkspaceHost } from './host';
+import type { ViewMemory, ViewSurface, WorkspaceActions, WorkspaceChromeState, WorkspaceHost } from './host';
 import { NotesHost } from './notes-host';
 import { drawingRegionCode, NOTE_TYPES } from './notes';
 import { MixedNotes } from './mixed-host';
@@ -125,6 +125,11 @@ class CreateModal extends Modal {
 class DrawingView extends FileView implements WorkspaceHost {
   root?: Root; session?: Session; pdf?: PdfService; generation = 0;
   actions: WorkspaceActions | null = null;
+  private chrome: WorkspaceChromeState | null = null;
+  private lastReadingIcon?: boolean;
+  private sidebarAction: HTMLElement;
+  private readingAction: HTMLElement;
+  private scratchAction: HTMLElement;
   private unloading?: Promise<void>;
   private viewTimer?: number;
   text = new MixedNotes(this.app, () => this.leaf);
@@ -134,19 +139,87 @@ class DrawingView extends FileView implements WorkspaceHost {
     this.cards = new BoardSources(this.app, { io: plugin.io, live: path => plugin.views().find(v => v.file?.path === path)?.session,
       resolve: (path, id) => plugin.resolveDocument(path, id), reveal: (path, page, region) => plugin.reveal(path, page, region),
       unique: title => plugin.uniquePath(title, 'inknote') });
+    // Obsidian prepends view-header actions beside its single native more-options button.
+    this.scratchAction = this.addAction('notebook-pen', '打开草稿纸', () => this.actions?.toggleScratch());
+    this.readingAction = this.addAction('book-open', '阅读模式', () => this.actions?.toggleReading());
+    this.sidebarAction = this.addAction('panel-left', '显示侧栏', () => this.actions?.toggleSidebar());
+    for (const el of [this.scratchAction, this.readingAction, this.sidebarAction]) {
+      el.addClass('ink-host-action', 'ink-host-action-hidden');
+    }
   }
   get prefs() { return this.plugin.prefs; }
   get elements() { return this.plugin.elements; }
   getViewType() { return VIEW; }
   getIcon() { return 'pencil'; }
   getDisplayText() { return this.file?.basename ?? '绘写笔记'; }
+  private resetChrome() {
+    this.chrome = null;
+    this.lastReadingIcon = undefined;
+    for (const el of [this.scratchAction, this.readingAction, this.sidebarAction]) {
+      el.addClass('ink-host-action-hidden');
+      el.removeClass('is-active');
+      el.removeAttribute('aria-pressed');
+    }
+  }
+  syncChrome(state: WorkspaceChromeState) {
+    this.chrome = state;
+    const sidebarActive = state.sidebar && !state.focus;
+    this.sidebarAction.toggleClass('ink-host-action-hidden', state.focus);
+    this.sidebarAction.toggleClass('is-active', sidebarActive);
+    this.sidebarAction.setAttribute('aria-pressed', String(sidebarActive));
+    this.sidebarAction.setAttribute('aria-label', sidebarActive ? '隐藏侧栏' : '显示侧栏');
+
+    this.readingAction.toggleClass('ink-host-action-hidden', !state.paged);
+    this.readingAction.toggleClass('is-active', state.reading);
+    this.readingAction.setAttribute('aria-pressed', String(state.reading));
+    this.readingAction.setAttribute('aria-label', state.reading ? '继续书写' : '阅读模式');
+    if (this.lastReadingIcon !== state.reading) {
+      this.lastReadingIcon = state.reading;
+      setIcon(this.readingAction, state.reading ? 'pencil' : 'book-open');
+    }
+
+    this.scratchAction.toggleClass('ink-host-action-hidden', false);
+    this.scratchAction.toggleClass('is-active', state.scratchOpen);
+    this.scratchAction.setAttribute('aria-pressed', String(state.scratchOpen));
+    this.scratchAction.setAttribute('aria-label', state.scratchOpen ? '收起草稿纸' : '打开草稿纸');
+  }
+  focusSidebarAction() {
+    if (!this.sidebarAction.hasClass('ink-host-action-hidden')) this.sidebarAction.focus({ preventScroll: true });
+  }
   onPaneMenu(menu: Menu, source: string) {
     super.onPaneMenu(menu, source);
     if (!this.session) return;
-    menu.addItem(item => item.setSection('action').setTitle('导出 PDF').setIcon('file-output').onClick(() => this.actions?.exportPdf()));
-    menu.addItem(item => item.setSection('action').setTitle('可编辑备份（.inkpack）').setIcon('package').onClick(() => this.actions?.exportPackage()));
-    menu.addItem(item => item.setSection('action').setTitle('历史版本…').setIcon('history').onClick(() => this.showVersions()));
-    if (this.session.manifest.pdf) menu.addItem(item => item.setSection('action').setTitle('重新关联原 PDF…').setIcon('link').onClick(() => this.relinkSource()));
+    const paged = this.session.manifest.mode === 'pages';
+    const chrome = this.chrome;
+    const prefs = this.prefs.get();
+    const headerHidden = source === 'tab-header' || !this.containerEl.querySelector('.view-header')?.getClientRects().length;
+    const dockHidden = !!chrome?.reading && !chrome?.scratchOpen;
+    if (headerHidden) {
+      const sidebarActive = !!(chrome?.sidebar && !chrome?.focus);
+      menu.addItem(item => item.setSection('pageink-view').setTitle(sidebarActive ? '隐藏侧栏' : '显示侧栏').setIcon('panel-left').onClick(() => this.actions?.toggleSidebar()));
+      if (paged) menu.addItem(item => item.setSection('pageink-view').setTitle('阅读模式').setIcon('book-open').setChecked(!!chrome?.reading).onClick(() => this.actions?.toggleReading()));
+      menu.addItem(item => item.setSection('pageink-view').setTitle(chrome?.scratchOpen ? '收起草稿纸' : '打开草稿纸').setIcon('notebook-pen').setChecked(!!chrome?.scratchOpen).onClick(() => this.actions?.toggleScratch()));
+    }
+    menu.addItem(item => item.setSection('pageink-view').setTitle('搜索笔记内容').setIcon('search').onClick(() => this.actions?.search()));
+    menu.addItem(item => item.setSection('pageink-view').setTitle('导出…').setIcon('share').onClick(() => this.actions?.openExport()));
+    menu.addItem(item => item.setSection('pageink-view').setTitle(paged ? '纸张与页边距…' : '画布样式…').setIcon('sliders-horizontal').onClick(() => this.actions?.openPageSettings()));
+    menu.addItem(item => item.setSection('pageink-view').setTitle('专注模式').setIcon('expand').setChecked(!!chrome?.focus).onClick(() => this.actions?.toggleFocus()));
+    if (!paged) menu.addItem(item => item.setSection('pageink-view').setTitle('将当前视野存为书签').setIcon('bookmark').onClick(() => this.actions?.bookmarkCurrentView()));
+
+    if (dockHidden) menu.addItem(item => item.setSection('pageink-doc').setTitle('文字段落…').setIcon('file-text').onClick(() => this.actions?.openMixed()));
+    menu.addItem(item => item.setSection('pageink-doc').setTitle(paged ? '复制本页链接' : '复制画布链接').setIcon('link').onClick(() => this.actions?.copyCurrentLink()));
+    if (chrome?.hasPdfPage) {
+      menu.addItem(item => item.setSection('pageink-doc').setTitle('复制本页文字').setIcon('file-text').onClick(() => this.actions?.copyCurrentPageText()));
+      menu.addItem(item => item.setSection('pageink-doc').setTitle('选择本页文字…').setIcon('type').onClick(() => this.actions?.selectCurrentPageText()));
+    }
+    if (this.session.manifest.pdf) menu.addItem(item => item.setSection('pageink-doc').setTitle('重新关联原 PDF…').setIcon('refresh-cw').onClick(() => this.relinkSource()));
+    menu.addItem(item => item.setSection('pageink-doc').setTitle('历史版本…').setIcon('history').onClick(() => this.showVersions()));
+
+    if (dockHidden && paged) {
+      menu.addItem(item => item.setSection('pageink-prefs').setTitle('夜间护眼纸面').setIcon(prefs.nightPaper ? 'sun' : 'moon').setChecked(prefs.nightPaper).onClick(() => this.prefs.update({ nightPaper: !prefs.nightPaper })));
+    }
+    menu.addItem(item => item.setSection('pageink-prefs').setTitle('用手指书写').setIcon('pointer').setChecked(prefs.fingerDraws).onClick(() => this.prefs.update({ fingerDraws: !prefs.fingerDraws })));
+    menu.addItem(item => item.setSection('pageink-prefs').setTitle('空闲时自动收起笔盒').setIcon('panel-right').setChecked(prefs.autoCollapseDock).onClick(() => this.prefs.update({ autoCollapseDock: !prefs.autoCollapseDock })));
   }
   async onLoadFile(file: TFile) {
     const generation = ++this.generation;
@@ -189,7 +262,7 @@ class DrawingView extends FileView implements WorkspaceHost {
     ++this.generation;
     const session = this.session, root = this.root, pdf = this.pdf;
     if (session) this.saveViewNow();
-    this.root = undefined; this.session = undefined; this.pdf = undefined; this.actions = null;
+    this.root = undefined; this.session = undefined; this.pdf = undefined; this.actions = null; this.resetChrome();
     const operation = (async () => {
       try { await session?.flush(); }
       catch (error) {
@@ -264,7 +337,15 @@ class DrawingView extends FileView implements WorkspaceHost {
   }
   theme() { return activeDocument.body.classList.contains('theme-dark') ? 'dark' as const : 'light' as const; }
   onThemeChange(listener: () => void) { const ref = this.app.workspace.on('css-change', listener); return () => this.app.workspace.offref(ref); }
-  connect(actions: WorkspaceActions) { this.actions = actions; return () => { if (this.actions === actions) this.actions = null; }; }
+  connect(actions: WorkspaceActions) {
+    this.actions = actions;
+    return () => {
+      if (this.actions === actions) {
+        this.actions = null;
+        this.resetChrome();
+      }
+    };
+  }
 }
 
 export default class DrawingPlugin extends Plugin {
@@ -326,6 +407,8 @@ export default class DrawingPlugin extends Plugin {
     this.addCommand({ id: 'import-pdf', name: '导入 PDF 并批注…', callback: () => this.chooseFile('.pdf', async file => this.importPdf(file.name, await file.arrayBuffer())) });
     this.addCommand({ id: 'restore-package', name: '从备份恢复（.inkpack）…', callback: () => this.chooseFile('.inkpack,.zip', file => this.restorePackage(file)) });
     this.addCommand({ id: 'export-pdf', name: '导出当前笔记为 PDF', checkCallback: withView(view => view.actions?.exportPdf()) });
+    this.addCommand({ id: 'toggle-sidebar', name: '显示/隐藏侧栏', checkCallback: withView(view => view.actions?.toggleSidebar()) });
+    this.addCommand({ id: 'toggle-reading', name: '阅读模式 / 继续书写', checkCallback: (checking: boolean) => { const view = active(); if (!view?.session || view.session.manifest.mode !== 'pages') return false; if (!checking) view.actions?.toggleReading(); return true; } });
     this.addCommand({ id: 'toggle-scratch', name: '打开/收起草稿纸', checkCallback: withView(view => view.actions?.toggleScratch()) });
     this.addCommand({ id: 'toggle-focus', name: '专注模式', checkCallback: withView(view => view.actions?.toggleFocus()) });
     this.addCommand({ id: 'search', name: '在当前笔记中搜索', checkCallback: withView(view => view.actions?.search()) });

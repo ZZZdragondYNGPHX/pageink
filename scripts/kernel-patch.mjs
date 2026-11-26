@@ -12,6 +12,7 @@ export const kernelPatch = {
       let contents = await readFile(path, 'utf8');
       contents = `import { snapshotElement } from ${JSON.stringify(resolve('src/element-snapshot.ts'))};\n` + contents;
       contents = `import { MIN_INK_ZOOM } from ${JSON.stringify(resolve('src/viewport.ts'))};\n` + contents;
+      contents = `import { strokeOutlineToPath2D } from ${JSON.stringify(resolve('src/ink-input.ts'))};\n` + contents;
       const minZoom = 'var MIN_ZOOM = 0.1;';
       if (contents.split(minZoom).length !== 2) throw Error('Upstream overview zoom floor patch mismatch');
       contents = contents.replace(minZoom, 'var MIN_ZOOM = MIN_INK_ZOOM;');
@@ -27,6 +28,30 @@ export const kernelPatch = {
       const boundsReturn = '  return [minX, minY, maxX, maxY];\n};\nvar getFreeDrawElementAbsoluteCoords';
       if (contents.split(boundsReturn).length !== 2) throw Error('Upstream point bounds return patch mismatch');
       contents = contents.replace(boundsReturn, '  const result = [minX, minY, maxX, maxY];\n  if (Object.isFrozen(points)) inkFrozenPointBounds.set(points, result);\n  return result;\n};\nvar getFreeDrawElementAbsoluteCoords');
+      const freeDrawShape = `function generateFreeDrawShape(element) {
+  const svgPathData = getFreeDrawSvgPath(element);
+  const path = new Path2D(svgPathData);
+  pathsCache.set(element, path);
+  return path;
+}`;
+      const svgStart = contents.indexOf('function getFreeDrawSvgPath(element) {');
+      const svgEnd = contents.indexOf('\nfunction med(A, B)', svgStart);
+      const svgBody = contents.slice(svgStart, svgEnd);
+      if (contents.split(freeDrawShape).length !== 2 || contents.split('function getFreeDrawSvgPath(element) {').length !== 2 || svgEnd < svgStart || svgBody.split('return getSvgPathFromStroke2(getStroke(inputPoints, options));').length !== 2) throw Error('Upstream direct freehand path patch mismatch');
+      contents = contents.replace(freeDrawShape, svgBody.replace('function getFreeDrawSvgPath(element)', 'function generateFreeDrawShape(element)').replace('return getSvgPathFromStroke2(getStroke(inputPoints, options));', 'const path = strokeOutlineToPath2D(getStroke(inputPoints, options));\n  pathsCache.set(element, path);\n  return path;'));
+      const pointSize = `var getSizeFromPoints = (points) => {
+  const xs = points.map((point) => point[0]);
+  const ys = points.map((point) => point[1]);
+  return {
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys)
+  };
+};`;
+      if (contents.split(pointSize).length !== 2) throw Error('Upstream single-pass point size patch mismatch');
+      contents = contents.replace(pointSize, `var getSizeFromPoints = (points) => {
+  const box = inkFrozenPointBounds.get(points) ?? getBoundsFromPoints(points);
+  return { width: box[2] - box[0], height: box[3] - box[1] };
+};`);
       const staticScene = 'var _renderStaticScene = ({';
       if (contents.split(staticScene).length !== 2) throw Error('Upstream static ink renderer patch mismatch');
       contents = contents.replace(staticScene, 'var _renderStaticSceneUncached = ({');
@@ -35,6 +60,7 @@ export const kernelPatch = {
       contents = contents.replace(staticThrottle, `
 var inkStaticRaster = new WeakMap();
 var inkVisibleRasterOwners = new WeakMap();
+var inkTransientRasterOwner = new WeakMap();
 function releaseInkStaticScene(canvas) {
   if (!canvas) return;
   cancelAnimationFrame(inkStaticRaster.get(canvas)?.frame);
@@ -43,7 +69,10 @@ function releaseInkStaticScene(canvas) {
   for (const element of inkVisibleRasterOwners.get(canvas) ?? []) {
     releaseInkElementCanvas(element); pathsCache.delete(element); ShapeCache.delete(element);
   }
+  const transient = inkTransientRasterOwner.get(canvas);
+  if (transient) { releaseInkElementCanvas(transient); pathsCache.delete(transient); ShapeCache.delete(transient); }
   inkVisibleRasterOwners.delete(canvas);
+  inkTransientRasterOwner.delete(canvas);
   canvas.width = canvas.height = 0;
 }
 function inkRasterStatus(canvas, pending) {
@@ -53,14 +82,6 @@ function inkRasterStatus(canvas, pending) {
 }
 var _renderStaticScene = (config) => {
   const {canvas, visibleElements: elements, appState: state, renderConfig, scale} = config;
-  if (canvas?.classList.contains("static") && !renderConfig.isExporting) {
-    const next = new Set(elements);
-    if (state.newElement) next.add(state.newElement);
-    for (const element of inkVisibleRasterOwners.get(canvas) ?? []) {
-      if (!next.has(element)) { releaseInkElementCanvas(element); pathsCache.delete(element); ShapeCache.delete(element); }
-    }
-    inkVisibleRasterOwners.set(canvas, next);
-  }
   const supportsPreview = canvas && canvas.classList.contains("static") && !renderConfig.isExporting &&
     !state.frameToHighlight && !state.openDialog && !state.editingGroupId && !state.selectedElementsAreBeingDragged && !renderConfig.pendingFlowchartNodes?.size &&
     !state.isResizing && !state.isRotating && !elements.some(e => e.type === "iframe" || e.type === "embeddable");
@@ -81,6 +102,32 @@ var _renderStaticScene = (config) => {
     (e.type === "freedraw" || e.type === "rectangle" || e.type === "ellipse" || e.type === "diamond" || e.type === "line" || e.type === "arrow") &&
     !e.frameId && !e.link && !e.boundElements?.length);
   const simple = eligible && elements.every(plainInk);
+  const key = viewport ? JSON.stringify([viewport.key, state.zoom.value, state.scrollX, state.scrollY, state.shouldCacheIgnoreZoom]) : null;
+  const previous = inkStaticRaster.get(canvas);
+  let append = eligible && previous && previous.key === key && elements.length >= previous.ids.length &&
+    previous.ids.every((id, i) => elements[i].id === id && elements[i].versionNonce === previous.versions[i]);
+  if (append) for (let i = previous.ids.length; i < elements.length; i++) {
+    if (!plainInk(elements[i])) { append = false; break; }
+  }
+  if (canvas?.classList.contains("static") && !renderConfig.isExporting) {
+    let owners = inkVisibleRasterOwners.get(canvas);
+    if (append && owners) {
+      for (let i = previous.ids.length; i < elements.length; i++) owners.add(elements[i]);
+    } else {
+      const next = new Set(elements);
+      for (const element of owners ?? []) {
+        if (!next.has(element) && element !== state.newElement) { releaseInkElementCanvas(element); pathsCache.delete(element); ShapeCache.delete(element); }
+      }
+      owners = next;
+      inkVisibleRasterOwners.set(canvas, next);
+    }
+    const prevTransient = inkTransientRasterOwner.get(canvas);
+    if (prevTransient && prevTransient !== state.newElement && !owners.has(prevTransient)) {
+      releaseInkElementCanvas(prevTransient); pathsCache.delete(prevTransient); ShapeCache.delete(prevTransient);
+    }
+    if (state.newElement) inkTransientRasterOwner.set(canvas, state.newElement);
+    else inkTransientRasterOwner.delete(canvas);
+  }
   if (!eligible) {
     if (canvas) { cancelAnimationFrame(inkStaticRaster.get(canvas)?.frame); inkStaticRaster.delete(canvas); inkRasterStatus(canvas, false); }
     const renderStart = performance.now();
@@ -89,11 +136,6 @@ var _renderStaticScene = (config) => {
     if (canPreview) commitInkViewport(canvas, viewport);
     return;
   }
-  const key = JSON.stringify([viewport.key, state.zoom.value, state.scrollX, state.scrollY, state.shouldCacheIgnoreZoom]);
-  const previous = inkStaticRaster.get(canvas);
-  const append = previous && previous.key === key && elements.length >= previous.ids.length &&
-    previous.ids.every((id, i) => elements[i].id === id && elements[i].versionNonce === previous.versions[i]) &&
-    elements.slice(previous.ids.length).every(plainInk);
   if (simple && elements.length >= 2000) {
     if (append && elements.length === previous.ids.length && (previous.cursor >= elements.length || previous.frame)) return;
     if (previous) cancelAnimationFrame(previous.frame);
@@ -246,6 +288,28 @@ function releaseInkElementCanvas(element) {
       return;
     }
 `);
+      const inkAppend = `
+  inkAppend(items) {
+    if (!items.length) return;
+    const ids = new Set();
+    if (items.some(element => {
+      if (element.isDeleted || element.frameId || element.boundElements?.length || element.containerId || element.startBinding || element.endBinding || isFrameLikeElement(element) || this.elementsMap.has(element.id) || ids.has(element.id)) return true;
+      ids.add(element.id); return false;
+    })) {
+      this.replaceAllElements([...this.elements, ...items]); return;
+    }
+    const tail = this.elements.length ? [this.elements[this.elements.length - 1], ...items] : [...items];
+    syncMovedIndices(tail, arrayToMap(items));
+    this.elements = [...this.elements, ...items];
+    this.nonDeletedElements = [...this.nonDeletedElements, ...items];
+    for (const element of items) {
+      this.elementsMap.set(element.id, element); this.nonDeletedElementsMap.set(element.id, element);
+      _Scene.mapElementToScene(element, this); updateInkElement(this, element); recordInkMutation(this, element);
+    }
+    this.triggerUpdate();
+  }
+`;
+      contents = contents.replace(insert, inkAppend + insert);
       const inkErase = `
   inkErase(patches) {
     const inserted = [], next = [], nonDeleted = [];
@@ -304,7 +368,7 @@ function releaseInkElementCanvas(element) {
     build.onLoad({ filter: /excalidraw[\\/]dist[\\/]dev[\\/]index\.js$/ }, async ({ path }) => {
       let contents = await readFile(path, 'utf8');
       contents = `import { queryInkScene, InkRenderMap, getInkEmbeds } from ${JSON.stringify(resolve('src/spatial.ts'))};\n` + contents;
-      contents = `import { inkSceneRevision } from ${JSON.stringify(resolve('src/kernel-journal.ts'))};\n` + contents;
+      contents = `import { inkSceneRevision, inkHostChanges } from ${JSON.stringify(resolve('src/kernel-journal.ts'))};\n` + contents;
       contents = 'import { releaseInkStaticScene } from "./chunk-4FTI6OG3.js";\n' + contents;
       contents = `import { preserveInkSamples, inkPointerSamples, stabilizeInkPoint, stabilizedRawPoints } from ${JSON.stringify(resolve('src/ink-input.ts'))};\n` + contents;
       // Safari pinch events must only reach the canvas where the gesture started.
@@ -317,12 +381,15 @@ function releaseInkElementCanvas(element) {
       if (contents.split(selectionVisibility).length !== 13) throw Error('Upstream empty selection UI patch mismatch');
       contents = contents.replaceAll(selectionVisibility, '(Object.values(appState.selectedElementIds).some(Boolean) && ' + selectionVisibility + ')');
       const replacements = [
-        ['      origin,\n      withCmdOrCtrl: event[KEYS.CTRL_OR_CMD],', '      origin,\n      inkPointerId: event.pointerId,\n      withCmdOrCtrl: event[KEYS.CTRL_OR_CMD],'],
-        ['onPointerMoveFromPointerDownHandler(pointerDownState) {\n    return withBatchedUpdatesThrottled((event) => {', 'onPointerMoveFromPointerDownHandler(pointerDownState) {\n    const scheduleMove = this.state.activeTool.type === "freedraw" ? consume => preserveInkSamples(withBatchedUpdatesThrottled, consume, pointerDownState.inkPointerId) : withBatchedUpdatesThrottled;\n    return scheduleMove((event) => {'],
-        ['onPointerUpFromPointerDownHandler(pointerDownState) {\n    return withBatchedUpdates((childEvent) => {', 'onPointerUpFromPointerDownHandler(pointerDownState) {\n    return withBatchedUpdates((childEvent) => {\n      if (this.state.newElement?.type === "freedraw" && (childEvent.type === "pointerup" || childEvent.type === "pointercancel") && childEvent.pointerId !== pointerDownState.inkPointerId) return;'],
+        ['      origin,\n      withCmdOrCtrl: event[KEYS.CTRL_OR_CMD],', '      origin,\n      inkPointerId: event.pointerId,\n      inkStabilizeLevel: Number(this.excalidrawContainerRef.current?.closest?.(".ink-editor")?.dataset.stabilize || 0),\n      withCmdOrCtrl: event[KEYS.CTRL_OR_CMD],'],
+        ['onPointerMoveFromPointerDownHandler(pointerDownState) {\n    return withBatchedUpdatesThrottled((event) => {', 'onPointerMoveFromPointerDownHandler(pointerDownState) {\n    const scheduleMove = this.state.activeTool.type === "freedraw" ? consume => {\n      const move = preserveInkSamples(withBatchedUpdatesThrottled, consume, pointerDownState.inkPointerId);\n      const flush = () => move.flush();\n      pointerDownState.inkMoveFlush = this.inkMoveFlush = flush;\n      const cancel = move.cancel;\n      move.cancel = () => {\n        cancel();\n        if (this.inkMoveFlush === flush) this.inkMoveFlush = null;\n      };\n      return move;\n    } : withBatchedUpdatesThrottled;\n    return scheduleMove((event) => {'],
+        ['onPointerUpFromPointerDownHandler(pointerDownState) {\n    return withBatchedUpdates((childEvent) => {', 'onPointerUpFromPointerDownHandler(pointerDownState) {\n    return withBatchedUpdates((childEvent) => {\n      if (pointerDownState.inkMoveFlush && (childEvent.type === "pointerup" || childEvent.type === "pointercancel") && childEvent.pointerId !== pointerDownState.inkPointerId) return;'],
+        ['        pointerDownState.eventListeners.onMove.flush();\n      }', '        pointerDownState.eventListeners.onMove.flush();\n      }\n      if (pointerDownState.inkMoveFlush && this.inkMoveFlush === pointerDownState.inkMoveFlush) this.inkMoveFlush = null;'],
         ['this.renderer.destroy();', 'releaseInkStaticScene(this.canvas);\n    this.renderer.destroy();'],
         ['  const editingTextElement = appState.editingTextElement;\n  const nonDeletedElements = getNonDeletedElements(elements);', '  const editingTextElement = appState.editingTextElement;\n  if (!editingTextElement && !Object.values(appState.selectedElementIds).some(Boolean)) return typeof defaultValue === "function" ? defaultValue(false) : defaultValue;\n  const nonDeletedElements = getNonDeletedElements(elements);'],
         ['clamp(roundToStep(adjustedZoomValue, ZOOM_STEP, "floor"), minZoom, maxZoom)', 'clamp(adjustedZoomValue < ZOOM_STEP ? adjustedZoomValue : roundToStep(adjustedZoomValue, ZOOM_STEP, "floor"), minZoom, maxZoom)'],
+        ['      width: props.appState.width * props.scale,\n      height: props.appState.height * props.scale,\n      ref: props.handleCanvasRef,', '      width: Math.floor(props.appState.width * props.scale),\n      height: Math.floor(props.appState.height * props.scale),\n      ref: props.handleCanvasRef,'],
+        ['      width: props.appState.width * props.scale,\n      height: props.appState.height * props.scale,\n      ref: canvasRef', '      width: Math.floor(props.appState.width * props.scale),\n      height: Math.floor(props.appState.height * props.scale),\n      ref: canvasRef'],
         ['const scaledWidth = props.appState.width * props.scale;', 'const scaledWidth = Math.floor(props.appState.width * props.scale);'],
         ['const scaledHeight = props.appState.height * props.scale;', 'const scaledHeight = Math.floor(props.appState.height * props.scale);'],
         ['const selections = [];\n      for (const element of elementsMap.values()) {', 'const selections = [];\n      const selectionCandidates = new Set(selectedElements);\n      for (const id of renderConfig.remoteSelectedElementIds.keys()) { const e = elementsMap.get(id); if (e) selectionCandidates.add(e); }\n      for (const element of selectionCandidates) {'],
@@ -330,6 +397,16 @@ function releaseInkElementCanvas(element) {
         ['container.removeChild(div2);', 'container.removeChild(div2);\n      portalHost?.remove();'],
         ['getSceneElements: this.getSceneElements,', `getSceneElements: this.getSceneElements,
         inkRevision: () => inkSceneRevision(this.scene.getElementsMapIncludingDeleted()),
+        inkChanges: () => inkHostChanges(this.scene.getElementsMapIncludingDeleted()),
+        inkSyncRaw: () => {
+          this.inkMoveFlush?.();
+          const live = this.state.newElement;
+          if (!live || live.type !== "freedraw") return;
+          const raw = stabilizedRawPoints(live);
+          if (!raw || live.customData?.inkRawPoints?.length === raw.length) return;
+          mutateElement(live, { customData: { ...live.customData, inkRawPoints: raw } }, false);
+        },
+        inkAppend: (elements) => this.scene.inkAppend(elements),
         inkQuery: (rect) => queryInkScene(this.scene, rect),
         inkErase: (patches) => this.scene.inkErase(patches),
         inkRebind: (elements, changedIds) => {
@@ -351,7 +428,7 @@ function releaseInkElementCanvas(element) {
         ['pressures: simulatePressure ? [] : [event.pressure]', 'pressures: simulatePressure ? [] : [inkSamplePressure(event)], customData: { inkFixedWidth: inkFixedPressure(event), ...(inkToolKind(event) ? { inkKind: inkToolKind(event) } : {}) }'],
         ['[...newElement2.pressures, event.pressure]', '[...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : event.pressure]'],
         ['[...newElement2.pressures, childEvent.pressure]', '[...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure]'],
-        ['        let dx = pointerCoords.x - newElement2.x;\n        let dy = pointerCoords.y - newElement2.y;\n        if (dx === points[0][0] && dy === points[0][1]) {\n          dy += 1e-4;\n          dx += 1e-4;\n        }\n        const pressures = newElement2.simulatePressure ? [] : [...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure];\n        mutateElement(newElement2, {\n          points: [...points, pointFrom(dx, dy)],\n          pressures,\n          lastCommittedPoint: pointFrom(dx, dy)\n        });', '        const rawEndDx = pointerCoords.x - newElement2.x;\n        const rawEndDy = pointerCoords.y - newElement2.y;\n        let dx = rawEndDx;\n        let dy = rawEndDy;\n        if (dx === points[0][0] && dy === points[0][1]) {\n          dy += 1e-4;\n          dx += 1e-4;\n        }\n        const pressures = newElement2.simulatePressure ? [] : [...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure];\n        const stabEnd = Number(this.excalidrawContainerRef.current?.closest?.(".ink-editor")?.dataset.stabilize || 0);\n        const prevRaw = newElement2.customData?.inkRawPoints ?? ((stabEnd === 1 || stabEnd === 2) ? [[points[0][0], points[0][1]]] : null);\n        mutateElement(newElement2, {\n          points: [...points, pointFrom(dx, dy)],\n          pressures,\n          lastCommittedPoint: pointFrom(dx, dy),\n          ...(prevRaw ? { customData: { ...newElement2.customData, inkRawPoints: [...prevRaw, [rawEndDx, rawEndDy]] } } : {})\n        });'],
+        ['        let dx = pointerCoords.x - newElement2.x;\n        let dy = pointerCoords.y - newElement2.y;\n        if (dx === points[0][0] && dy === points[0][1]) {\n          dy += 1e-4;\n          dx += 1e-4;\n        }\n        const pressures = newElement2.simulatePressure ? [] : [...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure];\n        mutateElement(newElement2, {\n          points: [...points, pointFrom(dx, dy)],\n          pressures,\n          lastCommittedPoint: pointFrom(dx, dy)\n        });', '        const rawEndDx = pointerCoords.x - newElement2.x;\n        const rawEndDy = pointerCoords.y - newElement2.y;\n        let dx = rawEndDx;\n        let dy = rawEndDy;\n        if (dx === points[0][0] && dy === points[0][1]) {\n          dy += 1e-4;\n          dx += 1e-4;\n        }\n        const pressures = newElement2.simulatePressure ? [] : [...newElement2.pressures, newElement2.customData?.inkFixedWidth ? 0.5 : childEvent.pressure];\n        const stabEnd = pointerDownState.inkStabilizeLevel;\n        const prevRaw = stabilizedRawPoints(newElement2) ?? newElement2.customData?.inkRawPoints ?? ((stabEnd === 1 || stabEnd === 2) ? [[points[0][0], points[0][1]]] : null);\n        mutateElement(newElement2, {\n          points: [...points, pointFrom(dx, dy)],\n          pressures,\n          lastCommittedPoint: pointFrom(dx, dy),\n          ...(prevRaw ? { customData: { ...newElement2.customData, inkRawPoints: [...prevRaw, [rawEndDx, rawEndDy]] } } : {})\n        });'],
         ['for (const element of elementsMap.values()) {\n          if (isElementInViewport(', 'for (const element of queryInkScene(this.scene, { x: -scrollX, y: -scrollY, width: width / zoom.value, height: height / zoom.value })) {\n          if (elementsMap.has(element.id) && isElementInViewport('],
         ['const elementsMap = getRenderableElements({\n            elements,\n            editingTextElement,\n            newElementId,\n            pendingImageElementId\n          });', 'const elementsMap = new InkRenderMap(this.scene.getNonDeletedElementsMap(), [editingTextElement?.id, newElementId, pendingImageElementId]);'],
       ];
@@ -359,6 +436,16 @@ function releaseInkElementCanvas(element) {
         if (contents.split(from).length !== 2) throw Error(`Upstream pressure patch mismatch: ${from}`);
         contents = contents.replace(from, to);
       }
+      const freeDownBinding = `      const boundElement = getHoveredElementForBinding(
+        pointerDownState.origin,
+        this.scene.getNonDeletedElements(),
+        this.scene.getNonDeletedElementsMap(),
+        this.state.zoom
+      );
+      this.setState({
+        newElement: element,`;
+      if (contents.split(freeDownBinding).length !== 2) throw Error('Upstream freehand binding scan patch mismatch');
+      contents = contents.replace(freeDownBinding, freeDownBinding.replace('const boundElement = getHoveredElementForBinding(', 'const boundElement = elementType === "freedraw" ? null : getHoveredElementForBinding('));
       const freeMove = `        if (newElement2.type === "freedraw") {
           const points = newElement2.points;
           const dx = pointerCoords.x - newElement2.x;
@@ -384,7 +471,7 @@ function releaseInkElementCanvas(element) {
       contents = contents.replace(freeMove, `        if (newElement2.type === "freedraw") {
           const points = [...newElement2.points];
           const pressures = newElement2.simulatePressure ? newElement2.pressures : [...newElement2.pressures];
-          const stabilize = Number(this.excalidrawContainerRef.current?.closest?.(".ink-editor")?.dataset.stabilize || 0);
+          const stabilize = pointerDownState.inkStabilizeLevel;
           const stabilizeLevel = stabilize === 1 || stabilize === 2 ? stabilize : 0;
           for (const sample of inkPointerSamples(event)) {
             const coords = viewportCoordsToSceneCoords(sample, this.state);
@@ -396,10 +483,8 @@ function releaseInkElementCanvas(element) {
             points.push(pointFrom(dx, dy));
             if (!newElement2.simulatePressure) pressures.push(pressure);
           }
-          const rawPoints = stabilizeLevel > 0 ? stabilizedRawPoints(newElement2) : undefined;
-          const rawChanged = !!(rawPoints && rawPoints.length !== (newElement2.customData?.inkRawPoints?.length ?? 0));
-          if (points.length !== newElement2.points.length || rawChanged) {
-            mutateElement(newElement2, {points, pressures, ...(rawPoints ? { customData: { ...newElement2.customData, inkRawPoints: rawPoints } } : {})}, false);
+          if (points.length !== newElement2.points.length) {
+            mutateElement(newElement2, {points, pressures}, false);
             this.setState({newElement: newElement2});
           }
         } else if (isLinearElement(newElement2)) {`);

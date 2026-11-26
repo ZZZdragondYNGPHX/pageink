@@ -30,7 +30,15 @@ export function Popover({ anchor, onClose, label, align = 'start', className = '
   }, [anchor, layer, align]);
   useLayoutEffect(() => {
     const pop = ref.current, doc = anchor?.ownerDocument ?? layer?.ownerDocument ?? activeDocument, win = doc.defaultView!;
-    const previous = anchor ?? doc.activeElement as HTMLElement | null;
+    const resolvePrevious = (): HTMLElement | null => {
+      if (anchor?.getAttribute('aria-hidden') === 'true') {
+        const more = layer?.closest('.workspace-leaf')?.querySelector<HTMLElement>('.view-header .view-actions > :last-child');
+        if (more && more.getClientRects().length > 0) return more;
+        return layer;
+      }
+      return anchor ?? doc.activeElement as HTMLElement | null;
+    };
+    const previous = resolvePrevious();
     let restoreFocus = true;
     const focusables = () => pop ? [...pop.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter(el => el.getClientRects().length > 0 && el.tabIndex >= 0) : [];
     const frame = focus ? window.requestAnimationFrame(() => pop?.querySelector<HTMLElement>('[data-autofocus], [aria-checked="true"], input:not(:disabled):not([tabindex="-1"]), button:not(:disabled):not([tabindex="-1"]), [tabindex="0"]')?.focus({ preventScroll: true })) : 0;

@@ -8,7 +8,31 @@ import { InkIcon } from './InkIcon';
 
 const RASTER_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2];
 const rasterScale = (zoom: number) => { const wanted = Math.min(2, zoom * devicePixelRatio); return RASTER_STEPS.find(step => step >= wanted - 0.01) ?? 2; };
-const intersects = (a: Rect, b: Rect) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+/** Binary-search the contiguous vertical range of stacked pages intersecting `wide`. */
+function visiblePageKey(placements: readonly PagePlacement[], wide: Rect): string {
+  const n = placements.length;
+  if (!n) return '';
+  const top = wide.y, bottom = wide.y + wide.height;
+  // First page with paper.y + paper.height > top
+  let lo = 0, hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const p = placements[mid].paper;
+    if (p.y + p.height <= top) lo = mid + 1; else hi = mid;
+  }
+  const first = lo;
+  if (first >= n || placements[first].paper.y >= bottom) return '';
+  // Collect only pages in the vertical span that also intersect horizontally.
+  let out = '';
+  for (let i = first; i < n; i++) {
+    const p = placements[i].paper;
+    if (p.y >= bottom) break;
+    if (p.x < wide.x + wide.width && p.x + p.width > wide.x) {
+      out = out ? `${out},${i}` : `${i}`;
+    }
+  }
+  return out;
+}
 
 /** Paper, templates and PDF pages behind the transparent kernel canvas, sharing its transform. */
 export function PaperLayer({ layout, views, pdf, sourceIssue }: { layout: PageLayout; views: ViewStore; pdf?: PdfService; sourceIssue?: string }) {
@@ -21,7 +45,7 @@ export function PaperLayer({ layout, views, pdf, sourceIssue }: { layout: PageLa
   const visible = useView(views, v => {
     const area = sceneViewport(v), margin = area.height;
     const wide = { x: area.x - margin, y: area.y - margin, width: area.width + margin * 2, height: area.height + margin * 2 };
-    return layout.placements.filter(p => intersects(p.paper, wide)).map(p => p.index).join(',');
+    return visiblePageKey(layout.placements, wide);
   });
   const scale = useSettled(views, v => rasterScale(v.zoom), 180);
   const shown = useMemo(() => visible ? visible.split(',').map(i => layout.placements[Number(i)]) : [], [visible, layout]);
@@ -29,13 +53,13 @@ export function PaperLayer({ layout, views, pdf, sourceIssue }: { layout: PageLa
     <Paper key={placement.page.id} placement={placement} pdf={pdf} scale={scale} views={views} sourceIssue={sourceIssue}/>)}</div>;
 }
 
-function Paper({ placement, pdf, scale, views, sourceIssue }: { placement: PagePlacement; pdf?: PdfService; scale: number; views: ViewStore; sourceIssue?: string }) {
+const Paper = React.memo(function Paper({ placement, pdf, scale, views, sourceIssue }: { placement: PagePlacement; pdf?: PdfService; scale: number; views: ViewStore; sourceIssue?: string }) {
   const { page, paper } = placement;
   return <div className={`ink-paper${page.pdfPage ? ' is-pdf' : ''}`} style={{ left: paper.x, top: paper.y, width: paper.width, height: paper.height, ...(page.pdfPage ? {} : paperStyle(page.template)) }}>
     {page.pdfPage && (pdf ? <PdfRaster page={page} placement={placement} pdf={pdf} scale={scale} views={views}/>
       : <div className="ink-pdf-missing" style={{ left: page.margins.left, top: page.margins.top, width: page.width, height: page.height }}>{sourceIssue ? '原 PDF 暂不可用' : '正在载入 PDF…'}</div>)}
   </div>;
-}
+});
 
 function PdfRaster({ page, placement, pdf, scale, views }: { page: Page; placement: PagePlacement; pdf: PdfService; scale: number; views: ViewStore }) {
   const base = useRef<HTMLCanvasElement>(null), detail = useRef<HTMLCanvasElement>(null);

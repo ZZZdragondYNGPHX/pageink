@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import type { Page, Region } from './model';
 import { pageRect } from './model';
 import type { Session } from './session';
@@ -47,6 +47,16 @@ export function PageList({ session, pdf, current, onSelect, onMenu, onAdd }: {
   session: Session; pdf?: PdfService; current?: string; onSelect: (id: string) => void; onMenu: (id: string, anchor: HTMLElement) => void; onAdd: () => void;
 }) {
   const list = useRef<HTMLDivElement>(null);
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    let lastRevs = session.manifest.pages.map(p => session.revision(p.id)).join(',');
+    const onSession = () => {
+      const next = session.manifest.pages.map(p => session.revision(p.id)).join(',');
+      if (next !== lastRevs) { lastRevs = next; bump(); }
+    };
+    session.listeners.add(onSession);
+    return () => { session.listeners.delete(onSession); };
+  }, [session]);
   useEffect(() => {
     const item = list.current?.querySelector<HTMLElement>(`[data-page="${current}"]`);
     if (item && list.current) { const a = item.getBoundingClientRect(), b = list.current.getBoundingClientRect(); if (a.top < b.top || a.bottom > b.bottom) item.scrollIntoView({ block: 'nearest' }); }

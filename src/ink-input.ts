@@ -78,3 +78,18 @@ export function stabilizedRawPoints(stroke: object): readonly [number, number][]
   const entry = strokeStabilizers.get(stroke);
   return entry ? entry.raw.map(([x, y]) => [x, y] as [number, number]) : undefined;
 }
+
+/** The same closed quadratic outline as the kernel SVG path, without serialization. */
+export function strokeOutlineToPath2D(outlinePoints: readonly (readonly [number, number])[]): Path2D {
+  const path = new Path2D();
+  if (!outlinePoints.length) return path;
+  const first = outlinePoints[0];
+  path.moveTo(first[0], first[1]);
+  for (let i = 0; i < outlinePoints.length; i++) {
+    const point = outlinePoints[i], next = outlinePoints[(i + 1) % outlinePoints.length];
+    path.quadraticCurveTo(point[0], point[1], (point[0] + next[0]) / 2, (point[1] + next[1]) / 2);
+  }
+  path.lineTo(first[0], first[1]);
+  path.closePath();
+  return path;
+}

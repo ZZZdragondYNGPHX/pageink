@@ -1,14 +1,16 @@
-/* PageInk — Apple Atelier Paper (Scheme C) & Spatial Frosted-Glass HUD (Scheme A). Built on Obsidian theme variables. */
+/* PageInk — Obsidian-Native Harmony UI & Floating Pencil Dock. Built directly on Obsidian theme tokens. */
 .ink-view.ink-view { padding: 0; overflow: hidden; }
 .ink-react-root { width: 100%; height: 100%; }
+.ink-host-action.ink-host-action-hidden { display: none; }
+.ink-host-action.is-active { color: var(--interactive-accent); background: var(--background-modifier-hover); }
 .ink-workspace, .ink-host-modal, .ink-embed {
   --ink-accent: var(--interactive-accent, #6554c0);
   --ink-accent-soft: color-mix(in srgb, var(--ink-accent) 14%, transparent);
   --ink-paper: #fcfbf7;
-  --ink-bg: color-mix(in srgb, var(--background-primary, #faf8f4) 94%, #faf6ef);
-  --ink-bg-alt: color-mix(in srgb, var(--background-secondary, #f2efe9) 92%, #ede8df);
-  --ink-line: color-mix(in srgb, var(--background-modifier-border, #e2ddd4) 88%, #dcd5c9);
-  --ink-hover: var(--background-modifier-hover, rgb(28 24 18 / .055));
+  --ink-bg: var(--background-primary, #ffffff);
+  --ink-bg-alt: var(--background-secondary, #f5f5f5);
+  --ink-line: var(--background-modifier-border, #e0e0e0);
+  --ink-hover: var(--background-modifier-hover, rgb(0 0 0 / .06));
   --ink-text: var(--text-normal, #1e1c19);
   --ink-muted: var(--text-muted, #6f6a61);
   --ink-faint: var(--text-faint, #9e988e);
@@ -23,33 +25,33 @@
   --ink-toast-success-icon: #6fd39a;
   --ink-toast-error-icon: #ff8f8f;
   --ink-toast-action-color: #bad5c7;
-  --ink-radius: 10px;
+  --ink-radius: var(--radius-m, 10px);
   --ink-control: 34px;
-  --ink-desk: color-mix(in srgb, var(--background-secondary, #ebe7df) 88%, #e6e0d5);
-  --ink-canvas: color-mix(in srgb, var(--background-primary, #f6f4ef) 94%, #f4f0e8);
-  --ink-glass: color-mix(in srgb, var(--ink-bg) 78%, transparent);
-  --ink-glass-heavy: color-mix(in srgb, var(--ink-bg) 86%, transparent);
-  --ink-glass-border: color-mix(in srgb, var(--ink-text) 9%, rgb(255 255 255 / .55));
-  --ink-shadow: 0 2px 6px rgb(28 24 18 / .05), 0 8px 22px -4px rgb(28 24 18 / .08);
-  --ink-shadow-lg: 0 4px 12px rgb(28 24 18 / .08), 0 20px 48px -8px rgb(28 24 18 / .16);
-  --ink-shadow-hud: 0 10px 32px -6px rgb(28 24 18 / .12), 0 2px 8px -1px rgb(28 24 18 / .06), inset 0 1px 0 0 rgb(255 255 255 / .65);
-  --ink-shadow-paper: 0 1px 2px rgb(28 24 18 / .07), 0 6px 20px -4px rgb(28 24 18 / .09), 0 18px 42px -8px rgb(28 24 18 / .08), 0 0 0 .5px rgb(28 24 18 / .09);
+  --ink-desk: var(--background-secondary-alt, var(--background-secondary, #f0f0f0));
+  --ink-canvas: var(--background-primary, #ffffff);
+  --ink-glass: color-mix(in srgb, var(--background-primary, #ffffff) 84%, transparent);
+  --ink-glass-heavy: color-mix(in srgb, var(--background-primary, #ffffff) 92%, transparent);
+  --ink-glass-border: var(--background-modifier-border, rgb(0 0 0 / .1));
+  --ink-shadow: 0 2px 6px rgb(0 0 0 / .05), 0 8px 20px -4px rgb(0 0 0 / .08);
+  --ink-shadow-lg: 0 4px 12px rgb(0 0 0 / .08), 0 18px 42px -8px rgb(0 0 0 / .16);
+  --ink-shadow-hud: 0 6px 22px -6px rgb(0 0 0 / .11), 0 1px 4px rgb(0 0 0 / .06);
+  --ink-shadow-paper: 0 1px 2px rgb(0 0 0 / .06), 0 6px 20px -4px rgb(0 0 0 / .08), 0 0 0 .5px rgb(0 0 0 / .08);
 }
 .theme-dark .ink-workspace, .theme-dark .ink-host-modal, .theme-dark .ink-native-tools {
   --ink-paper: #fcfbf7;
-  --ink-bg: color-mix(in srgb, var(--background-primary, #1b1a18) 94%, #181715);
-  --ink-bg-alt: color-mix(in srgb, var(--background-secondary, #23211e) 92%, #201e1b);
-  --ink-line: color-mix(in srgb, var(--background-modifier-border, #33302b) 90%, #2c2925);
-  --ink-desk: color-mix(in srgb, var(--background-secondary, #161514) 92%, #151412);
-  --ink-canvas: color-mix(in srgb, var(--background-primary, #1b1a18) 94%, #191816);
-  --ink-glass: color-mix(in srgb, var(--background-secondary, #22201d) 78%, transparent);
-  --ink-glass-heavy: color-mix(in srgb, var(--background-secondary, #262420) 86%, transparent);
-  --ink-glass-border: rgb(255 250 240 / .1);
-  --ink-shadow: 0 2px 6px rgb(0 0 0 / .42), 0 8px 22px rgb(0 0 0 / .36);
-  --ink-shadow-lg: 0 4px 12px rgb(0 0 0 / .5), 0 22px 52px rgb(0 0 0 / .55);
-  --ink-shadow-hud: 0 14px 38px -6px rgb(0 0 0 / .55), 0 3px 10px rgb(0 0 0 / .38), inset 0 1px 0 0 rgb(255 250 240 / .08);
-  --ink-shadow-paper: 0 0 0 .5px rgb(0 0 0 / .55), 0 10px 30px rgb(0 0 0 / .52);
-  --ink-toast-bg: rgb(46 43 39 / .94);
+  --ink-bg: var(--background-primary, #1e1e1e);
+  --ink-bg-alt: var(--background-secondary, #262626);
+  --ink-line: var(--background-modifier-border, #363636);
+  --ink-desk: var(--background-secondary-alt, var(--background-secondary, #161616));
+  --ink-canvas: var(--background-primary, #1e1e1e);
+  --ink-glass: color-mix(in srgb, var(--background-secondary, #242424) 84%, transparent);
+  --ink-glass-heavy: color-mix(in srgb, var(--background-secondary, #262626) 92%, transparent);
+  --ink-glass-border: var(--background-modifier-border, rgb(255 255 255 / .1));
+  --ink-shadow: 0 2px 6px rgb(0 0 0 / .38), 0 8px 20px rgb(0 0 0 / .32);
+  --ink-shadow-lg: 0 4px 12px rgb(0 0 0 / .46), 0 20px 48px rgb(0 0 0 / .5);
+  --ink-shadow-hud: 0 10px 28px -6px rgb(0 0 0 / .48), 0 2px 8px rgb(0 0 0 / .32);
+  --ink-shadow-paper: 0 0 0 .5px rgb(0 0 0 / .55), 0 10px 28px rgb(0 0 0 / .46);
+  --ink-toast-bg: rgb(42 42 42 / .94);
   --ink-success: var(--color-green, #4cc38a);
   --ink-warning: var(--color-orange, #e5a33b);
 }
@@ -57,6 +59,7 @@
 
 .ink-workspace { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 320px; overflow: hidden; container: ink / inline-size;
   background: var(--ink-desk); color: var(--ink-text); font-family: var(--font-interface, -apple-system, BlinkMacSystemFont, system-ui, sans-serif); font-size: 13px; line-height: 1.4; -webkit-user-select: none; user-select: none; }
+.ink-workspace:focus { outline: none; }
 .ink-workspace.ink-mode-canvas { background: var(--ink-canvas); }
 .ink-workspace.ink-library { background: var(--ink-bg); }
 .ink-workspace *, .ink-workspace *::before, .ink-workspace *::after { box-sizing: border-box; }
@@ -176,26 +179,25 @@
   .ink-library-note-meta { flex-wrap: wrap; }
 }
 
-/* ---------- Scheme A Floating Frosted-Glass Islands & Pencil Kit Dock ---------- */
+/* ---------- Floating Quiet Status & Single Pencil Dock ---------- */
 
-.ink-topbar { position: absolute; inset: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; pointer-events: none;
-  padding: 8px 12px 2px; border-bottom: 0; background: transparent; color: var(--ink-text); z-index: 20; }
-.ink-topbar-start, .ink-topbar-end {
-  pointer-events: auto;
-  display: inline-flex; align-items: center; gap: 3px; min-width: 0; flex: none;
+.ink-top-anchor { position: absolute; top: 4px; right: 12px; width: 1px; height: 1px; pointer-events: none; }
+.ink-floating-status {
+  position: absolute; top: 10px; right: 12px; z-index: 22;
+  display: inline-flex; align-items: center; gap: 4px;
   padding: 3px 6px; border: 1px solid var(--ink-glass-border); border-radius: 999px;
-  background: var(--ink-glass); -webkit-backdrop-filter: saturate(170%) blur(14px); backdrop-filter: saturate(170%) blur(14px);
-  box-shadow: var(--ink-shadow-hud);
+  background: var(--ink-glass-heavy); -webkit-backdrop-filter: saturate(170%) blur(14px); backdrop-filter: saturate(170%) blur(14px);
+  box-shadow: var(--ink-shadow-hud); color: var(--ink-text);
 }
-.ink-topbar-start { max-width: calc(100% - 140px); }
-.ink-topbar-start > .ink-icon-button, .ink-topbar-end > .ink-icon-button { flex: none; border-radius: 999px; }
-.ink-topbar-end .ink-labelled > span { display: none; }
-.ink-workspace .ink-topbar-end .ink-labelled { width: var(--ink-control); padding: 0; border-radius: 999px; }
+.ink-workspace .ink-floating-status .ink-exit-focus { height: 28px; border-radius: 999px; font-size: 12px; }
+@container ink (max-width: 900px) {
+  .ink-floating-status { top: auto; bottom: max(16px, env(safe-area-inset-bottom)); right: 16px; }
+}
 
 .ink-writing-bar {
-  position: absolute; left: 0; right: 0; top: calc(var(--ink-control) + 28px); display: flex; align-items: center; justify-content: center; gap: 8px;
+  position: absolute; left: 0; right: 0; top: 10px; display: flex; align-items: center; justify-content: center; gap: 6px;
   align-self: center; width: fit-content; max-width: calc(100% - 24px); min-width: 0;
-  margin: 2px auto 6px; padding: 4px 10px;
+  margin: 0 auto; padding: 4px 10px;
   border: 1px solid var(--ink-glass-border); border-radius: 999px;
   background: var(--ink-glass-heavy); -webkit-backdrop-filter: saturate(180%) blur(16px); backdrop-filter: saturate(180%) blur(16px);
   box-shadow: var(--ink-shadow-hud); color: var(--ink-text); z-index: 18;
@@ -207,7 +209,7 @@
 .ink-writing-bar[hidden] { display: none; }
 .ink-writing-bar.is-dragging {
   cursor: grabbing;
-  box-shadow: 0 22px 54px -8px rgb(28 24 18 / .26), 0 6px 18px rgb(28 24 18 / .12), 0 0 0 1.5px color-mix(in srgb, var(--ink-accent) 45%, transparent);
+  box-shadow: 0 22px 54px -8px rgb(0 0 0 / .24), 0 6px 18px rgb(0 0 0 / .12), 0 0 0 1.5px color-mix(in srgb, var(--ink-accent) 45%, transparent);
   transition: none;
 }
 .ink-workspace .ink-dock-grip {
@@ -217,19 +219,27 @@
 .ink-workspace .ink-dock-grip:active { cursor: grabbing; }
 .ink-dock-grip .ink-icon { width: 14px; height: 14px; }
 /* The full palette follows its edge; only the single handle survives minimization. */
-.ink-dock-slot { height: 0; }
+.ink-dock-slot { width: 0; height: 0; flex: none; }
 .ink-dock-slot[hidden], .ink-dock-content[hidden] { display: none; }
 .ink-dock-content { display: flex; align-items: center; gap: inherit; flex: 1; min-width: 0; min-height: 0; }
 .ink-dock-content > .ink-icon-button { flex: none; border-radius: 999px; }
+.ink-dock-end { display: flex; align-items: center; flex: none; gap: 2px; padding-left: 6px; border-left: 1px solid var(--ink-line); }
+.ink-dock-end > .ink-icon-button { flex: none; border-radius: 999px; }
 .ink-writing-bar.is-floating-dock { max-height: calc(100% - 16px); }
 .ink-writing-bar:is([data-edge=left], [data-edge=right]):not(.is-collapsed) {
-  flex-direction: column; width: 64px; max-height: calc(100% - 126px); padding: 8px 4px; border-radius: 24px;
+  flex-direction: column; width: 64px; max-height: calc(100% - 84px); padding: 8px 4px; border-radius: 24px;
 }
 .ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-dock-content {
   flex-direction: column; width: 100%; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
 }
-.ink-writing-bar:is([data-edge=left], [data-edge=right]) :is(.ink-tool-shelf, .ink-tools, .ink-tool-group, .ink-quick-style, .ink-pen-slots, .ink-swatches, .ink-widths) {
+.ink-writing-bar:is([data-edge=left], [data-edge=right]) :is(.ink-history-tools, .ink-dock-end, .ink-tool-shelf, .ink-tools, .ink-tool-group, .ink-quick-style, .ink-pen-slots, .ink-swatches, .ink-widths) {
   flex-direction: column; flex: none;
+}
+.ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-history-tools {
+  border-right: 0; margin: 0; padding: 0 0 4px; border-bottom: 1px solid var(--ink-line);
+}
+.ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-dock-end {
+  border-left: 0; padding: 4px 0 0; border-top: 1px solid var(--ink-line);
 }
 .ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-pen-slots {
   border-right: 0; padding-right: 0; border-bottom: 1px solid var(--ink-line); padding-bottom: 4px;
@@ -240,6 +250,8 @@
 }
 .ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-tool-shelf { gap: 4px; }
 .ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-dock-grip { width: 32px; height: 18px; }
+.ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-quick-style > .ink-segmented { flex-direction: column; width: 100%; }
+.ink-writing-bar:is([data-edge=left], [data-edge=right]) .ink-quick-style > .ink-segmented button { width: 100%; padding: 0 2px; font-size: 11px; }
 .ink-writing-bar.is-collapsed {
   width: 48px; height: 48px; min-width: 48px; padding: 3px; border-radius: 50%; gap: 0;
 }
@@ -248,7 +260,7 @@
 }
 .ink-writing-bar.is-collapsed .ink-dock-grip .ink-icon { width: 21px; height: 21px; }
 
-.ink-history-tools { display: flex; flex: none; padding-left: 3px; margin-left: 2px; border-left: 1px solid var(--ink-line); gap: 2px; }
+.ink-history-tools { display: flex; flex: none; padding-right: 6px; border-right: 1px solid var(--ink-line); gap: 2px; }
 .ink-history-tools .ink-icon-button { border-radius: 999px; }
 .ink-tool-shelf { display: flex; flex: 1; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 8px; min-width: 0; }
 .ink-writing-bar > .ink-icon-button { flex: none; border-radius: 999px; }
@@ -264,9 +276,8 @@
 .ink-workspace .ink-mixed-row-actions button { font-size: 12px; padding: 0 8px; }
 .ink-mixed-selection { padding: 8px 12px; color: var(--ink-accent); background: var(--ink-accent-soft); font-size: 12px; border-radius: 8px; }
 .ink-mixed-empty { padding: 12px; color: var(--ink-muted); }
-.ink-tools { display: flex; align-items: center; gap: 8px; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+.ink-tools { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 2px; }
 .ink-tools::-webkit-scrollbar { display: none; }
-.ink-workspace .ink-tools-more { display: none; flex: none; border-radius: 999px; }
 .ink-tool-group { display: flex; flex: none; gap: 2px; }
 .ink-tool-group + .ink-tool-group { padding-left: 8px; border-left: 1px solid var(--ink-line); }
 .ink-workspace .ink-tool { position: relative; flex: none; width: 38px; min-width: 38px; height: 36px; border-radius: 999px; color: var(--ink-muted); }
@@ -309,8 +320,8 @@
 .ink-workspace input[type="checkbox"].ink-switch:checked + .ink-switch-track { background: var(--ink-accent); }
 .ink-workspace input[type="checkbox"].ink-switch:checked + .ink-switch-track .ink-switch-thumb { transform: translateX(14px); }
 .ink-workspace input[type="checkbox"].ink-switch:focus-visible + .ink-switch-track { outline: 2px solid var(--ink-accent); outline-offset: 2px; }
-.ink-workspace .ink-topbar button:active:not(:disabled), .ink-workspace .ink-writing-bar button:active:not(:disabled) { background: var(--ink-accent-soft); }
-.ink-topbar :focus-visible, .ink-writing-bar .ink-tools :focus-visible, .ink-history-tools :focus-visible { outline-offset: -2px; }
+.ink-workspace .ink-floating-status button:active:not(:disabled), .ink-workspace .ink-writing-bar button:active:not(:disabled) { background: var(--ink-accent-soft); }
+.ink-floating-status :focus-visible, .ink-writing-bar .ink-tools :focus-visible, .ink-history-tools :focus-visible { outline-offset: -2px; }
 .ink-workspace .ink-style-trigger { height: 34px; min-width: 38px; padding: 0 8px; gap: 4px; border-radius: 999px; background: color-mix(in srgb, var(--ink-text) 6%, transparent); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ink-workspace .ink-style-trigger.has-label { padding: 0 8px 0 9px; gap: 5px; }
 .ink-style-trigger .ink-style-label { display: inline; font-size: 11.5px; font-weight: 500; color: var(--ink-text); }
@@ -319,51 +330,35 @@
 .ink-style-dot { display: block; width: 16px; height: 16px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / .8), 0 0 0 1px rgb(0 0 0 / .16); }
 .ink-tool-popover { width: 300px; padding: 12px; }
 .ink-toolbox-popover { width: 312px; }
-.ink-toolbox-switches { display: flex; flex-direction: column; gap: 8px; padding: 6px 10px 4px; }
 .ink-options { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 8px; padding: 4px 10px 8px; }
 .ink-options > .ink-divider { flex-basis: 100%; width: 100%; height: 1px; margin: 0; }
 .ink-options .ink-hint { white-space: normal; padding: 0; }
 .ink-workspace .ink-labelled[aria-pressed=true], .ink-workspace .ink-toggle[aria-pressed=true], .ink-workspace .ink-icon-button[aria-expanded=true] { background: var(--ink-accent-soft); color: var(--ink-accent); }
 .ink-workspace .ink-toggle { color: var(--ink-muted); font-size: 12px; }
 .ink-workspace .ink-toggle .ink-icon { width: 18px; height: 18px; }
-.ink-save-state { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; color: var(--ink-muted); font-size: 11px; white-space: nowrap; }
-.ink-save-state > .ink-icon { width: 13px; height: 13px; color: var(--ink-success); }
-.ink-save-state.is-pending > .ink-icon { color: var(--ink-warning); }
+.ink-save-state { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; color: var(--ink-muted); font-size: 11.5px; white-space: nowrap; }
 .ink-workspace .ink-save-failed { color: var(--ink-danger); font-size: 12px; border-radius: 999px; }
 .ink-workspace .ink-save-failed .ink-icon { width: 16px; height: 16px; }
 @container ink (max-width: 1000px) {
-  .ink-writing-bar { gap: 6px; border-radius: 22px; }
-  .ink-tool-shelf { gap: 6px; }
+  .ink-writing-bar { gap: 4px; border-radius: 22px; }
+  .ink-tool-shelf { gap: 4px; }
 }
 @container ink (max-width: 700px) {
-  .ink-topbar { gap: 6px; padding: 6px 8px 2px; }
-  .ink-topbar-start { gap: 2px; max-width: calc(100% - 118px); }
-  .ink-save-state { min-width: 0; padding: 0 4px; }
-  .ink-save-label { display: none; }
-  .ink-topbar-end .ink-labelled span { display: none; }
-  .ink-workspace .ink-topbar-end .ink-labelled { width: var(--ink-control); padding: 0; }
   .ink-writing-bar { width: calc(100% - 16px); max-width: calc(100% - 16px); padding: 4px 8px; gap: 4px; border-radius: 18px; justify-content: flex-start; }
   .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) { flex-wrap: wrap; row-gap: 4px; }
   .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) > .ink-dock-content:not([hidden]) { display: contents; }
   .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-tool-shelf { display: contents; }
   .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-dock-grip { order: 1; }
-  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-tools { order: 2; flex: 1 1 0; min-width: 0; gap: 4px; }
-  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-tools-more { order: 3; }
-  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-toolbox-trigger { order: 4; }
-  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) > .ink-dock-content > .ink-icon-button:not(.ink-toolbox-trigger) { order: 5; }
+  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-history-tools { order: 2; padding-right: 4px; gap: 0; }
+  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-tools { order: 3; flex: 1 1 0; min-width: 0; gap: 2px; }
+  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-dock-end { order: 4; padding-left: 4px; gap: 0; }
   .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-quick-style { order: 10; flex: 1 0 100%; width: 100%; border-left: 0; border-top: 1px solid var(--ink-line); padding: 4px 2px 0; justify-content: center; flex-wrap: wrap; }
-  .ink-history-tools { padding-left: 2px; }
-  .ink-workspace .ink-tools-more { display: inline-flex; }
   .ink-tool-group { gap: 0; }
-  .ink-tool-group + .ink-tool-group { padding-left: 6px; }
 }
 @container ink (max-width: 430px) {
-  .ink-topbar { flex-wrap: wrap; gap: 4px; padding-inline: 6px; }
-  .ink-topbar-start, .ink-topbar-end { padding-inline: 3px; gap: 0; }
-  .ink-topbar-end { margin-left: auto; gap: 0; }
-  .ink-topbar .ink-history-tools { margin-left: 0; padding-left: 0; gap: 0; border-left: 0; }
-  .ink-topbar-end > button[aria-label="搜索"] { display: none; }
-  .ink-topbar-start > .ink-save-state.is-saved, .ink-topbar-start > .ink-save-state.is-pending { display: none; }
+  .ink-writing-bar { padding: 4px 6px; gap: 2px; }
+  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-history-tools { padding-right: 2px; }
+  .ink-writing-bar:not(.is-collapsed):not([data-edge=left]):not([data-edge=right]) .ink-dock-end { padding-left: 2px; }
   .ink-quick-style { gap: 2px; padding: 4px 0 0; }
   .ink-quick-colors { padding-left: 4px; }
   .ink-workspace .ink-quick-style .ink-style-trigger { padding: 0 6px; }
@@ -392,7 +387,7 @@
 .ink-workspace .ink-segmented .ink-icon { width: 17px; height: 17px; }
 
 /* ---------- banners ---------- */
-.ink-banner { display: flex; align-items: center; gap: 10px; flex: none; margin: 2px 12px 6px; padding: 8px 14px; border: 1px solid var(--ink-glass-border); border-radius: 14px; background: color-mix(in srgb, var(--ink-warning) 14%, var(--ink-bg)); box-shadow: var(--ink-shadow); font-size: 12.5px; line-height: 1.5; -webkit-user-select: text; user-select: text; }
+.ink-banner { position: relative; z-index: 25; display: flex; align-items: center; gap: 10px; flex: none; margin: 8px 12px 4px; padding: 8px 14px; border: 1px solid var(--ink-glass-border); border-radius: 14px; background: color-mix(in srgb, var(--ink-warning) 14%, var(--ink-bg)); box-shadow: var(--ink-shadow); font-size: 12.5px; line-height: 1.5; -webkit-user-select: text; user-select: text; }
 .ink-banner.is-warning { background: color-mix(in srgb, var(--ink-danger) 10%, var(--ink-bg)); }
 .ink-banner > .ink-icon { width: 18px; height: 18px; color: var(--ink-warning); }
 .ink-banner.is-warning > .ink-icon { color: var(--ink-danger); }
@@ -404,8 +399,8 @@
 .ink-body { position: relative; display: flex; flex: 1; min-height: 0; }
 .ink-surfaces { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .ink-sidebar {
-  position: absolute; top: calc(var(--ink-control) + 28px); left: 16px; display: flex; flex-direction: column;
-  width: 224px; max-width: calc(100% - 32px); max-height: calc(100% - var(--ink-control) - 92px); min-height: 0;
+  position: absolute; top: 10px; left: 16px; display: flex; flex-direction: column;
+  width: 224px; max-width: calc(100% - 32px); max-height: calc(100% - 76px); min-height: 0;
   border: 1px solid var(--ink-glass-border); border-radius: 18px;
   background: var(--ink-glass); -webkit-backdrop-filter: saturate(170%) blur(14px); backdrop-filter: saturate(170%) blur(14px);
   box-shadow: var(--ink-shadow-hud); overflow: hidden; z-index: 12;
@@ -647,7 +642,7 @@
 .ink-scratch-resize { position: absolute; left: 0; bottom: 0; z-index: 8; width: 32px; height: 32px; cursor: nesw-resize; touch-action: none; }
 .ink-scratch-resize::after { content: ''; position: absolute; left: 6px; bottom: 6px; width: 9px; height: 9px; border-left: 2px solid var(--ink-faint); border-bottom: 2px solid var(--ink-faint); border-radius: 0 0 0 3px; }
 
-.ink-scratch.is-docked { position: relative; inset: auto; z-index: 10; flex: 0 0 36%; width: auto; height: auto; min-width: 280px; max-width: 440px; margin: calc(var(--ink-control) * 2 + 52px) 12px 12px 0; border-radius: 18px; box-shadow: var(--ink-shadow-hud); border: 1px solid var(--ink-glass-border); }
+.ink-scratch.is-docked { position: relative; inset: auto; z-index: 10; flex: 0 0 36%; width: auto; height: auto; min-width: 280px; max-width: 440px; margin: calc(var(--ink-control) + 26px) 12px 12px 0; border-radius: 18px; box-shadow: var(--ink-shadow-hud); border: 1px solid var(--ink-glass-border); }
 .ink-scratch.is-docked .ink-scratch-bar { cursor: default; }
 @container ink (max-width: 900px) {
   .has-docked-scratch .ink-surfaces { flex-direction: column; }
@@ -738,8 +733,6 @@
 .ink-cover { position: absolute; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; gap: 10px; background: color-mix(in srgb, var(--ink-bg) 92%, transparent); }
 
 /* ---------- focus and reading ---------- */
-.ink-workspace.is-focus .ink-save-state { display: none; }
-.ink-workspace.is-reading .ink-topbar { border-bottom-color: transparent; }
 .ink-workspace.is-reading .ink-canvas-area { background: var(--ink-desk); }
 
 /* ---------- host surfaces (modals, embeds, view states) ---------- */

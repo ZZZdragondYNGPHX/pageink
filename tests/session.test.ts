@@ -109,3 +109,72 @@ test('a stroke crossing the fifteen-minute limit waits for both body and scratch
   assert.equal(commits[0].get('p/000000')?.[0].id, 'a');
   assert.equal(commits[0].get('scratch/000000')?.[0].id, 's');
 });
+
+test('freehand snapshots share frozen raw samples while isolating editable custom data', () => {
+  const raw = [[0, 0], [12, -3]] as [number, number][], rawPressures = [.2, .8];
+  const element = { type: 'freedraw', points: [[0, 0], [10, -2]], pressures: [.2, .8], customData: { inkRawPoints: raw, inkRawPressures: rawPressures, nested: { label: 'original' } } } as unknown as Element;
+  const first = snapshotElement(element), second = snapshotElement(element);
+  assert.equal(first.customData!.inkRawPoints, raw);
+  assert.equal(second.customData!.inkRawPoints, raw);
+  assert.equal(first.customData!.inkRawPressures, rawPressures);
+  assert.ok(Object.isFrozen(raw)); assert.ok(Object.isFrozen(raw[1])); assert.ok(Object.isFrozen(rawPressures));
+  assert.throws(() => { raw[1][0] = 99; }, TypeError);
+  assert.throws(() => { rawPressures[0] = 1; }, TypeError);
+  (element.customData!.nested as { label: string }).label = 'edited';
+  assert.deepEqual(first.customData!.nested, { label: 'original' });
+  assert.notEqual(first.customData, second.customData);
+  assert.equal(snapshotElement({ ...element, customData: undefined }).customData, undefined);
+  const shallowFrozen = Object.freeze([[1, 2] as [number, number]]);
+  snapshotElement({ ...element, customData: { inkRawPoints: shallowFrozen } });
+  assert.ok(Object.isFrozen(shallowFrozen[0]));
+});
+
+test('session append reuses committed prefix and snapshots only new objects across undo and reorder', () => {
+  const session = new Session(new DocumentStore({} as FileIO, 'x', newManifest('Test', 'pages')));
+  const a = { id: 'a', version: 1, x: 1, type: 'rectangle' } as Element;
+  session.change('p', [a]);
+  const previous = session.surfaces.get('p')!;
+  const b = { ...a, id: 'b', x: 2 };
+  session.change('p', [...previous, b]);
+  const after = session.surfaces.get('p')!;
+  assert.equal(after[0], previous[0]); assert.notEqual(after[1], b);
+  session.change('p', [after[1], after[0]]);
+  assert.equal(session.surfaces.get('p')![0], after[1]);
+  assert.deepEqual(session.bodyHistory.undo()!.elements, after);
+  assert.deepEqual(session.bodyHistory.undo()!.elements, previous);
+  assert.deepEqual(session.bodyHistory.redo()!.elements, after);
+  clearTimeout(session.timer);
+});
+
+for (const method of ['changeMany', 'editContent'] as const) {
+  test(`${method} rejects unloaded pages before changing any content, dirty blocks or history`, async () => {
+    const { session, store } = autosaveSession();
+    const a = { id: 'a', version: 1, x: 10, type: 'rectangle' } as Element;
+    const b = { ...a, id: 'b', x: 20 };
+    session.manifest.chunks['page-b/000000'] = 'stored-b';
+    store.readSurface = async id => id === 'page-a' ? [a] : [b];
+    await session.load('page-a');
+    const original = session.surfaces.get('page-a');
+    const tracker = session.trackers.get('page-a');
+    const dirty = new Map(session.dirty), revisions = new Map(session.revisions);
+    const historyRevision = session.bodyHistory.revision;
+    const groups = new Map([['page-a', [{ ...a, version: 2, x: 30 }]], ['page-b', [{ ...b, version: 2, x: 40 }]]]);
+    assert.throws(() => session[method](groups), /编辑前必须加载/);
+    assert.equal(session.surfaces.get('page-a'), original);
+    assert.equal(session.trackers.get('page-a'), tracker);
+    assert.deepEqual(session.dirty, dirty); assert.deepEqual(session.revisions, revisions);
+    assert.equal(session.bodyHistory.revision, historyRevision);
+    assert.equal(session.saveState, 'saved'); assert.equal(session.timer, undefined);
+    await session.load('page-b');
+    try {
+      session[method](groups);
+      assert.equal(session.dirty.size, 2);
+      const undo = session.bodyHistory.undo()!;
+      assert.equal(undo.parts.length, 2);
+      session.changeMany(new Map(undo.parts.map(part => [part.surface, part.elements])), false);
+      assert.deepEqual(session.surfaces.get('page-a'), [a]);
+      assert.deepEqual(session.surfaces.get('page-b'), [b]);
+      assert.equal(session.bodyHistory.canUndo, false);
+    } finally { clearTimeout(session.timer); }
+  });
+}

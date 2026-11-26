@@ -77,3 +77,23 @@ test('capsule segment and path eraser cut cleanly in a single pass with AABB cul
   assert.equal(eraseLinePath(hiLine, [[50, -10], [50, 10]], 4, true).length, 0);
   assert.equal(eraseLinePath(hiLine, [[50, 50], [60, 50]], 4, false)[0], hiLine);
 });
+
+test('frozen local point bounds are reused while mutable and replaced points remain live', () => {
+  let visits = 0;
+  const samples = [[0, 0], [100, 0]] as [number, number][];
+  Object.defineProperty(samples, Symbol.iterator, { value: function* () { visits++; yield* [samples[0], samples[1]]; } });
+  for (const point of samples) Object.freeze(point);
+  Object.freeze(samples);
+  const frozen = { ...stroke, points: samples } as unknown as Element;
+  const initial = bounds([frozen]);
+  const cachedVisits = visits;
+  assert.deepEqual(bounds([frozen]), initial);
+  assert.equal(eraseStrokePath(frozen, [[5000, 5000]], 10, false)[0], frozen);
+  assert.equal(visits, cachedVisits);
+  const mutable = { ...stroke, points: [[0, 0], [100, 0]] } as unknown as Element;
+  const first = bounds([mutable])!;
+  (mutable as any).points[1][0] = 200;
+  assert.equal(bounds([mutable])!.width, first.width + 100);
+  const replaced = { ...frozen, points: [[0, 0], [300, 0]] } as unknown as Element;
+  assert.equal(bounds([replaced])!.width, initial!.width + 200);
+});

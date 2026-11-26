@@ -4,6 +4,9 @@ import type { Element, Rect } from './model';
 /** Methods added by the pinned, checked kernel patches; see docs/kernel-patches.md. */
 export type InkApi = ExcalidrawImperativeAPI & {
   inkRevision(): number;
+  inkChanges(): Element[] | null;
+  inkSyncRaw(): void;
+  inkAppend(elements: readonly Element[]): void;
   inkQuery(rect: Rect): Element[];
   inkErase(patches: ReadonlyMap<string, readonly Element[]>): void;
   inkRebind(elements: readonly Element[], resizedIds: readonly string[]): Element[];

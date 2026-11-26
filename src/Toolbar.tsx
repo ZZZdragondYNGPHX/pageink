@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
-import { Menu, Popover, radioKeys, Segmented, Swatches, Switch, useAnchor } from './ui';
+import { Popover, radioKeys, Segmented, Swatches, Switch, useAnchor } from './ui';
 import { ERASER_SIZES, HIGHLIGHTER_COLORS, HIGHLIGHTER_WIDTHS, PEN_COLORS, PEN_WIDTHS, PenPreset, Preferences, PreferenceStore, SHAPE_FILLS, SHAPE_WIDTHS, ShapeKind, TAPE_COLORS, TEXT_SIZES, ToolId } from './preferences';
 
 interface ToolDef { id: ToolId; icon: string; label: string; key: string }
@@ -22,12 +22,13 @@ export const INSERT_TOOLS: ToolDef[] = [
 ];
 export const CAPTURE_TOOL: ToolDef = { id: 'capture', icon: 'capture', label: '摘录', key: 'C' };
 export const SHORTCUTS: Record<string, ToolId | 'image'> = { p: 'pen', m: 'highlighter', e: 'eraser', l: 'lasso', v: 'select', k: 'space', a: 'tape', h: 'hand', t: 'text', s: 'shape', c: 'capture', i: 'image' };
+const SECONDARY_TOOLS: ToolDef[] = [...INSERT_TOOLS, CAPTURE_TOOL, ...EXTRA_TOOLS];
 const SHAPES: { value: ShapeKind; label: string; icon: string }[] = [
   { value: 'rectangle', label: '矩形', icon: 'rectangle' }, { value: 'ellipse', label: '椭圆', icon: 'ellipse' }, { value: 'diamond', label: '菱形', icon: 'diamond' },
   { value: 'line', label: '直线', icon: 'line' }, { value: 'arrow', label: '箭头', icon: 'arrow' },
 ];
 
-export function ToolButtons({ tool, onTool, onImage, capture }: { tool: ToolId; onTool: (tool: ToolId, anchor: HTMLElement) => void; onImage: () => void; capture: boolean }) {
+export function ToolButtons({ tool, onTool }: { tool: ToolId; onTool: (tool: ToolId, anchor: HTMLElement) => void }) {
   const tools = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = tools.current;
@@ -37,8 +38,8 @@ export function ToolButtons({ tool, onTool, onImage, capture }: { tool: ToolId; 
     const observer = new ResizeObserver(reveal); observer.observe(element);
     return () => observer.disconnect();
   }, [tool]);
-  const activeExtra = EXTRA_TOOLS.find(t => t.id === tool);
-  const visibleWriting = activeExtra ? [...WRITING_TOOLS, activeExtra] : WRITING_TOOLS;
+  const activeSecondary = SECONDARY_TOOLS.find(t => t.id === tool);
+  const visibleTools = activeSecondary ? [...WRITING_TOOLS, activeSecondary] : WRITING_TOOLS;
   const button = (t: ToolDef) => <IconButton key={t.id} icon={t.icon} label={t.label} shortcut={t.key} tabIndex={tool === t.id ? 0 : -1} aria-pressed={tool === t.id} className="ink-tool" onClick={event => onTool(t.id, event.currentTarget)}><span>{t.label}</span></IconButton>;
   return <div ref={tools} className="ink-tools" role="toolbar" aria-label="书写工具" onKeyDown={event => {
     if (event.nativeEvent.isComposing || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
@@ -47,17 +48,16 @@ export function ToolButtons({ tool, onTool, onImage, capture }: { tool: ToolId; 
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + buttons.length) % buttons.length;
     buttons[next]?.focus();
   }}>
-    <div className="ink-tool-group">{visibleWriting.map(button)}</div>
-    <div className="ink-tool-group">{INSERT_TOOLS.map(button)}<IconButton icon="image" label="插入图片" shortcut="I" tabIndex={-1} className="ink-tool" onClick={onImage}><span>图片</span></IconButton>{capture && button(CAPTURE_TOOL)}</div>
+    <div className="ink-tool-group">{visibleTools.map(button)}</div>
   </div>;
 }
 
-/** Frequent tools stay in place; the full palette opens from the active tool or its style button. */
-export function ToolShelf({ tool, onTool, onImage, capture, prefs, store, onRevealAllTapes }: {
-  tool: ToolId; onTool: (tool: ToolId) => void; onImage: () => void; capture: boolean; prefs: Preferences; store: PreferenceStore; onRevealAllTapes?: (revealed: boolean) => void;
+/** Core writing tools stay compact on the floating pill; secondary tools open from the + menu. */
+export function ToolShelf({ tool, onTool, prefs, store, onRevealAllTapes }: {
+  tool: ToolId; onTool: (tool: ToolId) => void; prefs: Preferences; store: PreferenceStore; onRevealAllTapes?: (revealed: boolean) => void;
 }) {
-  const pop = useAnchor<'options' | 'tools'>();
-  const definition = [...WRITING_TOOLS, ...EXTRA_TOOLS, ...INSERT_TOOLS, CAPTURE_TOOL].find(t => t.id === tool)!;
+  const pop = useAnchor<'options'>();
+  const definition = [...WRITING_TOOLS, ...SECONDARY_TOOLS].find(t => t.id === tool)!;
   const color = tool === 'highlighter' ? prefs.highlighter.color : tool === 'tape' ? prefs.tape.color : tool === 'text' ? prefs.text.color : tool === 'shape' ? prefs.shape.color : prefs.pen.color;
   const colors = tool === 'highlighter' ? HIGHLIGHTER_COLORS : tool === 'tape' ? TAPE_COLORS : PEN_COLORS;
   const colored = ['pen', 'highlighter', 'tape', 'text', 'shape'].includes(tool);
@@ -97,14 +97,7 @@ export function ToolShelf({ tool, onTool, onImage, capture, prefs, store, onReve
     <ToolButtons tool={tool} onTool={(next, anchor) => {
       if (tool === next && configurable) pop.toggle('options', anchor);
       else { pop.close(); onTool(next); }
-    }} onImage={() => { pop.close(); onImage(); }} capture={capture}/>
-    <IconButton icon="more" label="更多工具" className="ink-tools-more" aria-expanded={pop.open === 'tools'} onClick={event => pop.toggle('tools', event.currentTarget)}/>
-    {pop.open === 'tools' && <Popover anchor={pop.anchor} onClose={pop.close} label="全部工具" align="end">
-      <Menu onDone={pop.close} items={[
-        ...[...WRITING_TOOLS, ...EXTRA_TOOLS, ...INSERT_TOOLS, ...(capture ? [CAPTURE_TOOL] : [])].map(t => ({ icon: t.icon, label: t.label, checked: tool === t.id, onSelect: () => onTool(t.id) })),
-        { icon: 'image', label: '插入图片', onSelect: onImage },
-      ]}/>
-    </Popover>}
+    }}/>
     {configurable && <div className="ink-quick-style" role="group" aria-label={`${definition.label}快捷设置`}>
       {usesPenSlots && (() => {
         const hasCheckedSlot = prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === tool;

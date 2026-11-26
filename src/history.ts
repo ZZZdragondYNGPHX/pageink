@@ -4,7 +4,6 @@ interface Part { surface: string; start: number; before: readonly Element[]; aft
 interface Step { parts: Part[]; beforeLayout?: Layout; afterLayout?: Layout }
 export interface SurfaceState { surface: string; elements: readonly Element[] }
 export interface AppliedStep { parts: SurfaceState[]; layout?: Layout; surface: string; elements: readonly Element[] }
-const same = (a: readonly Element[], b: readonly Element[]) => a.length === b.length && a.every((e, i) => e.id === b[i].id && e.version === b[i].version);
 
 /** One body timeline across pages; a step may span several pages (e.g. moving ink between pages).
  * Retain changed ranges, not 100 copies of a 200k-object array. */
@@ -18,9 +17,9 @@ export class History {
   pushMany(changes: readonly { surface: string; before: readonly Element[]; after: readonly Element[] }[], beforeLayout?: Layout, afterLayout?: Layout) {
     const parts: Part[] = [];
     for (const { surface, before, after } of changes) {
-      if (same(before, after)) continue;
       let start = 0, tail = 0;
-      while (start < Math.min(before.length, after.length) && before[start] === after[start]) start++;
+      while (start < Math.min(before.length, after.length) && (before[start] === after[start] || before[start].id === after[start].id && before[start].version === after[start].version)) start++;
+      if (start === before.length && start === after.length) continue;
       while (tail < Math.min(before.length, after.length) - start && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
       parts.push({ surface, start, before: before.slice(start, before.length - tail), after: after.slice(start, after.length - tail) });
       this.heads.set(surface, after);

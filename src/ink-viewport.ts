@@ -13,7 +13,14 @@ interface Preview { view: InkRasterView; timer?: number }
 const previews = new WeakMap<HTMLCanvasElement, Preview>();
 const snapshots = new WeakMap<HTMLCanvasElement, { canvas: HTMLCanvasElement; view: InkRasterView }>();
 const forcedRedraw = new WeakSet<HTMLCanvasElement>();
+const activeZoomGestures = new WeakSet<HTMLCanvasElement>();
 const renderCosts = new WeakMap<HTMLCanvasElement, number>();
+
+export function setInkGestureActive(canvas: HTMLCanvasElement | null | undefined, active: boolean) {
+  if (!canvas) return;
+  if (active) activeZoomGestures.add(canvas);
+  else activeZoomGestures.delete(canvas);
+}
 
 const PAN_LIVE_ELEMENTS = 1200;
 const ZOOM_LIVE_ELEMENTS = 600;
@@ -35,6 +42,7 @@ export function shouldDeferInkViewport(canvas: HTMLCanvasElement, view: InkRaste
   if (base.source !== view.source || base.revision !== view.revision || base.key !== view.key) return false;
   if (base.zoom === view.zoom && base.scrollX === view.scrollX && base.scrollY === view.scrollY) return false;
   const sameZoom = base.zoom === view.zoom;
+  if (!sameZoom && activeZoomGestures.has(canvas)) return true;
   const cost = renderCosts.get(canvas) ?? 0;
   if (visibleCount < (sameZoom ? PAN_LIVE_ELEMENTS : ZOOM_LIVE_ELEMENTS) && cost < LIVE_RENDER_BUDGET_MS) return false;
   // For single-frame heavy scenes (<2000 elements), force a synchronous refresh once panning exposes >22%

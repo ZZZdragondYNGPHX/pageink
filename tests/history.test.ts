@@ -12,3 +12,15 @@ test('range history reconstructs reorder, delete, edit and append across pages',
   assert.deepEqual(h.redo()?.elements,[a,b,c]); h.redo(); h.redo();
   assert.deepEqual(h.redo()?.elements,[c,newer]);
 });
+
+test('history skips equivalent copies in one prefix pass and preserves edits after that prefix', () => {
+  const h = new History(), a = e('a'), b = e('b'), c = e('c');
+  h.push('p', [], [a, b]);
+  const revision = h.revision;
+  h.push('p', [a, b], [{ ...a }, { ...b }]);
+  assert.equal(h.revision, revision);
+  const next = [{ ...a }, e('b', 2), c];
+  h.push('p', [a, b], next);
+  assert.deepEqual(h.undo()!.elements, [a, b]);
+  assert.deepEqual(h.redo()!.elements, next);
+});

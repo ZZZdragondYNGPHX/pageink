@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clearInkViewport, commitInkViewport, deferInkViewport, recordInkRenderCost, shouldDeferInkViewport, type InkRasterView } from '../src/ink-viewport';
+import { clearInkViewport, commitInkViewport, deferInkViewport, recordInkRenderCost, setInkGestureActive, shouldDeferInkViewport, type InkRasterView } from '../src/ink-viewport';
 
 const canvas = () => ({
   isConnected: true, dataset: {} as Record<string, string>,
@@ -96,6 +96,12 @@ test('ordinary scenes render live without scroll cutoff; dense scenes defer only
   assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 260 }, 1500, 1000, 800), false);
   // Progressive mega-scene (>=2000): stays deferred during continuous scroll so progressive redraws aren't repeatedly cleared.
   assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 260 }, 2500, 1000, 800), true);
+  // Active pinch gesture defers zoom redraws even on light scenes so pinch stays locked to GPU transform.
+  setInkGestureActive(target, true);
+  assert.equal(shouldDeferInkViewport(target, { ...base, zoom: 1.5 }, 120, 1000, 800), true);
+  assert.equal(shouldDeferInkViewport(target, { ...base, scrollY: base.scrollY - 200 }, 120, 1000, 800), false);
+  setInkGestureActive(target, false);
+  assert.equal(shouldDeferInkViewport(target, { ...base, zoom: 1.5 }, 120, 1000, 800), false);
   // Slow render cost (>10ms) also enables bounded deferral.
   recordInkRenderCost(target, 25);
   recordInkRenderCost(target, 25);

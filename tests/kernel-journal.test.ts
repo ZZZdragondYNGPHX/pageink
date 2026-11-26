@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resetInkJournal, recordInkMutation, inkSnapshotChanges, inkSceneRevision } from '../src/kernel-journal';
+import { resetInkJournal, recordInkMutation, inkSnapshotChanges, inkSceneRevision, inkHostChanges } from '../src/kernel-journal';
 import type { Element } from '../src/model';
 test('snapshot journal invalidates replacements and retains changed/deleted objects', () => {
   const a = {id:'a', version:1} as Element, source = new Map([['a', a]]), retained = new Map<string,Element>();
@@ -34,4 +34,27 @@ test('empty scenes skipped by unchanged replacement still track their first stro
   assert.equal(inkSnapshotChanges(source, retained), null);
   Object.assign(stroke, { version: 2 }); recordInkMutation(scene, stroke);
   assert.deepEqual(inkSnapshotChanges(source, retained), [stroke]);
+});
+
+test('host changes consume independently, deduplicate mutations and reset without advancing snapshots', () => {
+  const source = new Map<string, Element>(), retained = new Map<string, Element>();
+  const scene = { getElementsMapIncludingDeleted: () => source };
+  assert.equal(inkHostChanges(source), null);
+  assert.equal(inkSnapshotChanges(source, retained), null);
+  const a = { id: 'a', version: 1 } as Element;
+  recordInkMutation(scene, a);
+  const deleted = { ...a, version: 2, isDeleted: true };
+  recordInkMutation(scene, deleted);
+  assert.deepEqual(inkSnapshotChanges(source, retained), [deleted]);
+  assert.deepEqual(inkHostChanges(source), [deleted]);
+  const b = { id: 'b', version: 1 } as Element;
+  recordInkMutation(scene, b);
+  assert.deepEqual(inkHostChanges(source), [b]);
+  assert.deepEqual(inkSnapshotChanges(source, retained), [b]);
+  assert.deepEqual(inkHostChanges(source), []);
+  resetInkJournal(scene);
+  recordInkMutation(scene, b);
+  assert.equal(inkHostChanges(source), null);
+  assert.deepEqual(inkHostChanges(source), []);
+  assert.equal(inkSnapshotChanges(source, retained), null);
 });

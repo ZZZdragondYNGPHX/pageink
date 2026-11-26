@@ -88,3 +88,18 @@ test('recognizeShape snaps lines, arrows, circles, rectangles and diamonds clean
   // Rough freeform lasso loop around content yields null for shape snap so Circle-to-Lasso wins.
   assert.equal(recognizeShape(circlePoints(100, 100, 60, 50, 40, 0.22), 1, { enclosesContent: true }), null);
 });
+
+test('hitStrokePath rejects distant candidates without iterating or allocating world points', () => {
+  const points = new Proxy([[0, 0], [100, 0]], { get(target, key, receiver) {
+    if (key === 'map' || key === Symbol.iterator) throw Error('world points were visited');
+    return Reflect.get(target, key, receiver);
+  } });
+  const stroke = { type: 'freedraw', x: 0, y: 0, width: 100, height: 0, angle: Math.PI / 3, strokeWidth: 2, points } as unknown as Element;
+  assert.equal(hitStrokePath(stroke, [5000, 5000], 10), false);
+});
+
+test('hitStrokePath conservative rejection retains offset, rotated and singleton strokes', () => {
+  const stroke = { type: 'freedraw', x: 10, y: 20, width: 80, height: 0, angle: Math.PI, strokeWidth: 2, points: [[-40, 30], [40, 30]] } as unknown as Element;
+  assert.equal(hitStrokePath(stroke, [10, 50], 1), true);
+  assert.equal(hitStrokePath({ ...stroke, width: 0, points: [[-40, 30]] } as unknown as Element, [-30, 50], 1), true);
+});

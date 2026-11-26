@@ -11,7 +11,7 @@ import { pack, pagePng, png, readingPdf, PdfExportOptions } from './export';
 import { IconButton, InkIcon } from './InkIcon';
 import { Popover, Menu, MenuEntry, radioKeys, Segmented, Swatches, Switch, Toasts, useAnchor, useToasts, LayerContext } from './ui';
 import { ToolShelf, SHORTCUTS } from './Toolbar';
-import { ToolDock } from './ToolDock';
+import { ToolDock, type WritingSignal } from './ToolDock';
 import type { InkApi } from './kernel-api';
 import { imageFile, readDataURL } from './binary';
 import { BookmarkList, OutlineList, PageList, SearchPanel, SidebarTabs } from './Sidebar';
@@ -19,7 +19,7 @@ import { ScratchWindow } from './Scratch';
 import { PEN_COLORS, PEN_WIDTHS, Preferences, SHAPE_FILLS, SidebarTab, ToolId } from './preferences';
 import { ViewStore, View, useView, toScreen, sceneViewport } from './view';
 import { TEMPLATES, paperStyle } from './templates';
-import type { WorkspaceHost } from './host';
+import type { WorkspaceActions, WorkspaceHost } from './host';
 import type { SearchHit } from './search';
 import { toArrayBuffer } from './model';
 import { MixedPanel } from './MixedPanel';
@@ -41,7 +41,7 @@ import type { RulerState } from './ruler';
 import { setAllTapesRevealed, toggleTapeElement } from './tape';
 
 export interface WorkspaceProps { session: Session; pdf?: PdfService; host: WorkspaceHost }
-type PopoverId = 'export' | 'more' | 'toolbox' | 'page-settings' | 'zoom' | 'scratch-zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-layers' | 'selection-more' | 'pdf-text' | 'mixed' | 'cards' | 'layers' | 'elements';
+type PopoverId = 'export' | 'insert' | 'toolbox' | 'page-settings' | 'zoom' | 'scratch-zoom' | 'jump' | 'page-menu' | 'bookmark-menu' | 'selection-color' | 'selection-layers' | 'selection-more' | 'pdf-text' | 'mixed' | 'cards' | 'layers' | 'elements';
 const SHAPE_LABELS: Record<'line' | 'arrow' | 'rectangle' | 'ellipse' | 'diamond', string> = { line: '直线', arrow: '箭头', rectangle: '矩形', ellipse: '椭圆', diamond: '菱形' };
 
 /** Kernel settings for a tool; a pending bookmark marquee temporarily overrides the tool. */
@@ -75,7 +75,26 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const prefs = useSyncExternalStore(host.prefs.subscribe, host.prefs.get), store = host.prefs;
   const savedElements = useSyncExternalStore(host.elements.subscribe, host.elements.get);
   const [, rerender] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => { session.listeners.add(rerender); return () => { session.listeners.delete(rerender); }; }, []);
+  const popOpenRef = useRef<PopoverId | null>(null);
+  useEffect(() => {
+    const snapshot = () => {
+      const m = session.manifest;
+      const pKey = m.pages.map(p => `${p.id}:${p.width}x${p.height}:${p.template}:${p.pdfPage ?? 0}:${p.margins.top},${p.margins.right},${p.margins.bottom},${p.margins.left}`).join('|');
+      const rKey = m.regions.map(r => `${r.id}:${r.title}:${r.pageId}`).join('|');
+      return `${session.saveState}|${session.saveError}|${session.conflictPath}|${session.sourceIssue}|${session.bodyHistory.canUndo ? 1 : 0}${session.bodyHistory.canRedo ? 1 : 0}${session.scratchHistory.canUndo ? 1 : 0}${session.scratchHistory.canRedo ? 1 : 0}|${session.navigation?.token ?? ''}|${m.pdf?.path ?? ''}|${pKey}|${rKey}`;
+    };
+    let last = snapshot();
+    const onSession = () => {
+      const next = snapshot();
+      const livePop = popOpenRef.current;
+      if (next !== last || livePop === 'mixed' || livePop === 'cards' || livePop === 'layers') {
+        last = next;
+        rerender();
+      }
+    };
+    session.listeners.add(onSession);
+    return () => { session.listeners.delete(onSession); };
+  }, [session]);
   useEffect(() => {
     const doc = area.current!.ownerDocument, win = doc.defaultView!;
     const save = () => { void session.flush().catch(() => {}); };
@@ -85,6 +104,8 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   }, [session]);
   const manifest = session.manifest, paged = manifest.mode === 'pages';
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
+  const [bodyLayer, setBodyLayer] = useState<HTMLDivElement | null>(null);
+  const topRightAnchor = useRef<HTMLSpanElement>(null);
   const area = useRef<HTMLDivElement>(null), [areaSize, setAreaSize] = useState({ width: 800, height: 600 });
   const [tool, setToolState] = useState<ToolId>(() => prefs.tool === 'capture' && !pdf ? 'pen' : prefs.tool);
   const [marquee, setMarquee] = useState<CanvasTool['marquee'] | null>(null);
@@ -99,6 +120,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const [zoomBox, setZoomBox] = useState<Rect>({ x: 40, y: 60, width: 320, height: 90 });
   const liveZoomBox = useRef<Rect>(zoomBox);
   const zoomPaintRef = useRef<(() => void) | null>(null);
+  const zoomBoxSyncRef = useRef<((next: Rect) => void) | null>(null);
   const [ruler, setRuler] = useState<RulerState | null>(null);
   const liveRuler = useRef<RulerState | null>(ruler);
   useEffect(() => { liveZoomBox.current = zoomBox; }, [zoomBox]);
@@ -121,10 +143,24 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const [editingCard, setEditingCard] = useState<{ root: Element; source: SourceParagraph; reference: TextReference } | null>(null);
   const [paper, setPaper] = useState<NonNullable<PdfExportOptions['paper']>>('original');
   const [pdfText, setPdfText] = useState({ page: 1, text: '', loading: false });
-  const [writingMask, setWritingMask] = useState({ body: false, scratch: false, zoom: false });
-  const writing = writingMask.body || writingMask.scratch || writingMask.zoom;
-  const setSurfaceWriting = (surface: 'body' | 'scratch' | 'zoom', active: boolean) => setWritingMask(cur => cur[surface] === active ? cur : { ...cur, [surface]: active });
+  const writingMaskRef = useRef({ body: false, scratch: false, zoom: false });
+  const writingListenersRef = useRef(new Set<() => void>());
+  const writingSignal = useMemo<WritingSignal>(() => ({
+    get: () => writingMaskRef.current.body || writingMaskRef.current.scratch || writingMaskRef.current.zoom,
+    subscribe: listener => { writingListenersRef.current.add(listener); return () => { writingListenersRef.current.delete(listener); }; },
+  }), []);
+  const setSurfaceWriting = (surface: 'body' | 'scratch' | 'zoom', active: boolean) => {
+    const cur = writingMaskRef.current;
+    if (cur[surface] === active) return;
+    const before = cur.body || cur.scratch || cur.zoom;
+    cur[surface] = active;
+    const after = cur.body || cur.scratch || cur.zoom;
+    if (before !== after) for (const fn of writingListenersRef.current) fn();
+  };
   const pop = useAnchor<PopoverId>();
+  popOpenRef.current = pop.open;
+  const initialBodyView = useMemo(() => host.loadView(), [session]);
+  const initialScratchView = useMemo(() => host.loadView('scratch'), [session]);
   const toast = useToasts();
   const body = useRef<CanvasHandle | null>(null), scratch = useRef<CanvasHandle | null>(null), scratchReady = useRef<CanvasHandle | null>(null);
   const scratchWaiters = useRef<{ resolve: (handle: CanvasHandle) => void; reject: (error: Error) => void }[]>([]);
@@ -938,11 +974,6 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     finally { exporting.current = false; }
   }
 
-  useEffect(() => host.connect({
-    exportPdf: () => run(() => exportDocument('pdf')), exportPackage: () => run(() => exportDocument('package')),
-    toggleScratch: () => setScratchOpen(open => !open), toggleFocus: () => setFocus(on => !on), search: () => { setSidebar(true); chooseTab('search'); },
-  }));
-
   // ---------- navigation requests (links, embeds, sources) ----------
   const navigationToken = useRef('');
   useEffect(() => {
@@ -988,7 +1019,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     if (mod && !event.altKey) {
       if (key === 'z') { event.preventDefault(); event.stopPropagation(); event.shiftKey ? redo(surface) : undo(surface); return; }
       if (key === 'y') { event.preventDefault(); event.stopPropagation(); redo(surface); return; }
-      if (key === 'f') { event.preventDefault(); event.stopPropagation(); setSidebar(true); setTab('search'); return; }
+      if (key === 'f') { event.preventDefault(); event.stopPropagation(); setFocus(false); setSidebar(true); chooseTab('search'); return; }
       if (key === 's') { event.preventDefault(); event.stopPropagation(); run(async () => { await session.flush(); toast.show({ kind: 'success', message: '已保存' }); }); return; }
       if (key === 'c' && !event.shiftKey) {
         if (copySelectedToClipboard(surface)) { event.preventDefault(); event.stopPropagation(); return; }
@@ -1053,10 +1084,12 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     });
   };
   const showPageText = (page: Page, anchor: HTMLElement | null) => {
+    const targetAnchor = anchor?.isConnected ? anchor : topRightAnchor.current;
+    if (!targetAnchor) return;
     const seq = ++pdfTextSeq.current;
     const pageNum = indexOf(page.id) + 1;
     setPdfText({ page: pageNum, text: '', loading: true });
-    pop.set({ id: 'pdf-text', anchor: anchor?.isConnected ? anchor : layer!.querySelector<HTMLElement>('[data-anchor="more"]')! });
+    pop.set({ id: 'pdf-text', anchor: targetAnchor });
     run(async () => {
       try {
         const text = (await pdf!.text(page)).map(t => t.str + (t.hasEOL ? '\n' : ' ')).join('').trim();
@@ -1069,83 +1102,105 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   };
   const openSettings = (id: string, anchor: HTMLElement | null) => {
     setTarget(id);
-    window.requestAnimationFrame(() => pop.set({ id: 'page-settings', anchor: anchor?.isConnected ? anchor : layer!.querySelector<HTMLElement>('[data-anchor="more"]')! }));
+    window.requestAnimationFrame(() => {
+      const targetAnchor = anchor?.isConnected ? anchor : topRightAnchor.current;
+      if (targetAnchor) pop.set({ id: 'page-settings', anchor: targetAnchor });
+    });
   };
-  const moreMenu: (MenuEntry | false)[] = [
-    { icon: 'docText', label: '文字段落…', onSelect: () => window.requestAnimationFrame(() => pop.set({ id: 'mixed', anchor: layer!.querySelector<HTMLElement>('[data-anchor="more"]')! })) },
-    paged ? { icon: 'sliders', label: '纸张与页边距…', onSelect: () => openSettings(currentPageId, pop.anchor) }
-      : { icon: 'canvas', label: '画布样式…', onSelect: () => openSettings(manifest.pages[0].id, pop.anchor) },
-    { icon: 'focus', label: '专注模式', hint: '隐藏侧栏和工具栏之外的界面', onSelect: () => { setFocus(true); setSidebar(false); } },
-    paged && { icon: prefs.nightPaper ? 'sun' : 'moon', label: '夜间护眼纸面', hint: '柔和暗色反显，不影响保存和导出', checked: prefs.nightPaper, onSelect: () => store.update({ nightPaper: !prefs.nightPaper }) },
-    !reading && { icon: 'zoomWindow', label: '放大书写框', hint: '底部放大写小字并自动推进', checked: zoomWindowOpen, onSelect: toggleZoomWindow },
-    !reading && { icon: 'ruler', label: '虚拟直尺', hint: '沿直尺边缘画笔自动吸附直线', checked: !!ruler, onSelect: toggleRuler },
-    !reading && { icon: 'gridSnap', label: '网格吸附', hint: '图形与移动自动对齐网格点', checked: prefs.gridSnap, onSelect: () => store.update({ gridSnap: !prefs.gridSnap }) },
-    !paged && { icon: 'bookmark', label: '将当前视野存为书签', onSelect: bookmarkView },
-    { icon: 'finger', label: '用手指书写', hint: prefs.fingerDraws ? '手指书写，双指移动' : '目前手指只用于移动和缩放', checked: prefs.fingerDraws, onSelect: () => store.update({ fingerDraws: !prefs.fingerDraws }) },
-    { icon: 'dock', label: '空闲时自动收起笔盒', hint: prefs.autoCollapseDock ? '8 秒无操作后收起为悬浮图标' : '手动点击笔盒手柄收起', checked: prefs.autoCollapseDock, onSelect: () => store.update({ autoCollapseDock: !prefs.autoCollapseDock }) },
-    'separator',
-    { icon: 'link', label: paged ? '复制本页链接' : '复制画布链接', onSelect: () => copyLink({ page: paged ? currentPageId : manifest.pages[0].id }) },
-    !!(pdf && currentPage?.pdfPage) && { icon: 'docText', label: '复制本页文字', onSelect: () => copyPageText(currentPage) },
-    !!(pdf && currentPage?.pdfPage) && { icon: 'text', label: '选择本页文字…', onSelect: () => showPageText(currentPage, pop.anchor) },
-    !!manifest.pdf && { icon: 'relink', label: '重新关联原 PDF…', onSelect: () => host.relinkSource() },
-    { icon: 'history', label: '历史版本…', hint: '把较早的保存恢复为副本', onSelect: () => host.showVersions() },
-    { icon: 'sliders', label: '笔记属性…', onSelect: () => run(() => host.properties()) },
-  ];
 
   const hasOutline = paged && !!pdf;
+  const hasPdfPage = !!(pdf && currentPage?.pdfPage);
+  const hasPdfSource = !!manifest.pdf;
   const sidebarVisible = sidebar && !focus;
   const sidebarTab: SidebarTab = (!paged && tab === 'pages') ? 'bookmarks' : (!hasOutline && tab === 'outline') ? (paged ? 'pages' : 'bookmarks') : tab;
   const closeSidebar = (remember = false) => {
     setSidebar(false);
     if (remember) store.update({ sidebar: paged ? { pages: false } : { canvas: false } });
-    layer?.querySelector<HTMLButtonElement>('.ink-topbar [aria-controls]')?.focus({ preventScroll: true });
+    host.focusSidebarAction?.();
   };
   const toggleSidebar = () => { const next = !sidebar; setSidebar(next); store.update({ sidebar: paged ? { pages: next } : { canvas: next } }); };
   const chooseTab = (next: SidebarTab) => { setTab(next); store.update({ sidebar: { tab: next } }); };
-  const saveLabel = savingShown ? '正在保存' : session.saveState === 'saved' ? '已保存到本地' : '待写入';
-  const saveKind = savingShown ? 'is-saving' : session.saveState === 'saved' ? 'is-saved' : 'is-pending';
-  const status = session.conflictPath ? null : session.saveState === 'failed'
-    ? <button type="button" className="ink-save-failed" onClick={() => run(() => session.flush())}><InkIcon name="warning"/>保存失败 · 重试</button>
-    : <span className={`ink-save-state ${saveKind}`} role="status" aria-label={saveLabel} title={saveLabel}>{savingShown ? <span className="ink-spinner"/> : <InkIcon name={session.saveState === 'saved' ? 'check' : 'pending'}/>}<span className="ink-save-label">{saveLabel}</span></span>;
 
-  const topbar = <header className="ink-topbar">
-    <div className="ink-topbar-start">
-      {!focus && <IconButton icon="sidebar" label={sidebar ? '隐藏侧栏' : '显示侧栏'} aria-expanded={sidebarVisible} aria-controls={sidebarId} onClick={toggleSidebar}/>}
-      {!reading && <div className="ink-history-tools" role="group" aria-label="编辑历史">
-        <IconButton icon="undo" label="撤销" shortcut="Ctrl+Z" disabled={!session.bodyHistory.canUndo} onClick={() => undo()}/>
-        <IconButton icon="redo" label="重做" shortcut="Ctrl+Shift+Z" disabled={!session.bodyHistory.canRedo} onClick={() => redo()}/>
-      </div>}
-      {status}
+  const openMixed = () => window.requestAnimationFrame(() => {
+    const insertBtn = layer?.querySelector<HTMLElement>('[data-anchor="insert"]');
+    const anchor = insertBtn?.getClientRects().length ? insertBtn : topRightAnchor.current;
+    if (anchor) pop.set({ id: 'mixed', anchor });
+  });
+
+  useEffect(() => {
+    host.syncChrome?.({ paged, sidebar, reading, scratchOpen, focus, hasPdfPage, hasPdfSource });
+  }, [host, paged, sidebar, reading, scratchOpen, focus, hasPdfPage, hasPdfSource]);
+  const actionsRef = useRef<WorkspaceActions | null>(null);
+  actionsRef.current = {
+    exportPdf: () => run(() => exportDocument('pdf')),
+    exportPackage: () => run(() => exportDocument('package')),
+    openExport: () => window.requestAnimationFrame(() => { if (topRightAnchor.current) pop.set({ id: 'export', anchor: topRightAnchor.current }); }),
+    openPageSettings: () => openSettings(paged ? currentPageId : manifest.pages[0].id, topRightAnchor.current),
+    openMixed,
+    toggleSidebar,
+    toggleReading: () => { if (paged) toggleReading(); },
+    toggleScratch: () => setScratchOpen(open => !open),
+    toggleFocus: () => setFocus(on => { if (!on) setSidebar(false); return !on; }),
+    search: () => { setFocus(false); setSidebar(true); chooseTab('search'); },
+    copyCurrentLink: () => copyLink({ page: paged ? currentPageId : manifest.pages[0].id }),
+    copyCurrentPageText: () => { if (pdf && currentPage?.pdfPage) copyPageText(currentPage); },
+    selectCurrentPageText: () => window.requestAnimationFrame(() => { if (pdf && currentPage?.pdfPage) showPageText(currentPage, topRightAnchor.current); }),
+    bookmarkCurrentView: () => { if (!paged) bookmarkView(); },
+  };
+  useEffect(() => host.connect({
+    exportPdf: () => actionsRef.current?.exportPdf(),
+    exportPackage: () => actionsRef.current?.exportPackage(),
+    openExport: () => actionsRef.current?.openExport(),
+    openPageSettings: () => actionsRef.current?.openPageSettings(),
+    openMixed: () => actionsRef.current?.openMixed(),
+    toggleSidebar: () => actionsRef.current?.toggleSidebar(),
+    toggleReading: () => actionsRef.current?.toggleReading(),
+    toggleScratch: () => actionsRef.current?.toggleScratch(),
+    toggleFocus: () => actionsRef.current?.toggleFocus(),
+    search: () => actionsRef.current?.search(),
+    copyCurrentLink: () => actionsRef.current?.copyCurrentLink(),
+    copyCurrentPageText: () => actionsRef.current?.copyCurrentPageText(),
+    selectCurrentPageText: () => actionsRef.current?.selectCurrentPageText(),
+    bookmarkCurrentView: () => actionsRef.current?.bookmarkCurrentView(),
+  }), [host]);
+
+  const saveFailed = !session.conflictPath && session.saveState === 'failed';
+  const showSaving = !session.conflictPath && savingShown && !saveFailed;
+  const floatingStatus = (saveFailed || showSaving || focus) ? <div className="ink-floating-status">
+    {saveFailed && <button type="button" className="ink-save-failed" onClick={() => run(() => session.flush())}><InkIcon name="warning"/>保存失败 · 重试</button>}
+    {showSaving && <span className="ink-save-state is-saving" role="status" aria-label="正在保存"><span className="ink-spinner"/><span>正在保存…</span></span>}
+    {focus && <IconButton icon="focus" label="退出专注" className="ink-labelled ink-exit-focus" aria-pressed onClick={() => setFocus(false)}><span>退出专注</span></IconButton>}
+  </div> : null;
+
+  const dockTool: ToolId = reading && tool === 'capture' ? 'select' : tool;
+  const secondaryToolActive = dockTool === 'text' || dockTool === 'shape' || dockTool === 'capture' || dockTool === 'space' || dockTool === 'tape';
+  const activeAuxCount = (zoomWindowOpen ? 1 : 0) + (ruler ? 1 : 0) + (prefs.gridSnap ? 1 : 0) + (paged && prefs.nightPaper ? 1 : 0);
+  const tools = <ToolDock layer={bodyLayer} visible={!reading || scratchOpen} autoCollapse={prefs.autoCollapseDock} writingSignal={writingSignal} onDrag={pop.close}>
+    {!reading && <div className="ink-history-tools" role="group" aria-label="编辑历史">
+      <IconButton icon="undo" label="撤销" shortcut="Ctrl+Z" disabled={!session.bodyHistory.canUndo} onClick={() => undo()}/>
+      <IconButton icon="redo" label="重做" shortcut="Ctrl+Shift+Z" disabled={!session.bodyHistory.canRedo} onClick={() => redo()}/>
+    </div>}
+    <ToolShelf tool={dockTool} onTool={setTool} prefs={prefs} store={store} onRevealAllTapes={revealAllTapes}/>
+    <div className="ink-dock-end">
+      <IconButton icon="plus" label="插入与排版" data-anchor="insert" aria-expanded={pop.open === 'insert' || pop.open === 'mixed' || pop.open === 'cards'} className={`ink-toolbox-trigger${secondaryToolActive ? ' has-active' : ''}`} onClick={event => pop.toggle('insert', event.currentTarget)}>
+        {secondaryToolActive && <span className="ink-active-dot" aria-hidden="true"/>}
+      </IconButton>
+      <IconButton icon="toolbox" label="辅助工具" data-anchor="toolbox" aria-expanded={pop.open === 'toolbox' || pop.open === 'elements' || pop.open === 'layers'} className={`ink-toolbox-trigger${activeAuxCount > 0 ? ' has-active' : ''}`} onClick={event => pop.toggle('toolbox', event.currentTarget)}>
+        {activeAuxCount > 0 && <span className="ink-active-dot" aria-hidden="true"/>}
+      </IconButton>
     </div>
-    <div className="ink-topbar-end">
-      {paged && <IconButton icon={reading ? 'pen' : 'read'} label={reading ? '继续书写' : '阅读模式'} aria-pressed={reading} className="ink-labelled ink-reading-toggle" onClick={toggleReading}><span>{reading ? '书写' : '阅读'}</span></IconButton>}
-      <IconButton icon="scratch" label="草稿纸" aria-pressed={scratchOpen} className="ink-labelled" onClick={() => setScratchOpen(v => !v)}><span>草稿纸</span></IconButton>
-      {focus ? <IconButton icon="focus" label="退出专注" className="ink-labelled" aria-pressed onClick={() => setFocus(false)}><span>退出专注</span></IconButton> : <>
-        <IconButton icon="search" label="搜索" shortcut="Ctrl+F" onClick={() => { setSidebar(true); chooseTab('search'); }}/>
-        <IconButton icon="share" label="导出" className="ink-labelled" aria-expanded={pop.open === 'export'} onClick={event => pop.toggle('export', event.currentTarget)}><span>导出</span></IconButton>
-        <IconButton icon="more" label="更多" data-anchor="more" aria-expanded={pop.open === 'more'} onClick={event => pop.toggle('more', event.currentTarget)}/>
-      </>}
-    </div>
-  </header>;
-  const activeAuxCount = (zoomWindowOpen ? 1 : 0) + (ruler ? 1 : 0) + (prefs.gridSnap ? 1 : 0) + (paged && prefs.nightPaper ? 1 : 0) + (tool === 'space' || tool === 'tape' ? 1 : 0);
-  const tools = <ToolDock layer={layer} visible={!reading || scratchOpen} autoCollapse={prefs.autoCollapseDock} writing={writing} onDrag={pop.close}>
-    <ToolShelf tool={tool} onTool={setTool} onImage={chooseImage} capture={!!pdf} prefs={prefs} store={store} onRevealAllTapes={revealAllTapes}/>
-    <IconButton icon="toolbox" label="辅助工具" data-anchor="toolbox" aria-expanded={pop.open === 'toolbox' || pop.open === 'elements' || pop.open === 'layers'} className={`ink-toolbox-trigger${activeAuxCount > 0 ? ' has-active' : ''}`} onClick={event => pop.toggle('toolbox', event.currentTarget)}>
-      {activeAuxCount > 0 && <span className="ink-active-dot" aria-hidden="true"/>}
-    </IconButton>
-    <IconButton icon="docText" label="文字段落" aria-expanded={pop.open === 'mixed'} onClick={event => pop.toggle('mixed', event.currentTarget)}/>
-    {!paged && <IconButton icon="canvas" label="画布卡片" aria-expanded={pop.open === 'cards'} disabled={!!editingCard} onClick={event => pop.toggle('cards', event.currentTarget)}/>}
   </ToolDock>;
 
   return <LayerContext.Provider value={layer}>
-    <div ref={setLayer} className={`ink-workspace ink-mode-${manifest.mode}${focus ? ' is-focus' : ''}${reading ? ' is-reading' : ''}${sidebarVisible ? ' has-sidebar' : ''}`} onKeyDownCapture={onKeyDown} onPasteCapture={onPaste}>
-      {topbar}
-      {tools}
+    <div ref={setLayer} tabIndex={-1} className={`ink-workspace ink-mode-${manifest.mode}${focus ? ' is-focus' : ''}${reading ? ' is-reading' : ''}${sidebarVisible ? ' has-sidebar' : ''}`} onKeyDownCapture={onKeyDown} onPasteCapture={onPaste}>
       {session.conflictPath && <div className="ink-banner is-warning" role="alert"><InkIcon name="warning"/><span><strong>这个笔记在别处被修改过。</strong>你的内容已安全保留，自动保存已暂停。两种选择都不会丢失任何一方的内容。</span>
         <span className="ink-banner-actions">{([[true, '继续编辑我的版本（副本）'], [false, '打开外部版本']] as const).map(([copy, label]) =>
           <button key={label} type="button" disabled={resolving} onClick={() => run(async () => { setResolving(true); try { await host.resolveConflict(copy); } finally { setResolving(false); } })}>{label}</button>)}</span></div>}
       {session.sourceIssue && <div className="ink-banner" role="status"><InkIcon name="warning"/><span>原 PDF 暂不可用：{session.sourceIssue} 笔迹不受影响。</span><span className="ink-banner-actions"><button type="button" onClick={() => host.relinkSource()}>重新关联…</button></span></div>}
-      <div className={`ink-body${scratchOpen && prefs.scratchPlacement === "docked" ? " has-docked-scratch" : ""}`}>
+      <div ref={setBodyLayer} className={`ink-body${scratchOpen && prefs.scratchPlacement === "docked" ? " has-docked-scratch" : ""}`}>
+        <span ref={topRightAnchor} className="ink-top-anchor" aria-hidden="true"/>
+        {floatingStatus}
+        {tools}
         {sidebarVisible && <>
         {compact && <button type="button" className="ink-sidebar-backdrop" aria-label="关闭侧栏" onClick={() => closeSidebar()}/>}
         <aside className="ink-sidebar" id={sidebarId} aria-label="侧栏" onKeyDown={event => {
@@ -1167,7 +1222,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         <div className="ink-surfaces" ref={area}>
         <main className={`ink-canvas-area${zoomWindowOpen && !reading ? ' has-zoom-window' : ''}`}>
           <InkCanvas session={session} pdf={pdf} kind={paged ? 'pages' : 'canvas'} pagesKey={pagesKey} tool={bodyTool} fingerDraws={prefs.fingerDraws} zoomLock={prefs.zoomLock} nightPaper={paged && prefs.nightPaper} gridSnap={prefs.gridSnap} ruler={reading ? null : ruler} rulerRef={reading ? undefined : liveRuler} theme={theme} readOnly={reading || !!editingCard}
-            initialView={host.loadView()} ref={body}
+            initialView={initialBodyView} ref={body}
             onReady={handle => {
               body.current = handle;
               setViews(handle.views);
@@ -1190,7 +1245,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
             onAddPage={paged && !reading ? () => addPage() : undefined}
             onViewChange={() => { if (body.current) host.saveView(body.current.memory()); }}/>
           {ruler && !reading && <RulerOverlay ruler={ruler} liveRef={liveRuler} onChange={setRuler} onClose={() => setRuler(null)}/>}
-          {zoomWindowOpen && !reading && body.current && <ZoomBoxOverlay views={views} box={zoomBox} liveRef={liveZoomBox} onLiveMove={() => zoomPaintRef.current?.()} autoAdvance={zoomAutoAdvance} onChange={setZoomBox}/>}
+          {zoomWindowOpen && !reading && body.current && <ZoomBoxOverlay views={views} box={zoomBox} liveRef={liveZoomBox} syncRef={zoomBoxSyncRef} onLiveMove={() => zoomPaintRef.current?.()} autoAdvance={zoomAutoAdvance} onChange={setZoomBox}/>}
           {selection && !selection.busy && !marquee && !reading && !editingCard && <SelectionBar views={views} selection={selection}
             onDuplicate={selectionActions.duplicate} onToggleTape={selection.hasTape ? toggleSelectedTapes : undefined} onRemove={selectionActions.remove} onScratch={selectionActions.toScratch}
             onLayers={anchor => pop.toggle('selection-layers', anchor)}
@@ -1208,7 +1263,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
           {zoomWindowOpen && !reading && body.current && <ZoomWindow
             session={session} pdf={pdf} handle={body.current} paged={paged} tool={tool} prefs={prefs}
             dark={!paged && theme === 'dark'} nightPaper={paged && prefs.nightPaper}
-            box={zoomBox} liveBoxRef={liveZoomBox} paintRef={zoomPaintRef} factor={zoomFactor} autoAdvance={zoomAutoAdvance}
+            box={zoomBox} liveBoxRef={liveZoomBox} paintRef={zoomPaintRef} boxOverlaySyncRef={zoomBoxSyncRef} factor={zoomFactor} autoAdvance={zoomAutoAdvance}
             onBoxChange={setZoomBox} onFactorChange={setZoomFactor} onAutoAdvanceChange={setZoomAutoAdvance}
             onSwitchToPen={() => setTool('pen')}
             onWritingChange={active => setSurfaceWriting('zoom', active)}
@@ -1221,7 +1276,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
               clear: () => run(async () => { const h = scratch.current; if (!h) return; await h.flush(); h.api.updateScene({ elements: [] }); await h.flush(); toast.show({ kind: 'info', message: '草稿纸已清空', action: { label: '撤销', run: () => undo('scratch') } }); }) }}
             selection={scratchSelection && !scratchSelection.busy ? { toBody: () => run(toBody), destination: paged ? '当前页' : '画布', remove: () => run(() => scratch.current?.replaceSelected(() => null)), source: scratchSelection.source ? () => selectionActions.source(scratchSelection) : undefined } : null}>
             <InkCanvas session={session} kind="scratch" pagesKey="scratch" tool={scratchTool} fingerDraws={prefs.fingerDraws} zoomLock={prefs.zoomLock} theme={theme} ref={scratch}
-              initialView={host.loadView('scratch')}
+              initialView={initialScratchView}
               onScribble={() => toast.show({ kind: 'info', message: '已涂划擦除', action: { label: '撤销', run: () => undo('scratch') } })}
               onShapeRecognized={({ kind, revert }) => toast.show({ kind: 'info', message: `已规整为${SHAPE_LABELS[kind]}`, action: { label: '还原手绘', run: () => run(() => enqueue('scratch', () => revert(() => performStep('scratch', false)))) } })}
               onWritingChange={active => setSurfaceWriting('scratch', active)}
@@ -1247,7 +1302,22 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       </div>
       {resolving && <div className="ink-cover" role="status"><span className="ink-spinner"/>正在保存独立副本…</div>}
 
-      {pop.open === 'more' && <Popover anchor={pop.anchor} onClose={pop.close} label="更多" align="end"><Menu items={moreMenu} onDone={pop.close}/></Popover>}
+      {pop.open === 'insert' && <Popover anchor={pop.anchor} onClose={pop.close} label="插入与排版" align="end" className="ink-toolbox-popover">
+        <div className="ink-popover-title">插入与排版</div>
+        <Menu onDone={pop.close} items={[
+          { heading: '对象' },
+          { icon: 'text', label: '文字', hint: 'T · 添加可编辑文字', checked: tool === 'text', onSelect: () => setTool('text') },
+          { icon: 'shape', label: '形状', hint: 'S · 矩形、椭圆、箭头与直线', checked: tool === 'shape', onSelect: () => setTool('shape') },
+          { icon: 'image', label: '插入图片', hint: 'I · 从本地选择图片', onSelect: chooseImage },
+          !reading && !!pdf && { icon: 'capture', label: 'PDF 摘录', hint: 'C · 框选 PDF 内容放入草稿纸', checked: tool === 'capture', onSelect: () => setTool('capture') },
+          { heading: '排版与学习' },
+          { icon: 'space', label: '插空工具', hint: 'K · 向下拖动插入空白，向上收起空隙', checked: tool === 'space', onSelect: () => setTool('space') },
+          { icon: 'tape', label: '遮挡胶带', hint: 'A · 遮盖答案或公式，轻点揭开自测', checked: tool === 'tape', onSelect: () => setTool('tape') },
+          { heading: '联动笔记' },
+          { icon: 'docText', label: '文字段落…', hint: reading ? '查看嵌入段落与跳转原文' : '嵌入 Markdown 段落并绑定批注', onSelect: openMixed },
+          !reading && !paged && { icon: 'canvas', label: '画布卡片…', hint: '插入文本或手写卡片并连线', disabled: !!editingCard, onSelect: () => window.requestAnimationFrame(() => { const anchor = layer?.querySelector<HTMLElement>('[data-anchor="insert"]') ?? topRightAnchor.current; if (anchor) pop.set({ id: 'cards', anchor }); }) },
+        ]}/>
+      </Popover>}
       {pop.open === 'toolbox' && <Popover anchor={pop.anchor} onClose={pop.close} label="辅助工具" align="end" className="ink-toolbox-popover">
         <div className="ink-popover-title">辅助工具</div>
         <Menu onDone={pop.close} items={[
@@ -1256,18 +1326,10 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
           !reading && { icon: 'ruler', label: '虚拟直尺', hint: '沿直尺边缘吸附绘制直线', checked: !!ruler, onSelect: toggleRuler },
           !reading && { icon: 'gridSnap', label: '网格吸附', hint: '图形与移动自动对齐网格', checked: prefs.gridSnap, onSelect: () => store.update({ gridSnap: !prefs.gridSnap }) },
           paged && { icon: prefs.nightPaper ? 'sun' : 'moon', label: '夜间护眼纸面', hint: '柔和暗色反显，不影响导出', checked: prefs.nightPaper, onSelect: () => store.update({ nightPaper: !prefs.nightPaper }) },
-          { heading: '学习与排版工具' },
-          { icon: 'space', label: '插空工具', hint: 'K · 向下拖动插入空白，向上收起空隙', checked: tool === 'space', onSelect: () => setTool('space') },
-          { icon: 'tape', label: '遮挡胶带', hint: 'A · 遮盖答案或公式，轻点揭开自测', checked: tool === 'tape', onSelect: () => setTool('tape') },
           { heading: '素材与图层' },
-          { icon: 'sticker', label: '常用元素库', hint: savedElements.length ? `已收藏 ${savedElements.length} 项` : '收藏常用图形与公式', onSelect: () => window.requestAnimationFrame(() => pop.set({ id: 'elements', anchor: layer?.querySelector<HTMLElement>('[data-anchor="toolbox"]') ?? pop.anchor! })) },
-          { icon: 'layers', label: '图层与编组', hint: '调整前后层级、组合与锁定', onSelect: () => window.requestAnimationFrame(() => pop.set({ id: 'layers', anchor: layer?.querySelector<HTMLElement>('[data-anchor="toolbox"]') ?? pop.anchor! })) },
+          { icon: 'sticker', label: '常用元素库', hint: savedElements.length ? `已收藏 ${savedElements.length} 项` : '收藏常用图形与公式', onSelect: () => window.requestAnimationFrame(() => { const anchor = layer?.querySelector<HTMLElement>('[data-anchor="toolbox"]') ?? topRightAnchor.current; if (anchor) pop.set({ id: 'elements', anchor }); }) },
+          !reading && { icon: 'layers', label: '图层与编组', hint: '调整前后层级、组合与锁定', onSelect: () => window.requestAnimationFrame(() => { const anchor = layer?.querySelector<HTMLElement>('[data-anchor="toolbox"]') ?? topRightAnchor.current; if (anchor) pop.set({ id: 'layers', anchor }); }) },
         ]}/>
-        <div className="ink-menu-separator" role="separator"/>
-        <div className="ink-toolbox-switches">
-          <Switch icon="finger" label="用手指书写" hint={prefs.fingerDraws ? '单指书写，双指滚动缩放' : '当前手指仅用于滚动与缩放'} checked={prefs.fingerDraws} onChange={fingerDraws => store.update({ fingerDraws })}/>
-          <Switch icon="dock" label="空闲时自动收起笔盒" hint="8 秒无操作后收起为悬浮图标" checked={prefs.autoCollapseDock} onChange={autoCollapseDock => store.update({ autoCollapseDock })}/>
-        </div>
       </Popover>}
       {pop.open === 'cards' && <Popover anchor={pop.anchor} onClose={pop.close} label="画布卡片" align="end" className="ink-mixed-popover">
         <CardsPanel elements={boardElements} selected={body.current?.selected() ?? []} busy={textBusy || !!editingCard}

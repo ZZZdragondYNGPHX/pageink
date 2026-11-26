@@ -51,7 +51,9 @@ export function sceneCopy(e: Element, dx = 0, dy = 0): Element {
   return { ...copy, x: e.x + dx, y: e.y + dy };
 }
 
-const signature = (e: Element) => `${e.x},${e.y},${e.width},${e.height},${e.angle}`;
+type Geometry = Pick<Element, 'x' | 'y' | 'width' | 'height' | 'angle'>;
+const geometryOf = ({ x, y, width, height, angle }: Element): Geometry => ({ x, y, width, height, angle });
+const sameGeometry = (a: Geometry | undefined, b: Element) => a?.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height && a.angle === b.angle;
 const byIndex = (a: { e: Element; order: number }, b: { e: Element; order: number }) => {
   const x = a.e.index, y = b.e.index;
   if (x && y && x !== y) return x < y ? -1 : 1;
@@ -63,13 +65,15 @@ const byIndex = (a: { e: Element; order: number }, b: { e: Element; order: numbe
  * elements belong to the page under their centre. Groups and bound text move together. */
 export class PageScene {
   private owner = new Map<string, string>();
-  private geometry = new Map<string, string>();
+  private geometry = new Map<string, Geometry>();
+  private pageLists = new Map<string, Element[]>();
+  private lastRawCount = 0;
   private locals = new WeakMap<Element, { version: number; x: number; y: number; local: Element }>();
   constructor(public layout: PageLayout) {}
 
   /** Scene elements for every page, ordered by fractional index so stored indices stay valid. */
   build(surface: (pageId: string) => readonly Element[], layout = this.layout): Element[] {
-    this.layout = layout; this.owner.clear(); this.geometry.clear();
+    this.layout = layout; this.owner.clear(); this.geometry.clear(); this.pageLists.clear(); this.lastRawCount = 0;
     const taken = new Set<string>(), items: { e: Element; order: number }[] = [];
     for (const placement of layout.placements) {
       let elements = surface(placement.page.id).filter(e => !e.isDeleted);
@@ -77,7 +81,7 @@ export class PageScene {
       for (const e of elements) {
         taken.add(e.id);
         const copy = sceneCopy(e, placement.x, placement.y);
-        this.owner.set(e.id, placement.page.id); this.geometry.set(e.id, signature(copy));
+        this.owner.set(e.id, placement.page.id); this.geometry.set(e.id, geometryOf(copy));
         items.push({ e: copy, order: items.length });
       }
     }
@@ -85,12 +89,37 @@ export class PageScene {
   }
 
   /** Records the kernel's current geometry as unmoved (absorbs restore-time normalisation). */
-  settle(elements: readonly Element[]) { for (const e of elements) if (this.owner.has(e.id)) this.geometry.set(e.id, signature(e)); }
+  settle(elements: readonly Element[]) { for (const e of elements) if (this.owner.has(e.id)) this.geometry.set(e.id, geometryOf(e)); }
 
   pageOf(id: string) { return this.owner.get(id); }
 
+  /** Drops incremental partition caches so the next partition performs a full scan. */
+  invalidateCache() { this.pageLists.clear(); this.lastRawCount = 0; }
+
   /** Page-local, non-deleted elements per page, in scene order. Every page gets an entry. */
-  partition(elements: readonly Element[]): Map<string, Element[]> {
+  partition(elements: readonly Element[], changed?: readonly Element[] | null): Map<string, Element[]> {
+    if (changed && this.pageLists.size === this.layout.placements.length) {
+      if (!changed.length && elements.length === this.lastRawCount) return new Map();
+      const addedIds = new Set<string>();
+      const append = elements.length === this.lastRawCount + changed.length && changed.every((e, k) => {
+        if (e !== elements[this.lastRawCount + k] || e.isDeleted || this.owner.has(e.id) || addedIds.has(e.id) || e.groupIds?.length || e.boundElements?.length || e.type === 'text' && e.containerId || inkAnchor(e)) return false;
+        addedIds.add(e.id); return true;
+      });
+      if (append) {
+        const result = new Map<string, Element[]>();
+        for (const e of changed) {
+          const box = bounds([e]);
+          const placement = this.layout.placements.length === 1 ? this.layout.placements[0] : placementAt(this.layout, box ? box.y + box.height / 2 : 0);
+          const id = placement.page.id;
+          let list = result.get(id);
+          if (!list) { list = [...this.pageLists.get(id)!]; result.set(id, list); this.pageLists.set(id, list); }
+          list.push(this.local(e, placement));
+          this.owner.set(e.id, id); this.geometry.set(e.id, geometryOf(e));
+        }
+        this.lastRawCount = elements.length;
+        return result;
+      }
+    }
     // A single page, canvas or scratch surface needs no group/binding ownership pass.
     // Retain the same local snapshots for unchanged objects, including off-paper ink.
     if (this.layout.placements.length === 1) {
@@ -100,16 +129,17 @@ export class PageScene {
         present.add(e.id);
         const cached = this.locals.get(e);
         if (!cached || cached.version !== e.version || cached.x !== placement.x || cached.y !== placement.y || this.owner.get(e.id) !== placement.page.id) {
-          this.owner.set(e.id, placement.page.id); this.geometry.set(e.id, signature(e));
+          this.owner.set(e.id, placement.page.id); this.geometry.set(e.id, geometryOf(e));
         }
         live.push(this.local(e, placement));
       }
       for (const id of this.owner.keys()) if (!present.has(id)) { this.owner.delete(id); this.geometry.delete(id); }
-      return new Map([[placement.page.id, live]]);
+      this.pageLists = new Map([[placement.page.id, live]]); this.lastRawCount = elements.length;
+      return new Map(this.pageLists);
     }
     const live = elements.filter(e => !e.isDeleted);
     const byId = new Map(live.map(e => [e.id, e]));
-    const moved = (e: Element) => !this.owner.has(e.id) || this.geometry.get(e.id) !== signature(e) || !this.layout.byId.has(this.owner.get(e.id)!);
+    const moved = (e: Element) => !this.owner.has(e.id) || !sameGeometry(this.geometry.get(e.id), e) || !this.layout.byId.has(this.owner.get(e.id)!);
     const locate = (rect: Rect | null) => placementAt(this.layout, rect ? rect.y + rect.height / 2 : 0).page.id;
     // Groups: decide once per outermost group from the union of its members.
     const groups = new Map<string, Element[]>();
@@ -131,11 +161,12 @@ export class PageScene {
     const result = new Map<string, Element[]>(this.layout.placements.map(p => [p.page.id, []]));
     for (const e of live) {
       const pageId = decide(e), placement = this.layout.byId.get(pageId)!;
-      this.owner.set(e.id, pageId); this.geometry.set(e.id, signature(e));
+      this.owner.set(e.id, pageId); this.geometry.set(e.id, geometryOf(e));
       result.get(pageId)!.push(this.local(e, placement));
     }
     for (const id of [...this.owner.keys()]) if (!byId.has(id)) { this.owner.delete(id); this.geometry.delete(id); }
-    return result;
+    this.pageLists = result; this.lastRawCount = elements.length;
+    return new Map(result);
   }
 
   private local(e: Element, p: PagePlacement): Element {
