@@ -3,10 +3,11 @@ import type { Element } from './model';
 import { inkAnchor, textReference } from './mixed';
 import { InkIcon } from './InkIcon';
 
-export function MixedPanel({ elements, busy, selectionCount, readOnly, paged, onInsert, onRefresh, onEdit, onAttach, onMove, onRemove, onDetach }: {
+export function MixedPanel({ elements, busy, selectionCount, readOnly, paged, onInsert, onRefresh, onEdit, onAttach, onMove, onRemove, onDetach, onHoverSource }: {
   elements: readonly Element[]; busy: boolean; selectionCount: number; readOnly: boolean; paged: boolean;
   onInsert: () => void; onRefresh: () => void; onEdit: (element: Element) => void; onAttach: (element: Element) => void;
   onMove: (element: Element, direction: 'up' | 'down') => void; onRemove: (element: Element) => void; onDetach: () => void;
+  onHoverSource?: (event: React.MouseEvent<HTMLElement>, path: string) => void;
 }) {
   const paragraphs = elements.filter(e => !e.isDeleted && textReference(e) && !(e.type === 'text' && e.containerId)).sort((a, b) => a.y - b.y);
   return <div className="ink-mixed-panel" aria-busy={busy}>
@@ -22,7 +23,7 @@ export function MixedPanel({ elements, busy, selectionCount, readOnly, paged, on
       const reference = textReference(e)!, count = elements.filter(ink => !ink.isDeleted && inkAnchor(ink)?.elementId === e.id).length;
       return <li key={e.id}>
         <p>{e.type === 'text' ? e.originalText : ''}</p>
-        <small title={reference.path}>{reference.path.split('/').pop()} · {count} 条绑定笔迹</small>
+        <small title={reference.path} onMouseEnter={onHoverSource ? event => onHoverSource(event, reference.path) : undefined}>{reference.path.split('/').pop()} · {count} 条绑定笔迹</small>
         <div className="ink-mixed-row-actions">
           <button type="button" disabled={busy} onClick={() => onEdit(e)}><InkIcon name="external"/>编辑原文</button>
           <button type="button" disabled={busy || readOnly || !selectionCount} onClick={() => onAttach(e)}><InkIcon name="link"/>绑定所选笔迹</button>

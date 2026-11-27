@@ -1,7 +1,8 @@
-import { App, MarkdownView, Modal, TFile, getFrontMatterInfo, parseYaml } from 'obsidian';
+import { AbstractInputSuggest, App, MarkdownView, Modal, TFile, getFrontMatterInfo, parseYaml } from 'obsidian';
 import { parseManifest } from './model';
 import type { Session } from './session';
 import { DocumentStore, type FileIO } from './storage';
+import { isImeComposing } from './ui';
 import {
   applyPropertyChanges, copyProperties, editableKey, parsePropertyNumber,
   propertiesSnapshot, propertyChanges, propertyPreview, propertyType, PROPERTY_TYPES, sameProperty, validateProperties,
@@ -12,22 +13,30 @@ import {
 export class NoteProperties {
   private writes = new Map<string, Promise<void>>();
   private files = new WeakMap<PropertiesSnapshot, TFile>();
-  private modals = new Set<NotePropertiesModal>();
+  private modals = new Map<string, NotePropertiesModal>();
+  private opening = new Set<string>();
   private disposed = false;
   constructor(private app: App, private io: FileIO, private session: (path: string) => Session | undefined) {}
 
   async open(path: string): Promise<void> {
-    const snapshot = await this.read(path);
     this.checkActive();
-    const modal = new NotePropertiesModal(this.app, this, snapshot, () => this.modals.delete(modal));
-    this.modals.add(modal);
-    modal.open();
+    const existing = this.modals.get(path);
+    if (existing) { existing.focus(); return; }
+    if (this.opening.has(path)) return;
+    this.opening.add(path);
+    try {
+      const snapshot = await this.read(path);
+      this.checkActive();
+      const modal = new NotePropertiesModal(this.app, this, snapshot, () => this.modals.delete(path));
+      this.modals.set(path, modal);
+      modal.open();
+    } finally { this.opening.delete(path); }
   }
 
   /** Plugin unload closes only this service's dialogs and prevents new/stale operations. */
   dispose(): void {
     this.disposed = true;
-    for (const modal of this.modals) modal.dispose();
+    for (const modal of this.modals.values()) modal.dispose();
     this.modals.clear();
   }
   private checkActive() {
@@ -185,6 +194,17 @@ interface DraftRow {
   removed: boolean;
 }
 
+class PropertySuggest extends AbstractInputSuggest<string> {
+  constructor(app: App, private input: HTMLInputElement, private values: () => string[]) { super(app, input); }
+  getSuggestions(query: string) { return this.values().filter(value => value.toLocaleLowerCase().includes(query.toLocaleLowerCase())); }
+  renderSuggestion(value: string, el: HTMLElement) { el.setText(value); }
+  selectSuggestion(value: string) {
+    this.input.value = value;
+    this.input.dispatchEvent(new Event('input', { bubbles: true }));
+    this.close();
+  }
+}
+
 /** Native Modal retains focus management and host close controls; every close is guarded. */
 export class NotePropertiesModal extends Modal {
   private rows: DraftRow[];
@@ -197,6 +217,7 @@ export class NotePropertiesModal extends Modal {
   private confirmation!: HTMLElement;
   private saveButton?: HTMLButtonElement;
   private addButton?: HTMLButtonElement;
+  private suggests = new Map<HTMLInputElement, PropertySuggest>();
 
   constructor(app: App, private host: NoteProperties, private snapshot: PropertiesSnapshot, private onClosed: () => void = () => {}) {
     super(app);
@@ -206,6 +227,39 @@ export class NotePropertiesModal extends Modal {
       checked: value === true, items: propertyType(value) === 'list' ? [...value as string[]] : [], original: value, removed: false,
     }));
     this.initial = this.fingerprint();
+    for (const key of ['Enter', 's']) this.scope.register(['Mod'], key, event => {
+      if (isImeComposing(event)) return;
+      if (!this.busy && this.dirty) void this.submit();
+      return false;
+    });
+  }
+  focus() {
+    if (this.modalEl.contains(this.modalEl.ownerDocument.activeElement)) return;
+    (this.contentEl.querySelector<HTMLElement>('input:enabled, textarea:enabled, select:enabled, button:enabled') ?? this.modalEl).focus();
+  }
+  private closeSuggestions(parent: HTMLElement) {
+    for (const [input, suggest] of this.suggests) if (parent.contains(input)) { suggest.close(); this.suggests.delete(input); }
+  }
+  private propertyNames() {
+    const names = new Set<string>();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      for (const name of Object.keys(this.app.metadataCache.getFileCache(file)?.frontmatter ?? {})) {
+        if (name !== 'position' && editableKey(name) && !this.rows.some(row => !row.removed && row.key === name)) names.add(name);
+      }
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }
+  private tags() {
+    const tags = new Set<string>();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const cache = this.app.metadataCache.getFileCache(file);
+      for (const tag of cache?.tags ?? []) tags.add(tag.tag.replace(/^#/, ''));
+      const value: unknown = cache?.frontmatter?.tags;
+      for (const tag of Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[\s,]+/) : []) {
+        if (typeof tag === 'string' && tag.trim()) tags.add(tag.trim().replace(/^#/, ''));
+      }
+    }
+    return [...tags].sort((a, b) => a.localeCompare(b));
   }
   private fingerprint() {
     return JSON.stringify(this.rows.filter(row => row.type).map(row => [row.key, row.existing, row.removed, row.type,
@@ -250,6 +304,7 @@ export class NotePropertiesModal extends Modal {
   }
 
   private renderRows() {
+    this.closeSuggestions(this.list);
     this.list.replaceChildren();
     if (!this.rows.length) this.list.createEl('p', { text: '暂无属性。可添加一项开始整理。', cls: 'pageink-properties-help' });
     for (const row of this.rows) {
@@ -269,12 +324,17 @@ export class NotePropertiesModal extends Modal {
       const keyLabel = header.createEl('label', { text: '属性名', cls: 'pageink-property-field' });
       const key = keyLabel.createEl('input', { type: 'text', attr: { autocomplete: 'off', spellcheck: 'false' } });
       key.value = row.key; key.readOnly = row.existing;
-      key.oninput = () => { row.key = key.value; this.changed(); };
+      if (!row.existing) this.suggests.set(key, new PropertySuggest(this.app, key, () => this.propertyNames()));
       const typeLabel = header.createEl('label', { text: '属性类型', cls: 'pageink-property-field' });
       const type = typeLabel.createEl('select');
       for (const [value, text] of Object.entries(PROPERTY_TYPES)) type.createEl('option', { value, text });
       type.value = row.type;
       const valueEl = section.createDiv({ cls: 'pageink-property-value' });
+      key.oninput = () => {
+        const wasTags = row.key.toLowerCase() === 'tags'; row.key = key.value;
+        if (wasTags !== (row.key.toLowerCase() === 'tags')) this.renderValue(row, valueEl);
+        this.changed();
+      };
       type.onchange = () => { row.type = type.value as PropertyType; this.renderValue(row, valueEl); this.changed(); };
       this.renderValue(row, valueEl);
       this.button(section, '删除属性', () => {
@@ -286,6 +346,7 @@ export class NotePropertiesModal extends Modal {
   }
 
   private renderValue(row: DraftRow, parent: HTMLElement) {
+    this.closeSuggestions(parent);
     parent.replaceChildren();
     if (row.type === 'boolean') {
       const label = parent.createEl('label', { cls: 'pageink-property-boolean' });
@@ -297,7 +358,15 @@ export class NotePropertiesModal extends Modal {
       row.items.forEach((value, index) => {
         const item = parent.createDiv({ cls: 'pageink-property-list-item' });
         const label = item.createEl('label', { text: `第 ${index + 1} 项`, cls: 'pageink-property-field' });
-        const input = label.createEl('textarea', { attr: { rows: '2' } }); input.value = value;
+        const input = value.includes('\n') || value.includes('\r') ? label.createEl('textarea', { attr: { rows: '2' } }) : label.createEl('input', { type: 'text', attr: { autocomplete: 'off', name: `${row.key}-${index}` } }); input.value = value;
+        if (input.instanceOf(HTMLInputElement)) {
+          if (row.key.toLowerCase() === 'tags') this.suggests.set(input, new PropertySuggest(this.app, input, () => this.tags()));
+          input.addEventListener('keydown', event => {
+            if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || isImeComposing(event)) return;
+            event.preventDefault(); row.items.splice(index + 1, 0, '');
+            this.renderValue(row, parent); this.changed(); parent.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')[index + 1]?.focus();
+          });
+        }
         input.oninput = () => { row.items[index] = input.value; this.changed(); };
         this.button(item, `删除第 ${index + 1} 项`, () => {
           row.items.splice(index, 1); this.renderValue(row, parent); this.changed();
@@ -306,7 +375,7 @@ export class NotePropertiesModal extends Modal {
       });
       this.button(parent, '添加列表项', () => {
         row.items.push(''); this.renderValue(row, parent); this.changed();
-        const inputs = parent.querySelectorAll('textarea'); inputs[inputs.length - 1]?.focus();
+        const inputs = parent.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'); inputs[inputs.length - 1]?.focus();
       });
     } else {
       const label = parent.createEl('label', { text: row.type === 'number' ? '数字值' : '文本值', cls: 'pageink-property-field' });
@@ -376,5 +445,5 @@ export class NotePropertiesModal extends Modal {
   }
   /** Unload cannot leave an orphaned modal capable of submitting its old draft. */
   dispose() { this.acceptingClose = true; super.close(); }
-  onClose() { this.acceptingClose = true; this.contentEl.replaceChildren(); this.onClosed(); }
+  onClose() { this.acceptingClose = true; for (const suggest of this.suggests.values()) suggest.close(); this.suggests.clear(); this.contentEl.replaceChildren(); this.onClosed(); }
 }

@@ -127,3 +127,14 @@
     font-size: max(16px, 1em);
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  .pageink-properties-modal,
+  .pageink-properties-modal *,
+  .pageink-properties-modal *::before,
+  .pageink-properties-modal *::after {
+    animation-duration: .01ms;
+    animation-iteration-count: 1;
+    transition: none;
+    scroll-behavior: auto;
+  }
+}

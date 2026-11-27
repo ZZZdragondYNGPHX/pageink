@@ -73,10 +73,8 @@ export function LayersPanel({
             <span className="ink-layer-label">{item.label}</span>
           </button>
           {!readOnly && <div className="ink-layer-row-actions">
-            <IconButton icon="bringFront" label="置顶" disabled={atTop} onClick={() => onOrder(item.ids, 'front')}/>
             <IconButton icon="moveUp" label="上移一层" disabled={atTop} onClick={() => onOrder(item.ids, 'forward')}/>
             <IconButton icon="moveDown" label="下移一层" disabled={atBottom} onClick={() => onOrder(item.ids, 'backward')}/>
-            <IconButton icon="sendBack" label="置底" disabled={atBottom} onClick={() => onOrder(item.ids, 'back')}/>
             {item.kind === 'group' && <IconButton icon="ungroup" label="拆分组合" onClick={() => onUngroup(item.ids)}/>}
             {item.kind === 'ink' && item.count > 1 && <IconButton icon="group" label="组合这些笔迹" onClick={() => onGroup(item.ids)}/>}
             <IconButton icon={item.locked ? 'unlock' : 'lock'} label={item.locked ? '解锁' : '锁定'} onClick={() => onLock(item.ids, !item.locked)}/>

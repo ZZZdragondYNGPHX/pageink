@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
 import { RULER_HALF_THICKNESS, RulerState, snapRulerAngle } from './ruler';
 import { isolateFloatingInput } from './pointer-input';
+import { isImeComposing } from './ui';
 
 const formatAngle = (angle: number) => Math.round(angle) === 0 ? '0°' : `${Math.round(angle)}°`;
 const rulerTransform = (state: RulerState) => `translate(${state.x - state.length / 2}px, ${state.y - RULER_HALF_THICKNESS}px) rotate(${state.angle}deg)`;
@@ -104,7 +105,7 @@ export function RulerOverlay({ ruler, liveRef, onChange, onClose }: {
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); return; }
     const step = event.shiftKey ? 24 : 8;
     const moves: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };

@@ -9,31 +9,33 @@ import { placementAt, toLocalRect } from './layout';
 import { capturePdf } from './capture';
 import { pack, pagePng, png, readingPdf, PdfExportOptions } from './export';
 import { IconButton, InkIcon } from './InkIcon';
-import { Popover, Menu, MenuEntry, radioKeys, Segmented, Swatches, Switch, Toasts, useAnchor, useToasts, LayerContext } from './ui';
+import { isImeComposing, Popover, Menu, MenuEntry, radioKeys, Segmented, Swatches, Switch, Toasts, useAnchor, useToasts, LayerContext } from './ui';
 import { ToolShelf, SHORTCUTS } from './Toolbar';
 import { ToolDock, type WritingSignal } from './ToolDock';
 import type { InkApi } from './kernel-api';
 import { imageFile, readDataURL } from './binary';
-import { BookmarkList, OutlineList, PageList, SearchPanel, SidebarTabs } from './Sidebar';
+import { BacklinkList, BookmarkList, OutlineList, PageList, SearchPanel, SidebarTabs } from './Sidebar';
 import { ScratchWindow } from './Scratch';
 import { PEN_COLORS, PEN_WIDTHS, Preferences, SHAPE_FILLS, SidebarTab, ToolId } from './preferences';
-import { ViewStore, View, useView, toScreen, sceneViewport } from './view';
-import { TEMPLATES, paperStyle } from './templates';
-import type { WorkspaceActions, WorkspaceHost } from './host';
+import { ViewStore, View, useView, toScreen, toScene, sceneViewport } from './view';
+import { TEMPLATES, paperStyle, templateSpec } from './templates';
+import type { BacklinkEntry, DroppedItem, WorkspaceActions, WorkspaceHost } from './host';
 import type { SearchHit } from './search';
 import { toArrayBuffer } from './model';
+import { formatInkSubpath } from './notes';
 import { MixedPanel } from './MixedPanel';
 import { detachParagraph, moveParagraph, reflowParagraphs, revised, textReference, type TextReference } from './mixed';
 import { preserveText, projectParagraph } from './mixed-render';
 import type { SourceParagraph } from './mixed-host';
 import { cardReference, cardText } from './cards';
+import { WHOLE_PAGE_REGION } from './cards-host';
 import { connectCards, inkCard, refreshTextCards, textCard } from './cards-render';
 import { CardEditor, CardsPanel } from './CardsPanel';
 import { LayersPanel } from './LayersPanel';
 import { groupElements, insertVerticalSpace, LayerOrderAction, reorderElements, restyleElements, setElementsLocked, ungroupElements } from './layers';
 import { copyInkClipboard, prepareClipboardForSession, readInkClipboard } from './clipboard';
 import { ZoomBoxOverlay, ZoomWindow } from './ZoomWindow';
-import { clampZoomBox, zoomBoxSize, ZoomFactor } from './zoom-window';
+import { advanceZoomBox, clampZoomBox, newlineZoomBox, zoomBoxSize, ZoomFactor } from './zoom-window';
 import { ElementsPanel } from './ElementsPanel';
 import { prepareLibraryInsert, type SavedElementItem } from './elements-library';
 import { RulerOverlay } from './RulerOverlay';
@@ -102,15 +104,21 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     doc.addEventListener('visibilitychange', hidden); win.addEventListener('pagehide', save);
     return () => { doc.removeEventListener('visibilitychange', hidden); win.removeEventListener('pagehide', save); };
   }, [session]);
-  const manifest = session.manifest, paged = manifest.mode === 'pages';
+  const manifest = session.manifest, paged = manifest.mode === 'pages', isPreview = !!host.isPreview;
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
   const [bodyLayer, setBodyLayer] = useState<HTMLDivElement | null>(null);
   const topRightAnchor = useRef<HTMLSpanElement>(null);
-  const area = useRef<HTMLDivElement>(null), [areaSize, setAreaSize] = useState({ width: 800, height: 600 });
+  const hoverAnchorHost = useRef<HTMLSpanElement>(null);
+  const area = useRef<HTMLDivElement>(null), canvasArea = useRef<HTMLElement>(null), [areaSize, setAreaSize] = useState({ width: 800, height: 600 });
   const [tool, setToolState] = useState<ToolId>(() => prefs.tool === 'capture' && !pdf ? 'pen' : prefs.tool);
   const [marquee, setMarquee] = useState<CanvasTool['marquee'] | null>(null);
-  const [sidebar, setSidebar] = useState(() => paged ? prefs.sidebar.pages && window.innerWidth >= 960 : prefs.sidebar.canvas);
+  const [sidebar, setSidebar] = useState(() => isPreview ? false : paged ? prefs.sidebar.pages && window.innerWidth >= 960 : prefs.sidebar.canvas);
   const [tab, setTab] = useState<SidebarTab>(() => !paged && prefs.sidebar.tab === 'pages' ? 'bookmarks' : prefs.sidebar.tab);
+  const [backlinks, setBacklinks] = useState<readonly BacklinkEntry[]>(() => host.backlinks?.() ?? []);
+  useEffect(() => {
+    setBacklinks(host.backlinks?.() ?? []);
+    return host.onBacklinksChange?.(() => setBacklinks(host.backlinks?.() ?? []));
+  }, [host, session]);
   const [scratchOpen, setScratchOpen] = useState(false);
   const scratchOpenRef = useRef(false); scratchOpenRef.current = scratchOpen;
   const [zoomWindowOpen, setZoomWindowOpen] = useState(false);
@@ -127,13 +135,17 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   useEffect(() => { liveRuler.current = ruler; }, [ruler]);
   const [exportTile, setExportTile] = useState(true);
   const [focus, setFocus] = useState(false);
-  const [reading, setReading] = useState(false);
-  const readingRef = useRef(false); readingRef.current = reading;
+  const [reading, setReading] = useState(() => isPreview);
+  const readingRef = useRef(isPreview); readingRef.current = reading;
   const [compact, setCompact] = useState(false);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
   const [scratchSelection, setScratchSelection] = useState<SelectionInfo | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [target, setTarget] = useState<string | null>(null);
+  const [jumpError, setJumpError] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+  const lastHoveredLink = useRef<{ id: string; link: string } | null>(null);
   const [theme, setTheme] = useState(host.theme());
   const [views, setViews] = useState<ViewStore>(EMPTY_VIEWS);
   const [scratchViews, setScratchViews] = useState<ViewStore>(EMPTY_VIEWS);
@@ -190,7 +202,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     const doc = layer.ownerDocument, win = doc.defaultView;
     if (!win) return;
     const onGlobalEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
+      if (event.key !== 'Escape' || isImeComposing(event) || event.defaultPrevented) return;
       if (layer.querySelector('.ink-popover, .ink-card-editor') || doc.querySelector('.modal-container')) return;
       const leaf = layer.closest('.workspace-leaf');
       if (leaf && !leaf.classList.contains('mod-active')) return;
@@ -322,6 +334,35 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       if (!['pen', 'highlighter', 'eraser', 'hand'].includes(tool)) setTool('pen');
       return true;
     });
+  };
+  const stepZoomBox = (action: 'prev' | 'next' | 'newline') => {
+    const handle = body.current;
+    if (!handle) return;
+    const cur = liveZoomBox.current;
+    let limit: Rect | undefined, lineStep: number | undefined;
+    if (paged) {
+      const placement = placementAt(handle.layout(), cur.y + cur.height / 2);
+      limit = placement.paper;
+      lineStep = placement.page.pdfPage || placement.page.template === 'blank' ? undefined : templateSpec(placement.page.template).step * 2;
+    }
+    const next = action === 'newline'
+      ? newlineZoomBox(cur, limit, lineStep)
+      : advanceZoomBox(cur, limit, action === 'next' ? 1 : -1, lineStep);
+    setZoomBox(next);
+    const v = handle.views.get();
+    const [left, top] = toScreen(v, next.x, next.y);
+    const [right, bottom] = toScreen(v, next.x + next.width, next.y + next.height);
+    const margin = 36, stripReserve = 240;
+    if (left < margin || right > v.width - margin || top < margin || bottom > v.height - stripReserve) {
+      const targetCenterX = next.x + next.width / 2, targetCenterY = next.y + next.height / 2;
+      const visibleH = Math.max(120, v.height - stripReserve);
+      handle.api.updateScene({
+        appState: {
+          scrollX: -(targetCenterX - v.width / v.zoom / 2),
+          scrollY: -(targetCenterY - visibleH / v.zoom / 2),
+        },
+      });
+    }
   };
 
   // ---------- history ----------
@@ -738,6 +779,50 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     await session.flush(); await host.copyLink(options);
     toast.show({ kind: 'success', message: options.embed ? '嵌入代码已复制，粘贴到 Markdown 笔记即可显示预览' : '链接已复制' });
   });
+  function sendRegionToMarkdown(regionId?: string, pageId?: string) {
+    run(async () => {
+      let targetPageId = pageId, targetRegionId = regionId;
+      if (!targetRegionId && selection && body.current) {
+        const placement = placementAt(body.current.layout(), selection.rect.y + selection.rect.height / 2);
+        const local = toLocalRect(selection.rect, placement);
+        const region: Region = {
+          x: Math.round(local.x), y: Math.round(local.y),
+          width: Math.max(1, Math.round(local.width)), height: Math.max(1, Math.round(local.height)),
+          id: uid(), pageId: placement.page.id, title: `摘录 ${manifest.regions.length + 1}`,
+        };
+        session.editLayout(() => manifest.regions.push(region));
+        targetPageId = region.pageId;
+        targetRegionId = region.id;
+      }
+      await session.flush();
+      const mdPath = await host.sendToMarkdown?.({ page: targetPageId, region: targetRegionId, embed: true, createSplitIfMissing: false });
+      if (mdPath) {
+        toast.show({ kind: 'success', message: `已插入到「${mdPath.split('/').pop()}」` });
+        return;
+      }
+      toast.show({
+        kind: 'success',
+        message: '嵌入代码已复制，可粘贴到任意 Markdown 笔记',
+        action: host.sendToMarkdown ? {
+          label: '右侧打开伴随笔记并插入',
+          run: () => run(async () => {
+            const created = await host.sendToMarkdown?.({ page: targetPageId, region: targetRegionId, embed: true, createSplitIfMissing: true });
+            if (created) toast.show({ kind: 'success', message: `已插入到「${created.split('/').pop()}」` });
+          }),
+        } : undefined,
+      });
+    });
+  }
+  const navigateBacklinkTarget = (entry: BacklinkEntry) => {
+    if (entry.regionId) {
+      const region = manifest.regions.find(r => r.id === entry.regionId || r.title === entry.regionId);
+      if (region) { openRegion(region); return; }
+    }
+    const page = (entry.page ? manifest.pages.find(p => p.id === entry.page) : undefined)
+      ?? (entry.pageNumber ? manifest.pages[entry.pageNumber - 1] : undefined);
+    if (page) goToPage(page.id);
+    else toast.show({ kind: 'info', message: '被引用的页面或书签已删除。' });
+  };
   function addBookmark(sceneRect: Rect) {
     const handle = body.current; if (!handle) return;
     const placement = placementAt(handle.layout(), sceneRect.y + sceneRect.height / 2), local = toLocalRect(sceneRect, placement);
@@ -845,7 +930,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   });
 
   // ---------- images & clipboard ----------
-  async function insertImageBlob(file: Blob, surface: 'body' | 'scratch' = 'body') {
+  async function insertImageBlob(file: Blob, surface: 'body' | 'scratch' = 'body', at?: ScenePoint) {
     if (clipboardBusy.current) return;
     if (surface === 'body' && (readingRef.current || !body.current)) return;
     clipboardBusy.current = true;
@@ -858,15 +943,156 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       const v = targetHandle.views.get();
       if (v.width <= 0 || v.height <= 0 || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
       const fit = Math.min(1, (v.width / v.zoom) * 0.6 / image.naturalWidth, (v.height / v.zoom) * 0.6 / image.naturalHeight);
-      const at = targetHandle.center();
+      const placeAt = at ?? targetHandle.center();
       const id = uid();
       const imgFile = imageFile(id, dataURL, file.type || 'image/png');
       const elements = convertToExcalidrawElements([{ type: 'image', x: 0, y: 0, width: image.naturalWidth * fit, height: image.naturalHeight * fit, fileId: id as NonNullable<Extract<Element, { type: 'image' }>['fileId']> }]);
       targetHandle.api.addFiles([imgFile]);
-      await targetHandle.insert(elements, at);
+      await targetHandle.insert(elements, placeAt);
       if (surface === 'body' && !readingRef.current) setTool('select');
     } finally { clipboardBusy.current = false; }
   }
+  const canAcceptDrop = (dt: DataTransfer | null) => {
+    if (!dt || isPreview || (reading && !scratchOpen) || resolving || editingCard) return false;
+    const types = [...(dt.types ?? [])];
+    if (types.includes('application/x-pageink-link')) return false;
+    return types.includes('Files') || types.includes('text/plain') || types.includes('text/uri-list');
+  };
+  const onSurfaceDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!canAcceptDrop(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepth.current++;
+    if (!dragOver) setDragOver(true);
+  };
+  const onSurfaceDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!canAcceptDrop(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    if (!dragOver) setDragOver(true);
+  };
+  const onSurfaceDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    if (dragDepth.current > 0) dragDepth.current--;
+    if (dragDepth.current === 0 || !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      dragDepth.current = 0;
+      setDragOver(false);
+    }
+  };
+  const onSurfaceDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    dragDepth.current = 0;
+    setDragOver(false);
+    if (!canAcceptDrop(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const dt = event.dataTransfer;
+    const droppedInScratch = !!(event.target as HTMLElement).closest('.ink-scratch') && scratchOpenRef.current;
+    const targetSurface: 'body' | 'scratch' = readingRef.current || droppedInScratch ? 'scratch' : 'body';
+    const rect = (canvasArea.current ?? area.current)?.getBoundingClientRect();
+    const bodyDropAt: ScenePoint | undefined = body.current && rect
+      ? toScene(body.current.views.get(), event.clientX - rect.left, event.clientY - rect.top)
+      : undefined;
+    const itemsPromise: Promise<DroppedItem[]> = host.resolveDrop
+      ? host.resolveDrop(dt)
+      : Promise.resolve([...dt.files].filter(file => file.type.startsWith('image/')).map(file => ({ kind: 'image' as const, file, name: file.name })));
+    run(async () => {
+      const items = await itemsPromise;
+      if (!items.length || !mounted.current) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const offsetAt: ScenePoint | undefined = bodyDropAt ? [bodyDropAt[0] + i * 24, bodyDropAt[1] + i * 24] : undefined;
+        if (item.kind === 'image') {
+          await insertImageBlob(item.file, targetSurface, targetSurface === 'body' ? offsetAt : undefined);
+          continue;
+        }
+        if (item.kind === 'markdown') {
+          if (item.path && !item.text && host.pickFromMarkdown) {
+            if (targetSurface === 'scratch') {
+              if (!scratchOpenRef.current) continue;
+              const source = await host.pickFromMarkdown(item.path);
+              if (!source || !mounted.current || !scratchOpenRef.current) continue;
+              const text = source.text.trim();
+              if (!text) continue;
+              const handle = await scratchHandle();
+              if (!handle || !mounted.current || !scratchOpenRef.current) continue;
+              const elements = convertToExcalidrawElements([{ type: 'text', x: 0, y: 0, text, fontSize: prefs.text.size, strokeColor: prefs.text.color }]);
+              await handle.insert(elements);
+              continue;
+            }
+            if (readingRef.current || !body.current) continue;
+            const source = await host.pickFromMarkdown(item.path);
+            if (!source || !mounted.current || !body.current) continue;
+            const placeAt = offsetAt ?? body.current.center();
+            if (paged) {
+              const placement = placementAt(body.current.layout(), placeAt[1]);
+              const page = placement.page;
+              const asset = await preserveText(session, source);
+              const width = Math.max(160, Math.min(560, page.width - 96));
+              const paragraph = projectParagraph(source, asset, width);
+              const localX = Math.max(24, Math.min(page.width - width - 24, Math.round(placeAt[0] - placement.x - width / 2)));
+              const localY = Math.max(24, Math.round(placeAt[1] - placement.y - paragraph.height / 2));
+              await applyMixed(page.id, elements => [...elements, { ...paragraph, x: localX, y: localY }]);
+              toast.show({ kind: 'success', message: '已插入拖入的文字段落' });
+            } else {
+              const asset = await preserveText(session, source);
+              await body.current.insert(textCard(source, asset), placeAt);
+              await session.save();
+              setTool('select');
+            }
+          } else if (item.text?.trim()) {
+            const handle = targetSurface === 'scratch' ? await scratchHandle() : body.current;
+            if (!handle || !mounted.current) continue;
+            const elements = convertToExcalidrawElements([{ type: 'text', x: 0, y: 0, text: item.text.trim(), fontSize: prefs.text.size, strokeColor: prefs.text.color }]);
+            await handle.insert(elements, targetSurface === 'body' ? offsetAt : undefined);
+            if (targetSurface === 'body' && !readingRef.current) setTool('select');
+          }
+          continue;
+        }
+        if (item.kind === 'inknote') {
+          if (!paged && !readingRef.current && host.pickFromInk && body.current) {
+            const source = await host.pickFromInk(item.path);
+            if (!source || !mounted.current || !body.current) continue;
+            const element = await inkCard(session, source);
+            await body.current.insert([element], offsetAt);
+            await session.save();
+            setTool('select');
+          } else {
+            await host.openFile(item.path);
+          }
+          continue;
+        }
+        if (item.kind === 'pdf') {
+          await host.annotateVaultPdf?.(item.path);
+        }
+      }
+    });
+  };
+  const onCanvasMouseMove = (event: React.MouseEvent<HTMLElement>) => {
+    if (!(event.ctrlKey || event.metaKey) || !host.hoverLink || !body.current) {
+      if (lastHoveredLink.current) lastHoveredLink.current = null;
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const [sx, sy] = toScene(body.current.views.get(), event.clientX - rect.left, event.clientY - rect.top);
+    const elements = body.current.api.getSceneElements();
+    let hit: { id: string; link: string } | null = null;
+    for (let i = elements.length - 1; i >= 0; i--) {
+      const el = elements[i];
+      if (el.isDeleted || el.type !== 'text') continue;
+      if (sx < el.x || sx > el.x + el.width || sy < el.y || sy > el.y + el.height) continue;
+      const match = /\[\[([^[\]|]+)(?:\|[^[\]]*)?\]\]/.exec(el.originalText || el.text);
+      if (match?.[1]) { hit = { id: el.id, link: match[1].trim() }; break; }
+    }
+    if (!hit || !hit.link) { lastHoveredLink.current = null; return; }
+    if (lastHoveredLink.current?.id === hit.id && lastHoveredLink.current.link === hit.link) return;
+    lastHoveredLink.current = hit;
+    let targetEl: HTMLElement = event.currentTarget;
+    if (hoverAnchorHost.current) {
+      hoverAnchorHost.current.setCssStyles({ left: `${event.clientX - rect.left}px`, top: `${event.clientY - rect.top}px` });
+      const anchor = hoverAnchorHost.current.createSpan();
+      hoverAnchorHost.current.replaceChildren(anchor);
+      targetEl = anchor;
+    }
+    host.hoverLink(event.nativeEvent, targetEl, hit.link);
+  };
   function chooseImage() {
     if (readingRef.current && !scratchOpenRef.current) return;
     const input = createEl('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp,image/gif';
@@ -1004,7 +1230,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (resolving) { event.preventDefault(); event.stopPropagation(); return; }
     const element = event.target as HTMLElement;
-    if (event.nativeEvent.isComposing || element.closest('input, textarea, select, [contenteditable=true]')) return;
+    if (isImeComposing(event) || element.closest('input, textarea, select, [contenteditable=true]')) return;
     if (!paged && event.key === 'Enter' && !element.closest('button, [role=dialog]')) {
       const selected = body.current?.selected().filter(e => cardReference(e)) ?? [];
       if (selected.length === 1) { event.preventDefault(); event.stopPropagation(); editCard(selected[0]); return; }
@@ -1065,6 +1291,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       'separator',
       { icon: 'sliders', label: '纸张与页边距…', onSelect: () => openSettings(page.id, anchor) },
       { icon: 'link', label: '复制页面链接', onSelect: () => copyLink({ page: page.id }) },
+      { icon: 'embed', label: '复制本页嵌入代码', onSelect: () => copyLink({ page: page.id, embed: true }) },
       ...(page.pdfPage && pdf ? [{ icon: 'docText', label: '复制此页文字', onSelect: () => copyPageText(page) } as MenuEntry] : []),
       ...(page.pdfPage && pdf ? [{ icon: 'text', label: '选择此页文字…', onSelect: () => showPageText(page, anchor) } as MenuEntry] : []),
       'separator',
@@ -1132,6 +1359,10 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   }, [host, paged, sidebar, reading, scratchOpen, focus, hasPdfPage, hasPdfSource]);
   const actionsRef = useRef<WorkspaceActions | null>(null);
   actionsRef.current = {
+    rebuildScenes: async () => {
+      await enqueue('body', async () => { await body.current?.rebuild(); });
+      if (scratchReady.current) await enqueue('scratch', async () => { await scratchReady.current?.rebuild(); });
+    },
     exportPdf: () => run(() => exportDocument('pdf')),
     exportPackage: () => run(() => exportDocument('package')),
     openExport: () => window.requestAnimationFrame(() => { if (topRightAnchor.current) pop.set({ id: 'export', anchor: topRightAnchor.current }); }),
@@ -1148,6 +1379,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
     bookmarkCurrentView: () => { if (!paged) bookmarkView(); },
   };
   useEffect(() => host.connect({
+    rebuildScenes: () => actionsRef.current?.rebuildScenes?.() ?? Promise.resolve(),
     exportPdf: () => actionsRef.current?.exportPdf(),
     exportPackage: () => actionsRef.current?.exportPackage(),
     openExport: () => actionsRef.current?.openExport(),
@@ -1175,7 +1407,26 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   const dockTool: ToolId = reading && tool === 'capture' ? 'select' : tool;
   const secondaryToolActive = dockTool === 'text' || dockTool === 'shape' || dockTool === 'capture' || dockTool === 'space' || dockTool === 'tape';
   const activeAuxCount = (zoomWindowOpen ? 1 : 0) + (ruler ? 1 : 0) + (prefs.gridSnap ? 1 : 0) + (paged && prefs.nightPaper ? 1 : 0);
-  const tools = <ToolDock layer={bodyLayer} visible={!reading || scratchOpen} autoCollapse={prefs.autoCollapseDock} writingSignal={writingSignal} onDrag={pop.close}>
+  const dragLink = host.buildDragLink ? (linkTarget: { page?: string; pageNumber?: number; region?: string; title?: string; embed?: boolean }) => host.buildDragLink!(linkTarget) : undefined;
+  const currentPageParagraphs = (body.current?.elements(paged ? currentPageId : undefined) ?? mixedElements).filter(e => !e.isDeleted && textReference(e) && !(e.type === 'text' && e.containerId));
+  const onBindParagraph = selection && currentPageParagraphs.length > 0 && selectedInk().length > 0
+    ? (anchor: HTMLElement) => {
+      if (currentPageParagraphs.length === 1) attachInk(currentPageParagraphs[0]);
+      else pop.set({ id: 'mixed', anchor });
+    }
+    : undefined;
+  const hoverCard = host.hoverLink ? (event: React.MouseEvent<HTMLElement>, element: Element) => {
+    const ref = cardReference(element);
+    if (ref?.kind === 'ink') {
+      const subpath = ref.region === WHOLE_PAGE_REGION ? (ref.page ? `#page=${encodeURIComponent(ref.page)}` : '') : formatInkSubpath({ region: ref.region });
+      host.hoverLink!(event.nativeEvent, event.currentTarget, ref.path + subpath);
+      return;
+    }
+    const text = cardText(element, boardElements);
+    const textRef = text && textReference(text);
+    if (textRef) host.hoverLink!(event.nativeEvent, event.currentTarget, textRef.path);
+  } : undefined;
+  const tools = <ToolDock layer={bodyLayer} visible={!isPreview && (!reading || scratchOpen)} autoCollapse={prefs.autoCollapseDock} writingSignal={writingSignal} dockPref={prefs.dock} onDockChange={dock => store.update({ dock })} onDrag={pop.close}>
     {!reading && <div className="ink-history-tools" role="group" aria-label="编辑历史">
       <IconButton icon="undo" label="撤销" shortcut="Ctrl+Z" disabled={!session.bodyHistory.canUndo} onClick={() => undo()}/>
       <IconButton icon="redo" label="重做" shortcut="Ctrl+Shift+Z" disabled={!session.bodyHistory.canRedo} onClick={() => redo()}/>
@@ -1200,27 +1451,35 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
       <div ref={setBodyLayer} className={`ink-body${scratchOpen && prefs.scratchPlacement === "docked" ? " has-docked-scratch" : ""}`}>
         <span ref={topRightAnchor} className="ink-top-anchor" aria-hidden="true"/>
         {floatingStatus}
+        {isPreview && <button type="button" className="ink-preview-banner" onClick={() => run(() => host.openInPane?.('tab'))}><InkIcon name="external"/><span>打开笔记编辑</span></button>}
         {tools}
         {sidebarVisible && <>
         {compact && <button type="button" className="ink-sidebar-backdrop" aria-label="关闭侧栏" onClick={() => closeSidebar()}/>}
         <aside className="ink-sidebar" id={sidebarId} aria-label="侧栏" onKeyDown={event => {
-          if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeSidebar(); }
+          if (event.key === 'Escape' && !isImeComposing(event) && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeSidebar(); }
         }}>
           <div className="ink-sidebar-heading">
-            <SidebarTabs id={sidebarId} tab={sidebarTab} onTab={chooseTab} paged={paged} hasOutline={hasOutline}/>
+            <SidebarTabs id={sidebarId} tab={sidebarTab} onTab={chooseTab} paged={paged} hasOutline={hasOutline} backlinkCount={backlinks.length}/>
             <IconButton icon="close" label="收起侧栏" onClick={() => closeSidebar(true)}/></div>
           <div className="ink-sidebar-panel" id={`${sidebarId}-panel`} role="tabpanel" aria-labelledby={`${sidebarId}-${sidebarTab}`}>
-          {paged && sidebarTab === 'pages' && <PageList session={session} pdf={pdf} current={currentPageId} onSelect={goToPage} onAdd={() => addPage()} onMenu={(id, anchor) => { setTarget(id); pop.set({ id: 'page-menu', anchor }); }}/>}
-          {hasOutline && sidebarTab === 'outline' && pdf && <OutlineList pdf={pdf} pages={manifest.pages} currentPdfPage={currentPage?.pdfPage} onSelect={goToPage}/>}
+          {paged && sidebarTab === 'pages' && <PageList session={session} pdf={pdf} current={currentPageId} onSelect={goToPage} onAdd={() => addPage()}
+            onOpenSettings={anchor => openSettings(currentPageId, anchor)} onDragLink={dragLink}
+            onMenu={(id, anchor) => { setTarget(id); pop.set({ id: 'page-menu', anchor }); }}/>}
+          {hasOutline && sidebarTab === 'outline' && pdf && <OutlineList pdf={pdf} pages={manifest.pages} currentPdfPage={currentPage?.pdfPage} onSelect={goToPage} onDragLink={dragLink}/>}
           {sidebarTab === 'bookmarks' && <BookmarkList regions={manifest.regions} pageNumber={id => paged ? indexOf(id) + 1 : 0} onOpen={openRegion}
             onMenu={(region, anchor) => { setTarget(region.id); pop.set({ id: 'bookmark-menu', anchor }); }} onSaveView={paged ? undefined : bookmarkView}
             onAdd={() => { setReading(false); setMarquee({ shape: 'rect', purpose: 'bookmark' }); if (compact) setSidebar(false); }}
-            renaming={renaming} onRename={renameRegion}/>}
+            renaming={renaming} onRename={renameRegion} onDragLink={dragLink}/>}
+          {sidebarTab === 'backlinks' && <BacklinkList entries={backlinks} paged={paged}
+            onOpen={(entry, newTab) => run(() => host.openBacklink ? host.openBacklink(entry, newTab) : host.openFile(entry.sourcePath))}
+            onNavigateTarget={navigateBacklinkTarget}
+            onHover={host.hoverLink ? (event, targetEl, path) => host.hoverLink!(event.nativeEvent, targetEl, path) : undefined}/>}
           {sidebarTab === 'search' && <SearchPanel session={session} pdf={pdf} paged={paged} onOpen={(hit: SearchHit) => revealPage(hit.page, hit.rect, !!hit.rect)}/>}
           </div>
         </aside></>}
-        <div className="ink-surfaces" ref={area}>
-        <main className={`ink-canvas-area${zoomWindowOpen && !reading ? ' has-zoom-window' : ''}`}>
+        <div className="ink-surfaces" ref={area} onDragEnterCapture={onSurfaceDragEnter} onDragOverCapture={onSurfaceDragOver} onDragLeaveCapture={onSurfaceDragLeave} onDropCapture={onSurfaceDrop}>
+        <main ref={canvasArea} className={`ink-canvas-area${zoomWindowOpen && !reading ? ' has-zoom-window' : ''}`} onMouseMove={onCanvasMouseMove}>
+          <span ref={hoverAnchorHost} className="ink-hover-anchor" aria-hidden="true"/>
           <InkCanvas session={session} pdf={pdf} kind={paged ? 'pages' : 'canvas'} pagesKey={pagesKey} tool={bodyTool} fingerDraws={prefs.fingerDraws} zoomLock={prefs.zoomLock} nightPaper={paged && prefs.nightPaper} gridSnap={prefs.gridSnap} ruler={reading ? null : ruler} rulerRef={reading ? undefined : liveRuler} theme={theme} readOnly={reading || !!editingCard}
             initialView={initialBodyView} ref={body}
             onReady={handle => {
@@ -1245,14 +1504,15 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
             onAddPage={paged && !reading ? () => addPage() : undefined}
             onViewChange={() => { if (body.current) host.saveView(body.current.memory()); }}/>
           {ruler && !reading && <RulerOverlay ruler={ruler} liveRef={liveRuler} onChange={setRuler} onClose={() => setRuler(null)}/>}
-          {zoomWindowOpen && !reading && body.current && <ZoomBoxOverlay views={views} box={zoomBox} liveRef={liveZoomBox} syncRef={zoomBoxSyncRef} onLiveMove={() => zoomPaintRef.current?.()} autoAdvance={zoomAutoAdvance} onChange={setZoomBox}/>}
+          {zoomWindowOpen && !reading && body.current && <ZoomBoxOverlay views={views} box={zoomBox} liveRef={liveZoomBox} syncRef={zoomBoxSyncRef} onLiveMove={() => zoomPaintRef.current?.()} autoAdvance={zoomAutoAdvance} onChange={setZoomBox} onStep={stepZoomBox}/>}
           {selection && !selection.busy && !marquee && !reading && !editingCard && <SelectionBar views={views} selection={selection}
             onDuplicate={selectionActions.duplicate} onToggleTape={selection.hasTape ? toggleSelectedTapes : undefined} onRemove={selectionActions.remove} onScratch={selectionActions.toScratch}
             onLayers={anchor => pop.toggle('selection-layers', anchor)}
             onColor={anchor => pop.toggle('selection-color', anchor)}
+            onBindParagraph={onBindParagraph}
             onMore={anchor => pop.toggle('selection-more', anchor)}
             onSource={selection.source ? () => selectionActions.source(selection) : undefined}/>}
-          {editingCard && <CardEditor root={editingCard.root} source={editingCard.source.path} text={editingCard.source.text} views={views} onSave={saveCardDraft} onClose={() => setEditingCard(null)} bindKeys={(element, submit) => host.text.bindDraftKeys(element, submit)}/>}
+          {editingCard && <CardEditor root={editingCard.root} source={editingCard.source.path} text={editingCard.source.text} views={views} onSave={saveCardDraft} onClose={() => setEditingCard(null)} bindKeys={(element, submit) => host.text.bindDraftKeys(element, submit)} onHoverSource={host.hoverLink ? event => host.hoverLink!(event.nativeEvent, event.currentTarget, editingCard.source.path) : undefined}/>}
           {marquee && <div className="ink-mode-hint" role="status">拖动框选要加书签的区域<button type="button" onClick={() => setMarquee(null)}>取消</button></div>}
           <ViewControls views={views} paged={paged} pageCount={manifest.pages.length} pageIndex={currentIndex}
             zoomLock={prefs.zoomLock} onToggleZoomLock={() => store.update({ zoomLock: !prefs.zoomLock })}
@@ -1298,6 +1558,7 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
               <ZoomControls views={scratchViews} label="草稿纸缩放" fitLabel="草稿纸显示全部内容" onZoom={anchor => pop.toggle('scratch-zoom', anchor)} onFit={() => scratch.current?.zoom('fitAll')}/>
             </div>
           </ScratchWindow>
+          {dragOver && <div className="ink-drop-overlay" aria-hidden="true"><span>松手放入图片、文字段落或手写卡片</span></div>}
         </div>
       </div>
       {resolving && <div className="ink-cover" role="status"><span className="ink-spinner"/>正在保存独立副本…</div>}
@@ -1329,19 +1590,22 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
           { heading: '素材与图层' },
           { icon: 'sticker', label: '常用元素库', hint: savedElements.length ? `已收藏 ${savedElements.length} 项` : '收藏常用图形与公式', onSelect: () => window.requestAnimationFrame(() => { const anchor = layer?.querySelector<HTMLElement>('[data-anchor="toolbox"]') ?? topRightAnchor.current; if (anchor) pop.set({ id: 'elements', anchor }); }) },
           !reading && { icon: 'layers', label: '图层与编组', hint: '调整前后层级、组合与锁定', onSelect: () => window.requestAnimationFrame(() => { const anchor = layer?.querySelector<HTMLElement>('[data-anchor="toolbox"]') ?? topRightAnchor.current; if (anchor) pop.set({ id: 'layers', anchor }); }) },
+          'separator',
+          { icon: 'sliders', label: paged ? '纸张与页边距…' : '画布样式…', hint: paged ? '横线、方格、点阵与留白' : '背景点阵、方格与空白', onSelect: () => openSettings(paged ? currentPageId : manifest.pages[0].id, pop.anchor) },
         ]}/>
       </Popover>}
       {pop.open === 'cards' && <Popover anchor={pop.anchor} onClose={pop.close} label="画布卡片" align="end" className="ink-mixed-popover">
         <CardsPanel elements={boardElements} selected={body.current?.selected() ?? []} busy={textBusy || !!editingCard}
           onInsertText={() => insertCard('text')} onInsertInk={() => insertCard('ink')} onEdit={editCard} onRefresh={refreshCard}
-          onRecover={recoverCard} onReveal={showCard} onConnect={connectSelection} onGroup={() => groupSelection()} onUngroup={() => groupSelection(true)}/>
+          onRecover={recoverCard} onReveal={showCard} onConnect={connectSelection} onGroup={() => groupSelection()} onUngroup={() => groupSelection(true)} onHoverCard={hoverCard}/>
       </Popover>}
       {pop.open === 'mixed' && <Popover anchor={pop.anchor} onClose={pop.close} label="文字段落" align="end" className="ink-mixed-popover">
         <MixedPanel elements={mixedElements} busy={textBusy} selectionCount={selectedInk().length} readOnly={reading} paged={paged}
           onInsert={insertParagraph} onRefresh={refreshParagraphs}
           onEdit={e => { pop.close(); setSidebar(false); runText(() => host.text.edit(textReference(e)!)); }}
           onAttach={e => attachInk(e)} onDetach={() => attachInk()} onMove={reorderParagraph}
-          onRemove={e => runText(async () => { await applyMixed(currentPageId, elements => detachParagraph(elements, e.id)); toast.show({ kind: 'info', message: '段落已移除，笔迹保留在原位', action: { label: '撤销', run: () => undo() } }); })}/>
+          onRemove={e => runText(async () => { await applyMixed(currentPageId, elements => detachParagraph(elements, e.id)); toast.show({ kind: 'info', message: '段落已移除，笔迹保留在原位', action: { label: '撤销', run: () => undo() } }); })}
+          onHoverSource={host.hoverLink ? (event, path) => host.hoverLink!(event.nativeEvent, event.currentTarget, path) : undefined}/>
       </Popover>}
       {pop.open === 'pdf-text' && <Popover anchor={pop.anchor} onClose={pop.close} label="PDF 原文文字" align="end" className="ink-pdf-text-popover">
         <div className="ink-popover-title">第 {pdfText.page} 页文字</div>
@@ -1364,10 +1628,11 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
           'separator',
           { icon: 'package', label: '可编辑备份', hint: '.inkpack，可恢复编辑（含草稿纸）', onSelect: () => run(() => exportDocument('package')) },
         ]}/>
-        <p className="ink-popover-note">文件保存在库内「Drawing Exports」文件夹。</p>
+        <p className="ink-popover-note">文件保存在库内「{prefs.exportFolder}」文件夹。</p>
       </Popover>}
       {pop.open === 'page-menu' && menuPage && <Popover anchor={pop.anchor} onClose={pop.close} label="页面操作"><Menu items={pageMenu(menuPage, pop.anchor)} onDone={pop.close}/></Popover>}
       {pop.open === 'bookmark-menu' && menuRegion && <Popover anchor={pop.anchor} onClose={pop.close} label="书签操作" align="end"><Menu onDone={pop.close} items={[
+        !!host.sendToMarkdown && { icon: 'embed', label: host.hasAdjacentMarkdown?.() ? '插入到右侧文字笔记' : '发送到文字笔记', hint: '以原生预览嵌入 Markdown', onSelect: () => sendRegionToMarkdown(menuRegion.id, menuRegion.pageId) },
         { icon: 'link', label: '复制链接', hint: '粘贴到笔记中，点击即可跳转', onSelect: () => copyLink({ page: menuRegion.pageId, region: menuRegion.id }) },
         { icon: 'embed', label: '复制嵌入代码', hint: '在 Markdown 中显示这块区域的预览', onSelect: () => copyLink({ page: menuRegion.pageId, region: menuRegion.id, embed: true }) },
         { icon: 'pen', label: '重命名', onSelect: () => setRenaming(menuRegion.id) },
@@ -1382,11 +1647,22 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         ['zoomIn', '放大', 'in'], ['zoomOut', '缩小', 'out'], ['fit', '100%', 'actual'],
         ...(paged && pop.open === 'zoom' ? [['fitWidth', '适合宽度', 'fitWidth'], ['page', '适合整页', 'fitPage']] : [['fit', '显示全部内容', 'fitAll']]),
       ] as [string, string, ZoomAction][]).map(([icon, label, action]) => ({ icon, label, onSelect: () => (pop.open === 'scratch-zoom' ? scratch.current : body.current)?.zoom(action) }))}/></Popover>}
-      {pop.open === 'jump' && <Popover anchor={pop.anchor} onClose={pop.close} label="跳转页面" align="end" className="ink-jump">
-        <form onSubmit={event => { event.preventDefault(); const n = Number(new FormData(event.currentTarget).get('page')); const page = manifest.pages[n - 1]; if (page) { goToPage(page.id); pop.close(); } }}>
-          <label>跳到第 <input name="page" type="number" min={1} max={manifest.pages.length} defaultValue={currentIndex + 1} data-autofocus onFocus={event => event.currentTarget.select()}/> 页</label>
+      {pop.open === 'jump' && <Popover anchor={pop.anchor} onClose={() => { setJumpError(''); pop.close(); }} label="跳转页面" align="end" className="ink-jump">
+        <form noValidate onSubmit={event => {
+          event.preventDefault();
+          const entry = new FormData(event.currentTarget).get('page');
+          const raw = typeof entry === 'string' ? entry.trim() : '';
+          const n = Number(raw);
+          const page = Number.isInteger(n) && n >= 1 && n <= manifest.pages.length ? manifest.pages[n - 1] : undefined;
+          if (!page) { setJumpError(`请输入 1 到 ${manifest.pages.length} 之间的页码`); return; }
+          setJumpError('');
+          goToPage(page.id);
+          pop.close();
+        }}>
+          <label>跳到第 <input name="page" type="number" min={1} max={manifest.pages.length} defaultValue={currentIndex + 1} data-autofocus onFocus={event => event.currentTarget.select()} onChange={() => { if (jumpError) setJumpError(''); }}/> 页</label>
           <button type="submit" className="mod-cta">前往</button>
         </form>
+        {jumpError && <p className="ink-jump-error" role="alert">{jumpError}</p>}
       </Popover>}
       {pop.open === 'elements' && <Popover anchor={pop.anchor} onClose={pop.close} label="常用元素库" align="end" className="ink-elements-popover">
         <ElementsPanel items={savedElements} dark={!paged && theme === 'dark'} canSave={reading ? !!(scratchOpen && scratchSelection) : !!selection} onSaveCurrent={saveSelectionToLibrary} onInsert={insertLibraryItem} onRemove={id => run(() => host.elements.remove(id))}/>
@@ -1433,13 +1709,14 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
         { icon: selection.locked ? 'unlock' : 'lock', label: selection.locked ? '解锁所选' : '锁定所选', hint: 'Ctrl+Shift+L · 防止误擦或误移', onSelect: selectionActions.toggleLock },
       ]}/></Popover>}
       {pop.open === 'selection-more' && selection && <Popover anchor={pop.anchor} onClose={pop.close} label="更多选区操作" align="center"><Menu onDone={pop.close} items={[
-        { icon: 'copy', label: '跨笔记复制', hint: 'Ctrl+C', onSelect: () => copySelectedToClipboard('body') },
+        { icon: 'copy', label: '复制', hint: 'Ctrl+C · 可在当前或其他笔记粘贴', onSelect: () => copySelectedToClipboard('body') },
         { icon: 'saveSticker', label: '存为常用元素', hint: '跨笔记一键复用', onSelect: saveSelectionToLibrary },
         'separator',
         selection.canGroup && { icon: 'group', label: '组合所选', hint: 'Ctrl+G', onSelect: selectionActions.group },
         selection.grouped && { icon: 'ungroup', label: '拆分组合', hint: 'Ctrl+Shift+G', onSelect: selectionActions.ungroup },
         { icon: selection.locked ? 'unlock' : 'lock', label: selection.locked ? '解锁所选' : '锁定所选', hint: 'Ctrl+Shift+L', onSelect: selectionActions.toggleLock },
         'separator',
+        !!host.sendToMarkdown && { icon: 'embed', label: host.hasAdjacentMarkdown?.() ? '插入到右侧文字笔记' : '发送到文字笔记', hint: '以原生预览嵌入 Markdown', onSelect: () => sendRegionToMarkdown() },
         { icon: 'bookmark', label: paged ? '为这块区域加书签' : '加书签', onSelect: selectionActions.bookmark },
         { icon: 'image', label: '导出所选为图片', hint: 'PNG，透明背景', onSelect: () => run(() => exportDocument('png', 'selection')) },
         { icon: 'pdf', label: '导出所选为 PDF', hint: '矢量，只含所选内容', onSelect: () => run(() => exportDocument('pdf', 'selection')) },
@@ -1448,9 +1725,9 @@ export function Workspace({ session, pdf, host }: WorkspaceProps) {
   </LayerContext.Provider>;
 }
 
-function SelectionBar({ views, selection, onDuplicate, onToggleTape, onRemove, onScratch, onLayers, onColor, onMore, onSource }: {
+function SelectionBar({ views, selection, onDuplicate, onToggleTape, onRemove, onScratch, onLayers, onColor, onBindParagraph, onMore, onSource }: {
   views: ViewStore; selection: SelectionInfo; onDuplicate: () => void; onToggleTape?: () => void; onRemove: () => void; onScratch: () => void;
-  onLayers: (anchor: HTMLElement) => void; onColor: (anchor: HTMLElement) => void; onMore: (anchor: HTMLElement) => void; onSource?: () => void;
+  onLayers: (anchor: HTMLElement) => void; onColor: (anchor: HTMLElement) => void; onBindParagraph?: (anchor: HTMLElement) => void; onMore: (anchor: HTMLElement) => void; onSource?: () => void;
 }) {
   const bar = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 260, height: 42 });
@@ -1469,7 +1746,7 @@ function SelectionBar({ views, selection, onDuplicate, onToggleTape, onRemove, o
   const above = top > size.height + 18, y = above ? top - size.height - 10 : Math.min(bottom + 14, height - size.height - 8);
   const half = size.width / 2;
   const onToolbarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (isImeComposing(event) || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
     if (!buttons.length) return;
     event.preventDefault(); event.stopPropagation();
@@ -1483,6 +1760,7 @@ function SelectionBar({ views, selection, onDuplicate, onToggleTape, onRemove, o
     <IconButton icon="drop" label="颜色与样式" onClick={event => onColor(event.currentTarget)}/>
     <IconButton icon="layers" label="图层顺序" onClick={event => onLayers(event.currentTarget)}/>
     <IconButton icon="scratch" label="复制到草稿纸" onClick={onScratch}/>
+    {onBindParagraph && <IconButton icon="link" label="绑定到文字段落" onClick={event => onBindParagraph(event.currentTarget)}/>}
     {onToggleTape && <IconButton icon={selection.tapeRevealed ? 'eyeOff' : 'eye'} label={selection.tapeRevealed ? '重新遮盖胶带' : '揭开胶带'} onClick={onToggleTape}/>}
     {onSource && <IconButton icon="locate" label="查看出处" onClick={onSource}/>}
     <IconButton icon="more" label="更多选区操作" onClick={event => onMore(event.currentTarget)}/>

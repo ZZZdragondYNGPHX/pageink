@@ -2,8 +2,8 @@ import React from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { App, Component, FileView, FuzzySuggestModal, ItemView, MarkdownView, Notice, Plugin, Scope, TFile, TFolder, Menu, WorkspaceLeaf, ViewStateResult, setIcon } from 'obsidian';
 import { Library, LibraryHost } from './Library';
-import { blockInsertion, drawingRegionCode, NOTE_TYPES, NoteCreateKind, NoteEntry } from './notes';
-import { parseManifest, Region } from './model';
+import { blockInsertion, formatInkSubpath, NOTE_TYPES, NoteCreateKind, NoteEntry } from './notes';
+import { parseManifest } from './model';
 import { ErrorBoundary } from './ui';
 import { LibrarySearchState, NoteTarget, scanLibrary, SearchSegment } from './library-search';
 
@@ -12,6 +12,7 @@ export interface NotesActions {
   create(kind?: NoteCreateKind, folder?: string): Promise<void>;
   preview(entry: NoteEntry, signal: AbortSignal): Promise<{ image?: string; text?: string }>;
   createText(): void;
+  embedMaxWidth(): number;
   flushDrawing(path: string): Promise<void>;
   daily(): Promise<void>;
   properties(path: string): Promise<void>;
@@ -82,6 +83,9 @@ export class NotesHost extends Component implements LibraryHost {
   preview = (entry: NoteEntry, signal: AbortSignal) => this.actions.preview(entry, signal);
   selectFolder = (path: string) => { this.selectedFolder = path; };
   folderName = () => this.app.vault.getName();
+  hoverLink = (event: MouseEvent, targetEl: HTMLElement, path: string) => {
+    this.app.workspace.trigger('hover-link', { event, source: LIBRARY_VIEW, hoverParent: this, targetEl, linktext: path, sourcePath: '' });
+  };
   folders = (path: string) => {
     const folder = this.app.vault.getAbstractFileByPath(path || "/");
     return folder instanceof TFolder ? folder.children.filter((f): f is TFolder => f instanceof TFolder).map(f => ({ path: f.path, name: f.name })).sort((a, b) => a.name.localeCompare(b.name, "zh-CN")) : [];
@@ -126,7 +130,7 @@ export class NotesHost extends Component implements LibraryHost {
       if (!checking) this.run(() => this.properties(file.path)); return true;
     } });
     plugin.addCommand({ id: 'new-text-note', name: `新建${NOTE_TYPES.text.label}（Markdown）`, callback: () => this.actions.createText() });
-    plugin.addCommand({ id: 'insert-drawing-region', name: '插入手写区域', editorCheckCallback: (checking, _editor, info) => {
+    plugin.addCommand({ id: 'insert-drawing-region', name: '插入手写区域或页面', editorCheckCallback: (checking, _editor, info) => {
       if (!(info instanceof MarkdownView)) return false;
       if (!checking) this.pickRegion(info); return true;
     } });
@@ -136,7 +140,7 @@ export class NotesHost extends Component implements LibraryHost {
     } });
     this.registerEvent(app.workspace.on('editor-menu', (menu, _editor, info) => {
       if (!(info instanceof MarkdownView) || info.getMode() !== 'source') return;
-      menu.addItem(item => item.setTitle('插入手写区域').setIcon('notebook-pen').onClick(() => this.pickRegion(info)));
+      menu.addItem(item => item.setTitle('插入手写区域或页面').setIcon('notebook-pen').onClick(() => this.pickRegion(info)));
     }));
     this.registerEvent(app.vault.on('create', () => this.changed()));
     this.registerEvent(app.vault.on('modify', file => { this.summaries.delete(file.path); this.changed(); }));
@@ -163,26 +167,23 @@ export class NotesHost extends Component implements LibraryHost {
     for (const root of roots) {
       if (this.explorers.has(root)) continue;
       const toolbar = root.querySelector<HTMLElement>('.nav-buttons-container');
-      const create = toolbar?.querySelector<HTMLElement>('.nav-action-button');
-      if (!toolbar || !create) continue;
-      const original = new Map(['aria-label', 'role', 'tabindex'].map(name => [name, create.getAttribute(name)]));
-      create.setAttribute('aria-label', '新建笔记');
-      create.setAttribute('role', 'button'); create.tabIndex = 0;
+      if (!toolbar) continue;
+      const inkCreate = toolbar.createEl('button', { cls: 'clickable-icon nav-action-button ink-folder-action', attr: { type: 'button', 'aria-label': '新建绘写笔记', title: '新建绘写笔记' } });
+      setIcon(inkCreate, 'notebook-pen');
       const browse = toolbar.createEl('button', { cls: 'clickable-icon nav-action-button ink-folder-action', attr: { type: 'button', 'aria-label': '以缩略图浏览', title: '以缩略图浏览' } });
       setIcon(browse, 'layout-grid');
       const folder = () => this.selectedFolder ?? this.app.workspace.getActiveFile()?.parent?.path ?? '/';
       browse.onclick = () => this.run(() => this.openLibrary(folder()));
+      inkCreate.onclick = () => {
+        const path = folder(), menu = new Menu();
+        menu.addItem(item => item.setTitle('新建手写笔记').setIcon(NOTE_TYPES.pages.hostIcon).onClick(() => this.run(() => this.create('pages', path))));
+        menu.addItem(item => item.setTitle('新建无边画布').setIcon(NOTE_TYPES.canvas.hostIcon).onClick(() => this.run(() => this.create('canvas', path))));
+        menu.addSeparator();
+        menu.addItem(item => item.setTitle('选择纸张或导入 PDF…').setIcon('sliders-horizontal').onClick(() => this.run(() => this.create(undefined, path))));
+        const rect = inkCreate.getBoundingClientRect(); menu.showAtPosition({ x: rect.left, y: rect.bottom });
+      };
       const click = (event: MouseEvent) => {
         const target = event.target as HTMLElement;
-        if (create.contains(target)) {
-          event.preventDefault(); event.stopImmediatePropagation();
-          const path = folder(), menu = new Menu();
-          for (const kind of ['text', 'pages', 'canvas'] as const) menu.addItem(item => item.setTitle(`新建${NOTE_TYPES[kind].label}`).setIcon(NOTE_TYPES[kind].hostIcon).onClick(() => this.run(() => this.create(kind, path))));
-          menu.addSeparator();
-          menu.addItem(item => item.setTitle('纸张设置与导入…').setIcon('import').onClick(() => this.run(() => this.create(undefined, path))));
-          const rect = create.getBoundingClientRect(); menu.showAtPosition({ x: rect.left, y: rect.bottom });
-          return;
-        }
         const path = target.closest<HTMLElement>('.nav-folder-title[data-path]')?.dataset.path;
         if (!path) return;
         this.selectedFolder = path;
@@ -192,16 +193,9 @@ export class NotesHost extends Component implements LibraryHost {
           this.app.workspace.setActiveLeaf(active.leaf, { focus: false });
         });
       };
-      const keydown = (event: KeyboardEvent) => {
-        if (event.target === create && !event.isComposing && ['Enter', ' '].includes(event.key)) {
-          event.preventDefault(); event.stopImmediatePropagation(); create.click();
-        }
-      };
-      root.addEventListener('click', click, true);
-      root.addEventListener('keydown', keydown, true);
+      root.addEventListener('click', click);
       this.explorers.set(root, () => {
-        root.removeEventListener('click', click, true); root.removeEventListener('keydown', keydown, true); browse.remove();
-        for (const [name, value] of original) { if (value === null) create.removeAttribute(name); else create.setAttribute(name, value); }
+        root.removeEventListener('click', click); inkCreate.remove(); browse.remove();
       });
     }
   }
@@ -312,16 +306,18 @@ export class NotesHost extends Component implements LibraryHost {
   pickRegion(view: MarkdownView) {
     const target = this.insertion(view); if (!target) return;
     const files = this.app.vault.getFiles().filter(file => file.extension === 'inknote').sort((a, b) => b.stat.mtime - a.stat.mtime);
-    if (!files.length) { new Notice('先在手写笔记或无边画布中为一处内容加书签，再来插入这块区域。'); return; }
+    if (!files.length) { new Notice('先创建一份手写笔记或无边画布，再来插入区域或页面。'); return; }
     new Picker(this.app, '选择手写笔记、无边画布或 PDF 批注', files, file => file.path, async file => {
       await this.actions.flushDrawing(file.path);
       const manifest = parseManifest(await this.app.vault.read(file));
-      if (!manifest.regions.length) { new Notice('这份笔记还没有区域书签。打开笔记，圈选内容后选择「加书签」，再回到这里插入。'); return; }
-      new Picker<Region>(this.app, '选择要插入的手写区域', manifest.regions, region => region.title, async region => {
+      const choices = [
+        ...manifest.regions.map(region => ({ label: `书签：${region.title}`, subpath: formatInkSubpath({ region: region.id }) })),
+        ...(manifest.mode === 'pages' ? manifest.pages.map((_, i) => ({ label: `整页：第 ${i + 1} 页`, subpath: formatInkSubpath({ pageNumber: i + 1 }) })) : [{ label: '整张无边画布', subpath: '' }]),
+      ];
+      new Picker(this.app, '选择要插入的手写区域或页面', choices, choice => choice.label, async choice => {
         if (this.app.vault.getAbstractFileByPath(file.path) !== file) throw Error('手写笔记已删除，请重新选择。');
-        // The real Markdown link participates in Obsidian's metadata and rename handling.
-        const link = this.app.fileManager.generateMarkdownLink(file, target.file.path);
-        await target.insert(link + '\n\n' + drawingRegionCode({ document: manifest.id, file: file.path, region: region.id }), true);
+        const embedLink = '!' + this.app.fileManager.generateMarkdownLink(file, target.file.path, choice.subpath, String(this.actions.embedMaxWidth()));
+        await target.insert(embedLink, true);
       }).open();
     }).open();
   }

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
 import { filterNotes, folderNotes, NOTE_LABELS, NOTE_TYPES, NoteCreateKind, NoteEntry, NoteFilter } from './notes';
-import { LayerContext, Popover, Segmented, useAnchor } from './ui';
+import { isImeComposing, LayerContext, Popover, Segmented, useAnchor } from './ui';
 import type { LibrarySearchState, NoteTarget } from './library-search';
 
 export interface LibraryHost {
@@ -15,6 +15,7 @@ export interface LibraryHost {
   fileMenu(path: string, event: MouseEvent): void;
   search(entries: NoteEntry[], query: string, signal: AbortSignal, progress: (state: LibrarySearchState) => void): Promise<LibrarySearchState>;
   create(kind?: NoteCreateKind, folder?: string): Promise<void>;
+  hoverLink?(event: MouseEvent, targetEl: HTMLElement, path: string): void;
 }
 
 const filters: { id: NoteFilter; label: string }[] = [
@@ -90,7 +91,7 @@ export function Library({ host, folder, onFolder, initialSearch, display, onDisp
   const filtered = !!searchQuery.trim() || filter !== 'all';
 
   return <LayerContext.Provider value={layer}><div ref={setLayer} className="ink-workspace ink-library" onKeyDown={event => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); searchInput.current?.focus(); searchInput.current?.select(); }
   }}>
     <header className="ink-library-heading">
@@ -109,7 +110,7 @@ export function Library({ host, folder, onFolder, initialSearch, display, onDisp
           onCompositionStart={() => { composing.current = true; }} onCompositionEnd={e => { composing.current = false; setSearchQuery(e.currentTarget.value); }}
           onChange={e => { setQuery(e.target.value); if (!composing.current) setSearchQuery(e.target.value); }}
           onKeyDown={e => {
-            if (e.nativeEvent.isComposing || composing.current) return;
+            if (isImeComposing(e) || composing.current) return;
             if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); clearSearch(); }
             if (e.key === 'ArrowDown' && matches.length) { e.preventDefault(); list.current?.querySelector<HTMLButtonElement>('.ink-library-note')?.focus(); }
             if (e.key === 'Enter' && matches.length && !running) { e.preventDefault(); void action(matches[0].entry.path, () => host.open(matches[0].entry.path, matches[0].target)); }
@@ -135,7 +136,7 @@ export function Library({ host, folder, onFolder, initialSearch, display, onDisp
         <button key={item.path} type="button" onClick={() => void action('folder', () => onFolder(item.path))} onContextMenu={event => { event.preventDefault(); host.fileMenu(item.path, event.nativeEvent); }}><InkIcon name="folderOpen"/><span>{item.name}</span><InkIcon name="right"/></button>
       )}</div>}
       <ul ref={list} className={`ink-library-list${display === 'grid' && !searchQuery.trim() ? ' is-grid' : ''}`} aria-label="笔记列表" onKeyDown={event => {
-        if (event.nativeEvent.isComposing || !(event.target as HTMLElement).matches('.ink-library-note')) return;
+        if (isImeComposing(event) || !(event.target as HTMLElement).matches('.ink-library-note')) return;
         if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
         const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('.ink-library-note')], index = buttons.indexOf(event.target as HTMLButtonElement);
@@ -143,7 +144,7 @@ export function Library({ host, folder, onFolder, initialSearch, display, onDisp
         else buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : Math.min(buttons.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))]?.focus();
       }}>
         {matches.slice(0, limit).map(({ entry, snippet, label, target }) => <li key={entry.path} className="ink-library-row">
-          <button type="button" className={`ink-library-note ink-note-${entry.kind}`} disabled={!!pending} onClick={event => { const destination = event.ctrlKey || event.metaKey ? "tab" : undefined; void action(entry.path, () => host.open(entry.path, target, destination)); }} onContextMenu={event => { event.preventDefault(); host.fileMenu(entry.path, event.nativeEvent); }} title={entry.path}>
+          <button type="button" className={`ink-library-note ink-note-${entry.kind}`} disabled={!!pending} onMouseEnter={host.hoverLink ? event => host.hoverLink!(event.nativeEvent, event.currentTarget, entry.path) : undefined} onClick={event => { const destination = event.ctrlKey || event.metaKey ? "tab" : undefined; void action(entry.path, () => host.open(entry.path, target, destination)); }} onContextMenu={event => { event.preventDefault(); host.fileMenu(entry.path, event.nativeEvent); }} title={entry.path}>
             {display === 'grid' && !searchQuery.trim() && <NotePreview entry={entry} host={host}/>}
             <span className="ink-library-note-icon">{pending === entry.path ? <span className="ink-spinner"/> : <InkIcon name={icons[entry.kind]}/>}</span>
             <span className="ink-library-note-name"><strong>{entry.name}</strong><span className="ink-library-note-meta"><small className="ink-library-note-kind">{NOTE_LABELS[entry.kind]}{entry.kind in NOTE_TYPES ? ` · ${entry.detail || NOTE_TYPES[entry.kind as NoteCreateKind].detail}` : ''}</small>{entry.path.includes('/') && <small className="ink-library-note-folder">{entry.path.slice(0, entry.path.lastIndexOf('/'))}</small>}<time dateTime={new Date(entry.modified).toISOString()} title={new Date(entry.modified).toLocaleString('zh-CN')}>{modifiedLabel(entry.modified)}</time></span>

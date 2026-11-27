@@ -8,7 +8,7 @@ Obsidian 插件，支持 Markdown、分页手写、无边画布、PDF 批注和�
 
 | 类型 | 功能 |
 | --- | --- |
-| 文字笔记 | 原生 Markdown 编辑、属性和手写区域引用。 |
+| 文字笔记 | 原生 Markdown 编辑、属性、`![[笔记.inknote]]` 嵌入和手写引用。 |
 | 手写笔记 | 分页绘写、纸张模板、页边距、区域书签。 |
 | 无边画布 | 文字、笔迹和来源卡片，支持分组与连线。 |
 | PDF 批注 | 书写、文字搜索、原文复制和摘录。 |
@@ -24,7 +24,7 @@ Obsidian 插件，支持 Markdown、分页手写、无边画布、PDF 批注和�
 
 ## 使用
 
-在文件列表的新建菜单或文件夹右键菜单中选择笔记类型。「纸张设置与导入」设置名称、纸张，或导入 PDF 和备份。「以缩略图浏览」打开当前文件夹的内容预览。
+文件列表保留原生「新建笔记」，点击独立的「新建绘写笔记」按钮（或文件夹右键菜单、设置页可选的左侧功能区按钮）创建手写笔记、无边画布，或打开「纸张设置与导入」导入 PDF 和备份。插件设置页可配置默认纸张（新装默认横线纸）、新建目录、导出目录与嵌入宽度。「以缩略图浏览」打开当前文件夹的内容预览。
 
 文字笔记由 Obsidian 保存。绘写自动保存到库内；「导出 → 可编辑备份」生成包含笔迹、草稿纸和附件的 `.inkpack`。
 
@@ -41,7 +41,7 @@ PageInk 离线运行，无账号、广告或遥测。字体与 PDF 资源内嵌�
 PageInk supports Markdown notes, paginated handwriting, an infinite canvas, PDF annotations, and a separate scratchpad. It requires Obsidian **1.12.7+** and uses a Simplified Chinese interface.
 
 1. Search for **PageInk** in **Settings → Community plugins → Browse**, then install and enable it. For manual installation, extract the ZIP from [Releases](https://github.com/ZZZdragondYNGPHX/pageink/releases/latest) into `.obsidian/plugins/`.
-2. Use the file explorer's New note menu: **文字笔记** creates Markdown, **手写笔记** creates paginated handwriting, and **无边画布** creates an infinite canvas. **纸张设置与导入** imports PDFs and backups.
+2. The file explorer keeps Obsidian's native **New note** button and adds a separate **新建绘写笔记** button (plus folder context menu and an optional ribbon icon in settings) to create paginated handwriting (**手写笔记**), an infinite canvas (**无边画布**), or import PDFs and backups (**纸张设置与导入**). Plugin settings configure the default paper (lined for new installs), note/export folders, and embed width.
 3. Choose **导出 → 可编辑备份** for a complete `.inkpack` backup. Drawing data includes the `.inknote` file, vault resources, and the source PDF.
 
 PageInk runs offline with bundled fonts and PDF resources. Its approximately 46 MB main script exceeds Obsidian Sync Standard's 5 MB file limit; install it separately on each device with that plan.

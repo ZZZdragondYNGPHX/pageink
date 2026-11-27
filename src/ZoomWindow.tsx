@@ -13,7 +13,7 @@ import { templateDots, templateLines, templateSpec } from './templates';
 import { toScreen, useView, View, ViewStore } from './view';
 import { InkStabilizer } from './ink-input';
 import { IconButton, InkIcon } from './InkIcon';
-import { Segmented, Switch } from './ui';
+import { isImeComposing, Segmented, Switch } from './ui';
 import { isolateFloatingInput } from './pointer-input';
 import {
   advanceZoomBox,
@@ -102,7 +102,7 @@ function darkPreviewColor(hex: string): string {
 }
 
 /** Draggable translucent target frame shown on the main canvas when Zoom Window is open. */
-export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoAdvance, onChange }: {
+export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoAdvance, onChange, onStep }: {
   views: ViewStore;
   box: Rect;
   liveRef?: React.MutableRefObject<Rect>;
@@ -110,6 +110,7 @@ export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoA
   onLiveMove?: () => void;
   autoAdvance: boolean;
   onChange: (next: Rect) => void;
+  onStep?: (action: 'prev' | 'next' | 'newline') => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const screen = useView(views, (v: View) => {
@@ -184,7 +185,27 @@ export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoA
     if (d.next.x !== d.origin.x || d.next.y !== d.origin.y) onChange(d.next);
   };
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      if (event.key === 'Enter') {
+        if (!onStep) return;
+        event.preventDefault(); event.stopPropagation();
+        onStep('newline');
+        return;
+      }
+      if (event.key === '[') {
+        if (!onStep) return;
+        event.preventDefault(); event.stopPropagation();
+        onStep('prev');
+        return;
+      }
+      if (event.key === ']') {
+        if (!onStep) return;
+        event.preventDefault(); event.stopPropagation();
+        onStep('next');
+        return;
+      }
+    }
     const step = (event.shiftKey ? 36 : 12) / Math.max(0.25, zoom);
     const moves: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     if (!moves[event.key]) return;

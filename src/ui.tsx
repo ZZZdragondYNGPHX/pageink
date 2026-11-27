@@ -5,28 +5,69 @@ import { InkIcon } from './InkIcon';
 /** Floating layers render into the workspace root so they share its theme tokens and bounds. */
 export const LayerContext = createContext<HTMLElement | null>(null);
 
+const imeRegistered = new WeakSet<Window>();
+const imeEndedAt = new WeakMap<Window, number>();
+
+function ensureImeListener(win: Window | null | undefined): Window | null {
+  if (!win) return null;
+  if (!imeRegistered.has(win)) {
+    imeRegistered.add(win);
+    win.addEventListener('compositionend', () => {
+      imeEndedAt.set(win, performance.now());
+    }, true);
+  }
+  return win;
+}
+
+export function isImeComposing(event: KeyboardEvent | { nativeEvent: KeyboardEvent }): boolean {
+  const native = 'nativeEvent' in event ? event.nativeEvent : event;
+  const win = ensureImeListener(native.view ?? (typeof window !== 'undefined' ? window : null));
+  const legacyKeyCode = (native as { readonly keyCode?: number }).keyCode;
+  if (native.isComposing || legacyKeyCode === 229) return true;
+  const lastEnd = win ? imeEndedAt.get(win) : undefined;
+  return (native.key === 'Enter' || native.key === 'Escape') && lastEnd !== undefined && performance.now() - lastEnd < 35;
+}
+
 type Align = 'start' | 'center' | 'end';
 export function Popover({ anchor, onClose, label, align = 'start', className = '', children, focus = true }: {
   anchor: HTMLElement | null; onClose: () => void; label: string; align?: Align; className?: string; children: React.ReactNode; focus?: boolean;
 }) {
   const layer = useContext(LayerContext), ref = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [position, setPosition] = useState<{ left: number; top: number; maxHeight?: number } | null>(null);
   const close = useRef(onClose); close.current = onClose;
   useLayoutEffect(() => {
+    const doc = anchor?.ownerDocument ?? layer?.ownerDocument;
+    const win = doc?.defaultView;
+    const vv = win?.visualViewport;
     const place = () => {
       const pop = ref.current; if (!pop || !anchor || !layer) return;
       const a = anchor.getBoundingClientRect(), r = layer.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+      const visibleTop = vv ? Math.max(0, vv.offsetTop - r.top) : 0;
+      const visibleBottom = vv ? Math.min(r.height, vv.offsetTop + vv.height - r.top) : r.height;
+      const availableHeight = Math.max(140, Math.floor(visibleBottom - visibleTop - 16));
+      const clampedH = Math.min(h, availableHeight);
       let left = align === 'end' ? a.right - r.left - w : align === 'center' ? a.left + a.width / 2 - r.left - w / 2 : a.left - r.left;
       left = Math.max(8, Math.min(left, r.width - w - 8));
       let top = a.bottom - r.top + 6;
-      if (top + h > r.height - 8 && a.top - r.top - h - 6 > 8) top = a.top - r.top - h - 6;
-      setPosition({ left: left + layer.scrollLeft, top: Math.max(8, Math.min(top, r.height - h - 8)) + layer.scrollTop });
+      if (top + clampedH > visibleBottom - 8 && a.top - r.top - clampedH - 6 > visibleTop + 8) top = a.top - r.top - clampedH - 6;
+      const nextLeft = left + layer.scrollLeft;
+      const nextTop = Math.max(visibleTop + 8, Math.min(top, visibleBottom - clampedH - 8)) + layer.scrollTop;
+      const nextMaxHeight = vv && visibleBottom - visibleTop < r.height - 1 ? availableHeight : undefined;
+      setPosition(prev => prev && prev.left === nextLeft && prev.top === nextTop && prev.maxHeight === nextMaxHeight
+        ? prev
+        : { left: nextLeft, top: nextTop, ...(nextMaxHeight !== undefined ? { maxHeight: nextMaxHeight } : {}) });
     };
     place();
     const observer = new ResizeObserver(place); if (ref.current) observer.observe(ref.current); if (layer) observer.observe(layer);
-    const doc = anchor?.ownerDocument;
     doc?.addEventListener('scroll', place, true);
-    return () => { observer.disconnect(); doc?.removeEventListener('scroll', place, true); };
+    vv?.addEventListener('resize', place);
+    vv?.addEventListener('scroll', place);
+    return () => {
+      observer.disconnect();
+      doc?.removeEventListener('scroll', place, true);
+      vv?.removeEventListener('resize', place);
+      vv?.removeEventListener('scroll', place);
+    };
   }, [anchor, layer, align]);
   useLayoutEffect(() => {
     const pop = ref.current, doc = anchor?.ownerDocument ?? layer?.ownerDocument ?? activeDocument, win = doc.defaultView!;
@@ -44,7 +85,7 @@ export function Popover({ anchor, onClose, label, align = 'start', className = '
     const frame = focus ? window.requestAnimationFrame(() => pop?.querySelector<HTMLElement>('[data-autofocus], [aria-checked="true"], input:not(:disabled):not([tabindex="-1"]), button:not(:disabled):not([tabindex="-1"]), [tabindex="0"]')?.focus({ preventScroll: true })) : 0;
     const down = (event: PointerEvent) => { const target = event.target as Node; if (pop?.contains(target) || anchor?.contains(target)) return; restoreFocus = false; close.current(); };
     const key = (event: KeyboardEvent) => {
-      if (event.isComposing) return;
+      if (isImeComposing(event)) return;
       if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); if (focus && previous?.isConnected) previous.focus({ preventScroll: true }); close.current(); return; }
       if (event.key === 'Tab' && focus && pop && pop.contains(doc.activeElement)) {
         const items = focusables();
@@ -79,7 +120,7 @@ export type MenuEntry = { icon?: string; label: string; hint?: string; onSelect:
 export function Menu({ items, onDone }: { items: readonly (MenuEntry | false | null | undefined)[]; onDone: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const move = (event: React.KeyboardEvent) => {
-    if (event.nativeEvent.isComposing || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    if (isImeComposing(event) || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const buttons = [...ref.current!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
     if (!buttons.length) return;
@@ -103,7 +144,7 @@ export function Menu({ items, onDone }: { items: readonly (MenuEntry | false | n
 
 /** APG radio groups use one Tab stop and arrow keys for the choices within it. */
 export function radioKeys(event: React.KeyboardEvent<HTMLElement>) {
-  if (event.nativeEvent.isComposing || (event.target as HTMLElement).tagName === 'INPUT' || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+  if (isImeComposing(event) || (event.target as HTMLElement).tagName === 'INPUT' || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
   const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)')];
   if (!buttons.length) return;
   event.preventDefault(); event.stopPropagation();

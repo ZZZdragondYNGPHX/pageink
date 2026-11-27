@@ -15,7 +15,16 @@ export class LibrarySources {
   private previews = 0;
   private waiting: (() => void)[] = [];
   async preview(entry: NoteEntry, signal: AbortSignal): Promise<{ image?: string; text?: string }> {
-    if (this.previews >= 2) await new Promise<void>(resolve => this.waiting.push(resolve));
+    signal.throwIfAborted();
+    if (this.previews >= 2) await new Promise<void>((resolve, reject) => {
+      const abort = () => {
+        const index = this.waiting.indexOf(start);
+        if (index >= 0) this.waiting.splice(index, 1);
+        reject(new DOMException('预览已取消', 'AbortError'));
+      };
+      const start = () => { signal.removeEventListener('abort', abort); resolve(); };
+      this.waiting.push(start); signal.addEventListener('abort', abort, { once: true });
+    });
     else this.previews++;
     let pdf: PdfService | undefined;
     let canvas: HTMLCanvasElement | undefined;

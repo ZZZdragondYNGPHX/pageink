@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
 import type { ScratchFrame } from './preferences';
 import { isolateFloatingInput } from './pointer-input';
+import { isImeComposing } from './ui';
 
 const MIN = { width: 260, height: 200 };
 /** Keeps at least the title bar reachable inside the area. */
@@ -17,23 +18,46 @@ export function ScratchWindow({ open, frame, area, onFrame, onClose, docked, onD
   selection: { toBody: () => void; destination: string; remove: () => void; source?: () => void } | null;
   children: React.ReactNode;
 }) {
-  const drag = useRef<{ id: number; x: number; y: number; frame: ScratchFrame; resize: boolean } | null>(null);
+  const drag = useRef<{ id: number; x: number; y: number; frame: ScratchFrame; resize: boolean; target: HTMLElement } | null>(null);
   const root = useRef<HTMLElement>(null);
   const pending = useRef<ScratchFrame>();
+  const resizeFrame = useRef(0);
   const shown = containFrame(frame, area);
   const latest = useRef(shown); latest.current = shown;
+  const cancelResizeFrame = () => {
+    if (!resizeFrame.current) return;
+    window.cancelAnimationFrame(resizeFrame.current);
+    resizeFrame.current = 0;
+  };
   useEffect(() => isolateFloatingInput(root.current!), []);
+  useEffect(() => () => cancelResizeFrame(), []);
+  useEffect(() => {
+    const win = root.current?.ownerDocument.defaultView ?? window;
+    const onKey = (event: KeyboardEvent) => {
+      const d = drag.current;
+      if (!d || isImeComposing(event) || event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancelResizeFrame();
+      drag.current = null;
+      pending.current = undefined;
+      if (d.target.hasPointerCapture(d.id)) d.target.releasePointerCapture(d.id);
+      root.current?.setCssStyles({ transform: '', right: `${d.frame.right}px`, top: `${d.frame.top}px`, width: `${d.frame.width}px`, height: `${d.frame.height}px` });
+    };
+    win.addEventListener('keydown', onKey, true);
+    return () => win.removeEventListener('keydown', onKey, true);
+  }, []);
   useLayoutEffect(() => {
     if (drag.current) return;
     if (docked) { for (const key of ["transform", "right", "top", "width", "height"]) root.current!.style.removeProperty(key); return; }
-    Object.assign(root.current!.style, { transform: '', right: `${shown.right}px`, top: `${shown.top}px`, width: `${shown.width}px`, height: `${shown.height}px` });
+    root.current!.setCssStyles({ transform: '', right: `${shown.right}px`, top: `${shown.top}px`, width: `${shown.width}px`, height: `${shown.height}px` });
   });
   useEffect(() => { if (open && !docked && (shown.right !== frame.right || shown.top !== frame.top || shown.width !== frame.width || shown.height !== frame.height)) onFrame(shown, false); }, [open, docked, area.width, area.height]);
   const start = (resize: boolean) => (event: React.PointerEvent<HTMLElement>) => {
     if (docked || drag.current || event.button !== 0) return;
     if (!resize && (event.target as HTMLElement).closest('button')) return;
     event.stopPropagation(); event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, frame: latest.current, resize };
+    drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, frame: latest.current, resize, target: event.currentTarget };
     pending.current = latest.current;
   };
   const move = (event: React.PointerEvent) => {
@@ -42,26 +66,37 @@ export function ScratchWindow({ open, frame, area, onFrame, onClose, docked, onD
     const dx = event.clientX - d.x, dy = event.clientY - d.y;
     const next = containFrame(d.resize ? { ...d.frame, width: d.frame.width - dx, height: d.frame.height + dy } : { ...d.frame, right: d.frame.right - dx, top: d.frame.top + dy }, area);
     pending.current = next;
-    if (d.resize) Object.assign(root.current!.style, { width: `${next.width}px`, height: `${next.height}px` });
-    else root.current!.style.transform = `translate(${d.frame.right - next.right}px, ${next.top - d.frame.top}px)`;
+    if (d.resize) {
+      if (!resizeFrame.current) {
+        resizeFrame.current = window.requestAnimationFrame(() => {
+          resizeFrame.current = 0;
+          const target = pending.current;
+          if (!target || !root.current) return;
+          root.current.setCssStyles({ width: `${target.width}px`, height: `${target.height}px` });
+        });
+      }
+    } else {
+      root.current!.setCssStyles({ transform: `translate(${d.frame.right - next.right}px, ${next.top - d.frame.top}px)` });
+    }
   };
   const end = (event: React.PointerEvent) => {
     if (drag.current?.id !== event.pointerId) return;
     event.stopPropagation();
+    cancelResizeFrame();
     const next = pending.current ?? latest.current;
     drag.current = null; pending.current = undefined;
-    Object.assign(root.current!.style, { transform: '', right: `${next.right}px`, top: `${next.top}px` });
+    root.current!.setCssStyles({ transform: '', right: `${next.right}px`, top: `${next.top}px`, width: `${next.width}px`, height: `${next.height}px` });
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     onFrame(next, true);
   };
   const nudge = (event: React.KeyboardEvent) => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     const step = event.shiftKey ? 40 : 16, f = latest.current;
     const moves: Record<string, Partial<ScratchFrame>> = { ArrowLeft: { right: f.right + step }, ArrowRight: { right: f.right - step }, ArrowUp: { top: f.top - step }, ArrowDown: { top: f.top + step } };
     if (!docked && event.target === event.currentTarget && moves[event.key]) { event.preventDefault(); onFrame(containFrame({ ...f, ...moves[event.key] }, area), true); }
   };
   const resizeWithKeys = (event: React.KeyboardEvent) => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     const step = event.shiftKey ? 40 : 16, f = latest.current;
     const sizes: Record<string, Partial<ScratchFrame>> = { ArrowLeft: { width: f.width + step }, ArrowRight: { width: f.width - step }, ArrowUp: { height: f.height - step }, ArrowDown: { height: f.height + step } };
     if (sizes[event.key]) { event.preventDefault(); onFrame(containFrame({ ...f, ...sizes[event.key] }, area), true); }

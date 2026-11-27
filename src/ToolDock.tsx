@@ -1,10 +1,15 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { InkIcon } from './InkIcon';
 import { isolateFloatingInput } from './pointer-input';
+import type { DockPlacement } from './preferences';
+import { isImeComposing } from './ui';
 
 type Dock = { x: number; y: number; edge: 'none' | 'left' | 'right' | 'top' | 'bottom'; collapsed: boolean };
 type Drag = { id: number; x: number; y: number; pointerX: number; pointerY: number; baseX: number; baseY: number; nextX: number; nextY: number; active: boolean; previous: Dock | null };
 const IDLE_DELAY = 8000;
+const DEFAULT_DOCK_PREF: DockPlacement = { edge: 'none', rx: 0.5, ry: 0, collapsed: false };
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const isCustomDockPref = (pref: DockPlacement) => pref.edge !== 'none' || pref.collapsed || pref.rx !== 0.5 || pref.ry !== 0;
 
 export interface WritingSignal {
   get(): boolean;
@@ -12,16 +17,33 @@ export interface WritingSignal {
 }
 
 /** Tool controls keep their own input; only the grip moves the toolbox. */
-export function ToolDock({ layer, visible, autoCollapse = false, writing = false, writingSignal, onDrag, children }: { layer: HTMLDivElement | null; visible: boolean; autoCollapse?: boolean; writing?: boolean; writingSignal?: WritingSignal; onDrag: () => void; children: React.ReactNode }) {
+export function ToolDock({ layer, visible, autoCollapse = false, writing = false, writingSignal, dockPref, onDockChange, onDrag, children }: {
+  layer: HTMLDivElement | null; visible: boolean; autoCollapse?: boolean; writing?: boolean; writingSignal?: WritingSignal;
+  dockPref?: DockPlacement; onDockChange?: (next: DockPlacement) => void; onDrag: () => void; children: React.ReactNode;
+}) {
   const root = useRef<HTMLDivElement>(null), grip = useRef<HTMLButtonElement>(null);
   const [dock, setDock] = useState<Dock | null>(null), [dragging, setDragging] = useState(false);
   const latest = useRef(dock); latest.current = dock;
+  const dockPrefRef = useRef(dockPref); dockPrefRef.current = dockPref;
+  const onDockChangeRef = useRef(onDockChange); onDockChangeRef.current = onDockChange;
+  const restored = useRef(false);
   const autoCollapseRef = useRef(autoCollapse); autoCollapseRef.current = autoCollapse;
   const writingRef = useRef(writingSignal ? writingSignal.get() : writing);
   if (!writingSignal) writingRef.current = writing;
   const drag = useRef<Drag | null>(null), suppressClick = useRef(false);
   const idleTimer = useRef<number>(), pressed = useRef(false);
   const keyboardActive = useRef(false);
+  const persistDock = (next: Dock | null) => {
+    const emit = onDockChangeRef.current;
+    if (!emit) return;
+    if (!next) { emit({ ...DEFAULT_DOCK_PREF }); return; }
+    if (!layer || !root.current) return;
+    const maxX = Math.max(8, layer.clientWidth - root.current.offsetWidth - 8);
+    const maxY = Math.max(8, layer.clientHeight - root.current.offsetHeight - 8);
+    const rx = next.edge === 'left' ? 0 : next.edge === 'right' ? 1 : clamp01((next.x - 8) / Math.max(1, maxX - 8));
+    const ry = next.edge === 'top' ? 0 : next.edge === 'bottom' ? 1 : clamp01((next.y - 8) / Math.max(1, maxY - 8));
+    emit({ edge: next.edge, rx, ry, collapsed: next.collapsed });
+  };
   const position = (): Dock | null => {
     if (latest.current) return latest.current;
     if (!layer || !root.current) return null;
@@ -30,7 +52,10 @@ export function ToolDock({ layer, visible, autoCollapse = false, writing = false
   };
   const collapse = () => {
     const value = position();
-    if (value) setDock({ ...value, collapsed: true });
+    if (!value) return;
+    const next = { ...value, collapsed: true };
+    setDock(next);
+    persistDock(next);
   };
   const stopIdle = () => window.clearTimeout(idleTimer.current);
   const armIdle = () => {
@@ -71,9 +96,25 @@ export function ToolDock({ layer, visible, autoCollapse = false, writing = false
       y: anchor && value.edge === 'bottom' ? maxY : anchor && value.edge === 'top' ? 8 : Math.max(minY, Math.min(clampedMaxY, value.y)),
     };
   };
+  const tryRestore = () => {
+    if (restored.current || !visible || !layer || !root.current || root.current.hidden) return false;
+    if (layer.clientWidth <= 0 || layer.clientHeight <= 0) return false;
+    const barWidth = root.current.offsetWidth, barHeight = root.current.offsetHeight;
+    if (barWidth <= 0 || barHeight <= 0) return false;
+    restored.current = true;
+    const pref = dockPrefRef.current;
+    if (!pref || !isCustomDockPref(pref)) return false;
+    const maxX = Math.max(8, layer.clientWidth - barWidth - 8);
+    const maxY = Math.max(8, layer.clientHeight - barHeight - 8);
+    const x = 8 + clamp01(pref.rx) * Math.max(0, maxX - 8);
+    const y = 8 + clamp01(pref.ry) * Math.max(0, maxY - 8);
+    setDock(contain({ x, y, edge: pref.edge, collapsed: pref.collapsed }));
+    return true;
+  };
   const place = () => {
     if (drag.current?.active || !root.current) return;
     root.current.setCssStyles({ transform: '' });
+    if (tryRestore()) return;
     const value = latest.current;
     if (!value) return;
     const next = contain(value);
@@ -140,25 +181,35 @@ export function ToolDock({ layer, visible, autoCollapse = false, writing = false
       { edge: 'top' as const, distance: d.pointerY }, { edge: 'bottom' as const, distance: layer.clientHeight - d.pointerY },
     ].sort((a, b) => a.distance - b.distance);
     const edge = pointerEdges[0].distance <= 54 ? pointerEdges[0].edge : distances[0].distance <= 54 ? distances[0].edge : 'none';
-    setDock({ x: d.nextX, y: d.nextY, edge, collapsed: d.previous?.collapsed ?? false });
+    const next: Dock = { x: d.nextX, y: d.nextY, edge, collapsed: d.previous?.collapsed ?? false };
+    setDock(next);
+    persistDock(next);
   };
   const end = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (drag.current?.id !== event.pointerId) return;
     event.stopPropagation(); finish(event.type !== 'pointerup');
   };
   useEffect(() => { if (!visible) finish(true); }, [visible]);
-  const toggle = () => { if (latest.current?.collapsed) setDock({ ...latest.current, collapsed: false }); else collapse(); };
+  const toggle = () => {
+    if (latest.current?.collapsed) {
+      const next = { ...latest.current, collapsed: false };
+      setDock(next);
+      persistDock(next);
+    } else collapse();
+  };
   const nudge = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     if (event.key === 'Escape' && drag.current) { event.preventDefault(); event.stopPropagation(); finish(true); return; }
-    if (event.key === 'Home') { event.preventDefault(); event.stopPropagation(); onDrag(); setDock(null); armIdle(); return; }
+    if (event.key === 'Home') { event.preventDefault(); event.stopPropagation(); onDrag(); setDock(null); persistDock(null); armIdle(); return; }
     const offsets: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const offset = offsets[event.key];
     if (!offset || !layer || !root.current) return;
     event.preventDefault(); event.stopPropagation(); onDrag();
     const bar = root.current.getBoundingClientRect(), area = layer.getBoundingClientRect(), step = event.shiftKey ? 40 : 16;
     const value = latest.current ?? { x: (bar.left - area.left) * layer.clientWidth / area.width, y: (bar.top - area.top) * layer.clientHeight / area.height, edge: 'none', collapsed: false };
-    setDock(contain({ ...value, edge: 'none', x: value.x + offset[0] * step, y: value.y + offset[1] * step }, false));
+    const next = contain({ ...value, edge: 'none', x: value.x + offset[0] * step, y: value.y + offset[1] * step }, false);
+    setDock(next);
+    persistDock(next);
   };
   return <div className="ink-dock-slot" hidden={!visible}><div ref={root} hidden={!visible} className={`ink-writing-bar${dock ? ' is-floating-dock' : ''}${dock?.collapsed ? ' is-collapsed' : ''}${dragging ? ' is-dragging' : ''}`}
     data-edge={dock?.edge ?? 'none'} style={dock ? { left: dock.x, top: dock.y } : undefined}
@@ -171,7 +222,11 @@ export function ToolDock({ layer, visible, autoCollapse = false, writing = false
     onLostPointerCapture={() => { pressed.current = false; armIdle(); }}
     onClickCapture={event => {
       if (suppressClick.current && event.detail > 0) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); return; }
-      if (dock?.collapsed && !(event.target as HTMLElement).closest('.ink-dock-grip')) setDock({ ...dock, collapsed: false });
+      if (dock?.collapsed && !(event.target as HTMLElement).closest('.ink-dock-grip')) {
+        const next = { ...dock, collapsed: false };
+        setDock(next);
+        persistDock(next);
+      }
     }}>
     <button ref={grip} type="button" className="ink-dock-grip" aria-label={dock?.collapsed ? '展开笔盒' : '收起笔盒'} aria-expanded={!dock?.collapsed}
       title="拖动移动笔盒；方向键移动，Home 复位" onClick={toggle} onKeyDown={nudge}

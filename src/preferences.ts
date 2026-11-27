@@ -5,7 +5,9 @@ export type ShapeKind = 'rectangle' | 'ellipse' | 'diamond' | 'line' | 'arrow';
 export type ShapeStrokeStyle = 'solid' | 'dashed' | 'dotted';
 export type PenStabilize = 0 | 1 | 2;
 export type LassoFilter = 'all' | 'ink' | 'highlighter';
-export type SidebarTab = 'pages' | 'outline' | 'bookmarks' | 'search';
+export type SidebarTab = 'pages' | 'outline' | 'bookmarks' | 'backlinks' | 'search';
+export type DockEdge = 'none' | 'left' | 'right' | 'top' | 'bottom';
+export interface DockPlacement { edge: DockEdge; rx: number; ry: number; collapsed: boolean }
 export interface ScratchFrame { right: number; top: number; width: number; height: number }
 export interface PenPreset { id: string; kind: 'pen' | 'highlighter'; color: string; width: number }
 
@@ -31,6 +33,11 @@ export interface Preferences {
   scratch: ScratchFrame;
   scratchPlacement: 'docked' | 'floating';
   newTemplate: PageTemplate;
+  dock: DockPlacement;
+  newNoteFolder: string;
+  exportFolder: string;
+  embedMaxWidth: number;
+  showRibbonIcon: boolean;
 }
 
 export const PEN_COLORS = ['#1f2329', '#2463c8', '#d23b3b', '#1f8a54', '#e08a1a', '#7c4dcc'] as const;
@@ -69,7 +76,12 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sidebar: { pages: false, canvas: false, tab: 'pages' },
   scratch: { right: 24, top: 24, width: 420, height: 340 },
   scratchPlacement: 'docked',
-  newTemplate: 'blank',
+  newTemplate: 'ruled',
+  dock: { edge: 'none', rx: 0.5, ry: 0, collapsed: false },
+  newNoteFolder: '',
+  exportFolder: 'Drawing Exports',
+  embedMaxWidth: 560,
+  showRibbonIcon: true,
 };
 
 const TOOLS: readonly ToolId[] = ['pen', 'highlighter', 'eraser', 'lasso', 'select', 'hand', 'space', 'tape', 'text', 'shape', 'capture'];
@@ -82,6 +94,12 @@ export function normalizePreferences(raw: unknown): Preferences {
   const value = record(raw);
   const pen = record(value.pen), highlighter = record(value.highlighter), eraser = record(value.eraser), lasso = record(value.lasso), tape = record(value.tape), shape = record(value.shape), text = record(value.text), capture = record(value.capture), sidebar = record(value.sidebar), scratch = record(value.scratch);
   const d = DEFAULT_PREFERENCES;
+  const dock = record(value.dock);
+  const folder = (input: unknown, fallback: string) => {
+    if (typeof input !== 'string') return fallback;
+    const path = input.trim().replace(/^\/+|\/+$/g, '').replace(/\/{2,}/g, '/');
+    return /[\\:]/.test(path) || [...path].some(c => c.charCodeAt(0) < 32) || path.split('/').some(p => p === '.' || p === '..') ? fallback : path;
+  };
   const pick = <T>(candidate: unknown, fallback: T, valid: (v: unknown) => boolean): T => valid(candidate) ? candidate as T : fallback;
   const rawSlots = Array.isArray(value.penSlots) ? value.penSlots : null;
   const penSlots: PenPreset[] = rawSlots ? rawSlots.slice(0, 6).flatMap((item, idx) => {
@@ -134,9 +152,14 @@ export function normalizePreferences(raw: unknown): Preferences {
     nightPaper: pick(value.nightPaper, d.nightPaper, v => typeof v === 'boolean'),
     gridSnap: pick(value.gridSnap, d.gridSnap, v => typeof v === 'boolean'),
     autoCollapseDock: pick(value.autoCollapseDock, d.autoCollapseDock, v => typeof v === 'boolean'),
-    sidebar: { pages: pick(sidebar.pages, d.sidebar.pages, v => typeof v === 'boolean'), canvas: pick(sidebar.canvas, d.sidebar.canvas, v => typeof v === 'boolean'), tab: pick(sidebar.tab, d.sidebar.tab, v => ['pages', 'outline', 'bookmarks', 'search'].includes(v as string)) },
+    sidebar: { pages: pick(sidebar.pages, d.sidebar.pages, v => typeof v === 'boolean'), canvas: pick(sidebar.canvas, d.sidebar.canvas, v => typeof v === 'boolean'), tab: pick(sidebar.tab, d.sidebar.tab, v => ['pages', 'outline', 'bookmarks', 'backlinks', 'search'].includes(v as string)) },
     scratch: { right: pick(scratch.right, d.scratch.right, v => isNumber(v, 0, 10000)), top: pick(scratch.top, d.scratch.top, v => isNumber(v, 0, 10000)), width: pick(scratch.width, d.scratch.width, v => isNumber(v, 260, 4000)), height: pick(scratch.height, d.scratch.height, v => isNumber(v, 200, 4000)) },
     scratchPlacement: pick(value.scratchPlacement, d.scratchPlacement, v => v === 'docked' || v === 'floating'),
+    dock: { edge: pick(dock.edge, d.dock.edge, v => ['none', 'left', 'right', 'top', 'bottom'].includes(v as string)), rx: pick(dock.rx, d.dock.rx, v => isNumber(v, 0, 1)), ry: pick(dock.ry, d.dock.ry, v => isNumber(v, 0, 1)), collapsed: pick(dock.collapsed, d.dock.collapsed, v => typeof v === 'boolean') },
+    newNoteFolder: folder(value.newNoteFolder, d.newNoteFolder),
+    exportFolder: folder(value.exportFolder, d.exportFolder) || d.exportFolder,
+    embedMaxWidth: pick(value.embedMaxWidth, d.embedMaxWidth, v => isNumber(v, 160, 1600)),
+    showRibbonIcon: pick(value.showRibbonIcon, d.showRibbonIcon, v => typeof v === 'boolean'),
     newTemplate: pick(value.newTemplate, d.newTemplate, v => ['blank', 'ruled', 'grid', 'dotted'].includes(v as string)),
   };
 }

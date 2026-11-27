@@ -4,10 +4,11 @@ import { InkStabilizer, stabilizeInkPoint, stabilizedRawPoints } from '../src/in
 import { eraseStrokePath } from '../src/geometry';
 import { restyleElements } from '../src/layers';
 import { DEFAULT_PREFERENCES, normalizePreferences } from '../src/preferences';
+import { History } from '../src/history';
 import { advanceZoomBox, buildZoomFreedrawElement, clampZoomBox, newlineZoomBox, sceneToZoomCanvas, shouldAutoAdvance, zoomBoxSize, zoomCanvasToScene } from '../src/zoom-window';
 import type { Element, Rect } from '../src/model';
 
-const shape = (id: string, type: 'rectangle' | 'ellipse' | 'line' | 'freedraw' | 'text', overrides: Record<string, unknown> = {}): Element => ({
+const shape = (id: string, type: 'rectangle' | 'ellipse' | 'line' | 'freedraw' | 'text' | 'image', overrides: Record<string, unknown> = {}): Element => ({
   id,
   type,
   x: 0,
@@ -197,5 +198,78 @@ describe('P1: normalizePreferences new fields', () => {
     assert.equal(bad.nightPaper, false);
     assert.equal(bad.autoCollapseDock, false);
     assert.equal(bad.sidebar.tab, 'pages');
+  });
+});
+
+describe('native host preferences', () => {
+  it('defaults new notes to ruled paper while preserving saved templates', () => {
+    assert.equal(normalizePreferences({}).newTemplate, 'ruled');
+    for (const newTemplate of ['blank', 'ruled', 'grid', 'dotted']) assert.equal(normalizePreferences({ newTemplate }).newTemplate, newTemplate);
+    assert.equal(normalizePreferences({ newTemplate: 'bad' }).newTemplate, 'ruled');
+  });
+  it('normalizes folders, dock placement and embed limits at storage boundaries', () => {
+    const prefs = normalizePreferences({ newNoteFolder: ' /课程/手写/ ', exportFolder: ' /导出//图片/ ', sidebar: { tab: 'backlinks' }, dock: { edge: 'left', rx: 1, ry: 0.25, collapsed: true }, embedMaxWidth: 1600, showRibbonIcon: false });
+    assert.equal(prefs.newNoteFolder, '课程/手写');
+    assert.equal(prefs.exportFolder, '导出/图片');
+    assert.equal(prefs.sidebar.tab, 'backlinks');
+    assert.deepEqual(prefs.dock, { edge: 'left', rx: 1, ry: 0.25, collapsed: true });
+    assert.equal(prefs.embedMaxWidth, 1600);
+    assert.equal(prefs.showRibbonIcon, false);
+    const invalid = normalizePreferences({ newNoteFolder: '../private', exportFolder: '', dock: { edge: 'bad', rx: -1, ry: Infinity, collapsed: 1 }, embedMaxWidth: 159, showRibbonIcon: 0 });
+    assert.equal(invalid.newNoteFolder, '');
+    assert.equal(invalid.exportFolder, 'Drawing Exports');
+    assert.deepEqual(invalid.dock, DEFAULT_PREFERENCES.dock);
+    assert.equal(invalid.embedMaxWidth, 560);
+    assert.equal(invalid.showRibbonIcon, true);
+    assert.equal(normalizePreferences({ exportFolder: 'a/../b' }).exportFolder, 'Drawing Exports');
+  });
+});
+
+describe('history reference paths after rename', () => {
+  it('remaps undo, redo and unchanged ranges without changing geometry or raw samples', () => {
+    const history = new History();
+    const rawPoints: [number, number][] = [[0, 0], [2, 3], [4, 7]], rawPressures = [.2, .5, .8];
+    const text = shape('text', 'text', { customData: { pageinkText: { version: 1, path: 'Old/source.md', blockId: 'paragraph', snapshotAsset: 'snapshot', width: 400 } } });
+    const card = shape('card', 'image', { fileId: 'preview', customData: {
+      pageinkCard: { version: 1, kind: 'ink', path: 'Old/source.inknote', document: 'document', page: 'page', region: 'region', title: 'Card', archiveAsset: 'archive' },
+    } });
+    const stroke = shape('stroke', 'freedraw', { points: [[0, 0], [4, 7]], pressures: [.2, .8], customData: { inkRawPoints: rawPoints, inkRawPressures: rawPressures } });
+    const unrelated = shape('unrelated', 'rectangle');
+    const moved = { ...card, x: 120, y: 240, version: 2 };
+    const edited = { ...text, x: 30, version: 2 };
+    history.push('page', [text, card, stroke, unrelated], [text, moved, stroke, unrelated]);
+    history.push('page', [text, moved, stroke, unrelated], [edited, moved, stroke, unrelated]);
+    history.undo();
+    const revision = history.revision;
+    history.remapElements(element => {
+      const data = element.customData, textRef = data?.pageinkText, cardRef = data?.pageinkCard;
+      if (!textRef && cardRef?.kind !== 'ink') return element;
+      return { ...element, customData: { ...data,
+        ...(textRef ? { pageinkText: { ...textRef, path: textRef.path.replace('Old/', 'New/') } } : {}),
+        ...(cardRef?.kind === 'ink' ? { pageinkCard: { ...cardRef, path: cardRef.path.replace('Old/', 'New/') } } : {}),
+      } };
+    });
+    assert.equal(history.revision, revision);
+    assert.equal(history.canUndo, true);
+    assert.equal(history.canRedo, true);
+    const check = (elements: readonly Element[], textX: number, cardX: number, cardY: number) => {
+      assert.equal(elements.length, 4);
+      assert.equal(elements[0].x, textX);
+      assert.equal(elements[0].customData?.pageinkText?.path, 'New/source.md');
+      assert.equal(elements[1].x, cardX); assert.equal(elements[1].y, cardY);
+      const reference = elements[1].customData?.pageinkCard;
+      assert.equal(reference?.kind === 'ink' ? reference.path : undefined, 'New/source.inknote');
+      assert.equal(elements[2], stroke);
+      assert.equal(elements[2].customData?.inkRawPoints, rawPoints);
+      assert.equal(elements[2].customData?.inkRawPressures, rawPressures);
+      assert.deepEqual(rawPoints, [[0, 0], [2, 3], [4, 7]]);
+      assert.deepEqual(rawPressures, [.2, .5, .8]);
+      assert.equal(elements[3], unrelated);
+    };
+    check(history.undo()!.elements, 0, 0, 0);
+    assert.equal(history.undo(), undefined);
+    check(history.redo()!.elements, 0, 120, 240);
+    check(history.redo()!.elements, 30, 120, 240);
+    assert.equal(history.redo(), undefined);
   });
 });

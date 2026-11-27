@@ -7,14 +7,36 @@ import { renderArea } from './preview';
 import { IconButton, InkIcon } from './InkIcon';
 import { searchDocument, SearchHit } from './search';
 import type { SidebarTab } from './preferences';
+import type { BacklinkEntry } from './host';
+import { isImeComposing } from './ui';
+
+export type DragLinkTarget = { page?: string; pageNumber?: number; region?: string; title?: string; embed?: boolean };
+
+function startDragLink(event: React.DragEvent, build: ((target: DragLinkTarget) => string) | undefined, target: DragLinkTarget) {
+  if (!build) return;
+  const link = build(target);
+  if (!link) return;
+  event.dataTransfer.effectAllowed = 'copyLink';
+  event.dataTransfer.setData('text/plain', link);
+  event.dataTransfer.setData('application/x-pageink-link', link);
+}
 
 /** Renders at most two previews at once so scrolling the list never floods the main thread. */
 class PreviewQueue {
   private running = 0; private waiting: (() => void)[] = [];
-  async run<T>(task: () => Promise<T>): Promise<T> {
-    if (this.running >= 2) await new Promise<void>(resolve => this.waiting.push(resolve));
-    this.running++;
-    try { return await task(); } finally { this.running--; this.waiting.shift()?.(); }
+  async run<T>(signal: AbortSignal, task: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => {
+        const index = this.waiting.indexOf(start);
+        if (index >= 0) this.waiting.splice(index, 1);
+        reject(new DOMException('缩略图渲染已取消', 'AbortError'));
+      };
+      const start = () => { signal.removeEventListener('abort', abort); this.running++; resolve(); };
+      if (this.running < 2) start();
+      else { this.waiting.push(start); signal.addEventListener('abort', abort, { once: true }); }
+    });
+    try { signal.throwIfAborted(); return await task(); } finally { this.running--; this.waiting.shift()?.(); }
   }
 }
 const queue = new PreviewQueue();
@@ -28,7 +50,7 @@ function Thumbnail({ session, page, pdf, version, root }: { session: Session; pa
   useEffect(() => {
     if (!visible || drawn.current === version) return;
     const abort = new AbortController();
-    const timer = window.setTimeout(() => void queue.run(async () => {
+    const timer = window.setTimeout(() => void queue.run(abort.signal, async () => {
       abort.signal.throwIfAborted();
       const rect = pageRect(page), scale = Math.min(1, 132 * devicePixelRatio / rect.width);
       const rendered = await renderArea(session, page, rect, scale, pdf, abort.signal);
@@ -43,8 +65,10 @@ function Thumbnail({ session, page, pdf, version, root }: { session: Session; pa
   return <canvas ref={canvas} className="ink-thumb-canvas" style={{ aspectRatio: `${rect.width} / ${rect.height}` }}/>;
 }
 
-export function PageList({ session, pdf, current, onSelect, onMenu, onAdd }: {
+export function PageList({ session, pdf, current, onSelect, onMenu, onAdd, onOpenSettings, onDragLink }: {
   session: Session; pdf?: PdfService; current?: string; onSelect: (id: string) => void; onMenu: (id: string, anchor: HTMLElement) => void; onAdd: () => void;
+  onOpenSettings?: (anchor: HTMLElement) => void;
+  onDragLink?: (target: DragLinkTarget) => string;
 }) {
   const list = useRef<HTMLDivElement>(null);
   const [, bump] = useReducer((n: number) => n + 1, 0);
@@ -65,32 +89,83 @@ export function PageList({ session, pdf, current, onSelect, onMenu, onAdd }: {
     {session.manifest.pages.map((page, index) => {
       const version = `${session.revision(page.id)}|${page.template}|${page.width}x${page.height}|${Object.values(page.margins).join(',')}|${pdf ? 1 : 0}`;
       return <div key={page.id} className="ink-thumb" data-page={page.id} aria-current={page.id === current ? 'page' : undefined}>
-        <button type="button" className="ink-thumb-button" aria-label={`第 ${index + 1} 页`} onClick={() => onSelect(page.id)} onContextMenu={event => { event.preventDefault(); onMenu(page.id, event.currentTarget); }}>
+        <button type="button" className="ink-thumb-button" aria-label={`第 ${index + 1} 页`} draggable={!!onDragLink}
+          onDragStart={onDragLink ? event => startDragLink(event, onDragLink, { page: page.id, pageNumber: index + 1, title: `第 ${index + 1} 页`, embed: event.shiftKey }) : undefined}
+          onClick={() => onSelect(page.id)} onContextMenu={event => { event.preventDefault(); onMenu(page.id, event.currentTarget); }}>
           <Thumbnail session={session} page={page} pdf={pdf} version={version} root={list.current}/>
         </button>
         <div className="ink-thumb-footer"><span>第 {index + 1} 页</span><IconButton icon="more" label={`第 ${index + 1} 页操作`} className="ink-thumb-more" onClick={event => onMenu(page.id, event.currentTarget)}/></div>
       </div>;
     })}
-  </div><div className="ink-sidebar-footer"><button type="button" className="ink-thumb-add" onClick={onAdd}><InkIcon name="plus"/><span>添加页面</span></button></div></>;
+  </div><div className="ink-sidebar-footer">
+    <button type="button" className="ink-thumb-add" onClick={onAdd}><InkIcon name="plus"/><span>添加页面</span></button>
+    {onOpenSettings && <button type="button" className="ink-thumb-settings" onClick={event => onOpenSettings(event.currentTarget)}><InkIcon name="sliders"/><span>纸张设置</span></button>}
+  </div></>;
 }
 
-export function BookmarkList({ regions, pageNumber, onOpen, onMenu, onAdd, onSaveView, renaming, onRename }: {
+export function BookmarkList({ regions, pageNumber, onOpen, onMenu, onAdd, onSaveView, renaming, onRename, onDragLink }: {
   regions: readonly Region[]; pageNumber: (pageId: string) => number; onOpen: (region: Region) => void; onMenu: (region: Region, anchor: HTMLElement) => void; onAdd: () => void;
   onSaveView?: () => void;
   renaming: string | null; onRename: (region: Region, title: string | null) => void;
+  onDragLink?: (target: DragLinkTarget) => string;
 }) {
+  const composing = useRef(false);
   return <div className="ink-bookmarks">
     {onSaveView && <button type="button" className="ink-sidebar-action" onClick={onSaveView}><InkIcon name="plus"/>保存当前视野</button>}
     <button type="button" className="ink-sidebar-action" onClick={onAdd}><InkIcon name="capture"/>框选区域加书签</button>
     {regions.length === 0 && <div className="ink-empty"><InkIcon name="bookmark"/><strong>{onSaveView ? '让想法有迹可循' : '把重点留在手边'}</strong><p>{onSaveView ? '保存画布上的一处视野，下次一点就能回到这里。' : '框住题目、笔记或图表，添加书签后随时跳回。'}</p></div>}
     {regions.map(region => <div key={region.id} className="ink-bookmark">
-      {renaming === region.id ? <form className="ink-rename" onSubmit={event => { event.preventDefault(); onRename(region, new FormData(event.currentTarget).get('title') as string); }}>
-        <input name="title" defaultValue={region.title} aria-label="书签名称" data-autofocus autoFocus onFocus={event => event.currentTarget.select()} onBlur={event => onRename(region, event.currentTarget.value)} onKeyDown={event => { if (!event.nativeEvent.isComposing && event.key === 'Escape') { event.preventDefault(); onRename(region, null); } }}/>
-      </form> : <button type="button" className="ink-bookmark-open" onClick={() => onOpen(region)}>
+      {renaming === region.id ? <form className="ink-rename" onSubmit={event => { event.preventDefault(); if (composing.current) return; onRename(region, new FormData(event.currentTarget).get('title') as string); }}>
+        <input name="title" defaultValue={region.title} aria-label="书签名称" data-autofocus autoFocus onFocus={event => event.currentTarget.select()}
+          onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
+          onBlur={event => { composing.current = false; onRename(region, event.currentTarget.value); }}
+          onKeyDown={event => {
+            if (isImeComposing(event) || composing.current) { if (event.key === 'Enter') event.preventDefault(); return; }
+            if (event.key === 'Escape') { event.preventDefault(); onRename(region, null); }
+          }}/>
+      </form> : <button type="button" className="ink-bookmark-open" draggable={!!onDragLink}
+        onDragStart={onDragLink ? event => startDragLink(event, onDragLink, { page: region.pageId, region: region.id, title: region.title, embed: !event.altKey }) : undefined}
+        onClick={() => onOpen(region)}>
         <InkIcon name="bookmark"/><span className="ink-bookmark-title">{region.title || '未命名书签'}</span>{pageNumber(region.pageId) > 0 && <small>第 {pageNumber(region.pageId)} 页</small>}
       </button>}
       <IconButton icon="more" label={`${region.title} 的操作`} className="ink-row-more" onClick={event => onMenu(region, event.currentTarget)}/>
     </div>)}
+  </div>;
+}
+
+export function BacklinkList({ entries, paged, onOpen, onNavigateTarget, onHover }: {
+  entries: readonly BacklinkEntry[];
+  paged: boolean;
+  onOpen: (entry: BacklinkEntry, newTab: boolean) => void;
+  onNavigateTarget?: (entry: BacklinkEntry) => void;
+  onHover?: (event: React.MouseEvent<HTMLElement>, targetEl: HTMLElement, path: string) => void;
+}) {
+  if (!entries.length) {
+    return <div className="ink-backlinks">
+      <div className="ink-empty">
+        <InkIcon name="link"/>
+        <strong>还没有笔记引用这里</strong>
+        <p>在 Markdown 笔记中输入 ![[笔记名]]，或把页面与书签拖过去即可建立双向关联。</p>
+      </div>
+    </div>;
+  }
+  return <div className="ink-backlinks" role="list" aria-label="反向链接">
+    {entries.map((entry, index) => {
+      const badge = entry.regionTitle ? `书签 · ${entry.regionTitle}` : entry.pageNumber && paged ? `第 ${entry.pageNumber} 页` : '';
+      const hasTarget = !!(entry.page || entry.pageNumber || entry.regionId);
+      return <div key={`${entry.sourcePath}:${entry.line ?? index}:${entry.regionId ?? entry.page ?? ''}`} className="ink-backlink-row" role="listitem">
+        <button type="button" className="ink-backlink-open" title={entry.sourcePath}
+          onClick={event => onOpen(entry, event.ctrlKey || event.metaKey)}
+          onMouseEnter={onHover ? event => onHover(event, event.currentTarget, entry.sourcePath) : undefined}>
+          <span className="ink-backlink-head">
+            <strong className="ink-backlink-name">{entry.sourceName}</strong>
+            {badge && <span className="ink-backlink-badge">{badge}</span>}
+          </span>
+          {entry.snippet && <small className="ink-backlink-snippet">{entry.snippet}</small>}
+        </button>
+        {hasTarget && onNavigateTarget && <IconButton icon="locate" label="定位到被引用处" className="ink-backlink-locate" onClick={() => onNavigateTarget(entry)}/>}
+      </div>;
+    })}
   </div>;
 }
 
@@ -116,7 +191,7 @@ export function SearchPanel({ session, pdf, paged, onOpen, initial }: { session:
     <div className="ink-search-field"><InkIcon name="search"/><input type="search" value={query} placeholder={pdf ? '搜索 PDF 文字、文本框、书签' : '搜索文本框和书签'} aria-label="搜索" data-autofocus autoFocus
       onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}
       onChange={event => { setQuery(event.target.value); setHits(null); }} onKeyDown={event => {
-        if (event.nativeEvent.isComposing || composing) return;
+        if (isImeComposing(event) || composing) return;
         if (!hits?.length) return;
         if (event.key === 'Enter' || event.key === 'ArrowDown') { event.preventDefault(); const next = (active + 1) % hits.length; setActive(next); onOpen(hits[next]); }
         if (event.key === 'ArrowUp') { event.preventDefault(); const next = (active - 1 + hits.length) % hits.length; setActive(next); onOpen(hits[next]); }
@@ -154,8 +229,9 @@ function findActiveOutlineKey(items: readonly PdfOutlineItem[], currentPdfPage: 
   return (best as { key: string; page: number } | null)?.key ?? null;
 }
 
-export function OutlineList({ pdf, pages, currentPdfPage, onSelect }: {
+export function OutlineList({ pdf, pages, currentPdfPage, onSelect, onDragLink }: {
   pdf: PdfService; pages: readonly Page[]; currentPdfPage?: number; onSelect: (pageId: string, pdfPage?: number, pdfTop?: number | null, pdfLeft?: number | null) => void;
+  onDragLink?: (target: DragLinkTarget) => string;
 }) {
   const [items, setItems] = useState<PdfOutlineItem[] | null>(() => outlineCache.get(pdf) ?? null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -199,6 +275,8 @@ export function OutlineList({ pdf, pages, currentPdfPage, onSelect }: {
           onClick={() => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }))}><InkIcon name={isCollapsed ? 'right' : 'down'}/></button>
           : <span className="ink-outline-spacer" aria-hidden="true"/>}
         <button type="button" className="ink-outline-jump" disabled={!target} aria-current={key === activeKey ? 'location' : undefined}
+          draggable={!!(onDragLink && target)}
+          onDragStart={onDragLink && target ? event => startDragLink(event, onDragLink, { page: target.page.id, pageNumber: target.index + 1, title: node.title, embed: event.shiftKey }) : undefined}
           title={node.title} onClick={() => target && onSelect(target.page.id, node.pdfPage ?? undefined, node.pdfTop, node.pdfLeft)}>
           <span className="ink-outline-title">{node.title}</span>
           {target && <small>{target.index + 1}</small>}
@@ -209,7 +287,7 @@ export function OutlineList({ pdf, pages, currentPdfPage, onSelect }: {
   });
 
   const onTreeKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const doc = event.currentTarget.ownerDocument;
     const jumps = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('.ink-outline-jump:not(:disabled)')];
@@ -239,15 +317,16 @@ export function OutlineList({ pdf, pages, currentPdfPage, onSelect }: {
   return <ul className="ink-outline-list" role="tree" aria-label="PDF 目录" onKeyDown={onTreeKeyDown}>{renderNodes(items, '0', 0)}</ul>;
 }
 
-export function SidebarTabs({ tab, onTab, paged, hasOutline, id }: { tab: SidebarTab; onTab: (tab: SidebarTab) => void; paged: boolean; hasOutline?: boolean; id: string }) {
+export function SidebarTabs({ tab, onTab, paged, hasOutline, backlinkCount, id }: { tab: SidebarTab; onTab: (tab: SidebarTab) => void; paged: boolean; hasOutline?: boolean; backlinkCount?: number; id: string }) {
   const tabs: [SidebarTab, string][] = [
     ...(paged ? [['pages', '页面'] as [SidebarTab, string]] : []),
     ...(hasOutline ? [['outline', '目录'] as [SidebarTab, string]] : []),
     ['bookmarks', '书签'],
+    ['backlinks', backlinkCount ? `引用 ${backlinkCount}` : '引用'],
     ['search', '搜索'],
   ];
   return <div className="ink-tabs" role="tablist" aria-label="侧栏" onKeyDown={event => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const index = tabs.findIndex(([id]) => id === tab);

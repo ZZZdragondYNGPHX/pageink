@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { IconButton, InkIcon } from './InkIcon';
-import { Popover, radioKeys, Segmented, Swatches, Switch, useAnchor } from './ui';
+import { isImeComposing, Popover, radioKeys, Segmented, Swatches, Switch, useAnchor } from './ui';
 import { ERASER_SIZES, HIGHLIGHTER_COLORS, HIGHLIGHTER_WIDTHS, PEN_COLORS, PEN_WIDTHS, PenPreset, Preferences, PreferenceStore, SHAPE_FILLS, SHAPE_WIDTHS, ShapeKind, TAPE_COLORS, TEXT_SIZES, ToolId } from './preferences';
 
 interface ToolDef { id: ToolId; icon: string; label: string; key: string }
@@ -42,7 +42,7 @@ export function ToolButtons({ tool, onTool }: { tool: ToolId; onTool: (tool: Too
   const visibleTools = activeSecondary ? [...WRITING_TOOLS, activeSecondary] : WRITING_TOOLS;
   const button = (t: ToolDef) => <IconButton key={t.id} icon={t.icon} label={t.label} shortcut={t.key} tabIndex={tool === t.id ? 0 : -1} aria-pressed={tool === t.id} className="ink-tool" onClick={event => onTool(t.id, event.currentTarget)}><span>{t.label}</span></IconButton>;
   return <div ref={tools} className="ink-tools" role="toolbar" aria-label="书写工具" onKeyDown={event => {
-    if (event.nativeEvent.isComposing || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    if (isImeComposing(event) || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault(); event.stopPropagation();
     const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.getClientRects().length), index = buttons.indexOf(event.target as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + buttons.length) % buttons.length;
@@ -106,7 +106,7 @@ export function ToolShelf({ tool, onTool, prefs, store, onRevealAllTapes }: {
             const active = index === prefs.activeSlot && tool === slot.kind;
             return <button key={slot.id} type="button" role="radio" tabIndex={active || (!hasCheckedSlot && index === 0) ? 0 : -1} aria-checked={active}
               className={`ink-pen-slot${slot.kind === 'highlighter' ? ' is-highlighter' : ''}`}
-              title={`${slot.kind === 'highlighter' ? '荧光笔' : '笔'} · ${slot.width}px`} aria-label={`笔袋 ${index + 1}：${slot.kind === 'highlighter' ? '荧光笔' : '笔'} ${slot.width}px`}
+              title={`${slot.kind === 'highlighter' ? '荧光笔' : '笔'} · ${slot.width}px`} aria-label={`常用笔 ${index + 1}：${slot.kind === 'highlighter' ? '荧光笔' : '笔'} ${slot.width}px`}
               onClick={() => selectSlot(index)}>
               <span className="ink-pen-slot-dot" style={{ background: slot.color, width: Math.min(18, 7 + slot.width * 2.2), height: Math.min(18, 7 + slot.width * 2.2) }}/>
               <span className="ink-pen-slot-badge" aria-hidden="true"><InkIcon name={slot.kind === 'highlighter' ? 'highlighter' : 'pen'}/></span>
@@ -173,8 +173,8 @@ export function ToolOptions({ tool, prefs, store, onRevealAllTapes }: { tool: To
       <IconButton icon="pressure" label={prefs.pen.pressure ? '压感已开启' : '压感已关闭（等宽）'} aria-pressed={prefs.pen.pressure} className="ink-toggle" onClick={() => store.update({ pen: { pressure: !prefs.pen.pressure } })}><span>压感</span></IconButton>
       <div className="ink-option-row"><span>笔迹防抖</span><Segmented label="笔迹防抖" value={prefs.pen.stabilize} onChange={stabilize => store.update({ pen: { stabilize } })} options={[{ value: 0, label: '关' }, { value: 1, label: '轻' }, { value: 2, label: '中' }]}/></div>
       <div className="ink-slot-manage">
-        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('pen')}><InkIcon name="plus"/>存入笔袋 ({prefs.penSlots.length}/6)</button>
-        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'pen' && <button type="button" onClick={removeSlot}><InkIcon name="trash"/>移除当前槽</button>}
+        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('pen')}><InkIcon name="plus"/>添加当前笔 ({prefs.penSlots.length}/6)</button>
+        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'pen' && <button type="button" onClick={removeSlot}><InkIcon name="trash"/>从笔袋移除</button>}
       </div>
       {divider}
       <Switch label="画圈长按套索" hint="画闭合圈后长按该笔划（或圈住内容停顿），直接无边选中" checked={prefs.pen.circleLasso} onChange={circleLasso => store.update({ pen: { circleLasso } })}/>
@@ -185,8 +185,8 @@ export function ToolOptions({ tool, prefs, store, onRevealAllTapes }: { tool: To
       <Swatches colors={HIGHLIGHTER_COLORS} value={prefs.highlighter.color} onChange={color => { const penSlots = syncSlot('highlighter', { color }); store.update({ highlighter: { color }, ...(penSlots ? { penSlots } : {}) }); }} label="荧光笔颜色"/>{divider}
       <Widths values={HIGHLIGHTER_WIDTHS} value={prefs.highlighter.width} color="var(--ink-text)" onChange={width => { const penSlots = syncSlot('highlighter', { width }); store.update({ highlighter: { width }, ...(penSlots ? { penSlots } : {}) }); }} label="粗细"/>{divider}
       <div className="ink-slot-manage">
-        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('highlighter')}><InkIcon name="plus"/>存入笔袋 ({prefs.penSlots.length}/6)</button>
-        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'highlighter' && <button type="button" onClick={removeSlot}><InkIcon name="trash"/>移除当前槽</button>}
+        <button type="button" disabled={prefs.penSlots.length >= 6} onClick={() => addSlot('highlighter')}><InkIcon name="plus"/>添加当前笔 ({prefs.penSlots.length}/6)</button>
+        {prefs.penSlots.length > 1 && prefs.activeSlot >= 0 && prefs.penSlots[prefs.activeSlot]?.kind === 'highlighter' && <button type="button" onClick={removeSlot}><InkIcon name="trash"/>从笔袋移除</button>}
       </div>
       <span className="ink-hint">采用正片叠底不遮黑字；划线末尾停顿可自动拉直</span>
     </>;

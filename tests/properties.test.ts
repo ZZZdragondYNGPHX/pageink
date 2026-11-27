@@ -16,6 +16,10 @@ import { pack, unpack } from '../src/archive';
 // (valid YAML) and an atomic callback. Real host/YAML/editor behavior needs host tests.
 const obsidianStub = `
 export class App {}
+export class AbstractInputSuggest {
+  constructor(app, inputEl) { this.app = app; this.inputEl = inputEl; }
+  close() {}
+}
 export class TFile {
   constructor(path) { this.path = path; this.extension = path.split('.').pop(); }
 }
@@ -24,7 +28,7 @@ export class MarkdownView {
 }
 export class Modal {
   static instances = [];
-  constructor(app) { this.app = app; this.wasClosed = false; this.contentEl = { replaceChildren() {} }; Modal.instances.push(this); }
+  constructor(app) { this.app = app; this.scope = { register() {} }; this.wasClosed = false; this.contentEl = { replaceChildren() {} }; Modal.instances.push(this); }
   open() { this.onOpen?.(); }
   close() { this.wasClosed = true; this.onClose?.(); }
 }
@@ -38,8 +42,9 @@ const bundled = await build({
   stdin: { contents: `export * from './src/properties-host'; export { TFile, MarkdownView, Modal, getFrontMatterInfo } from 'obsidian';`, resolveDir: fileURLToPath(new URL('..', import.meta.url)) },
   bundle: true, write: false, format: 'esm', platform: 'node', target: 'es2022',
   plugins: [{ name: 'obsidian-public-api-double', setup(builder) {
+    builder.onResolve({ filter: /\/ui$/ }, () => ({ path: 'ui', namespace: 'properties-test' }));
     builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'properties-test' }));
-    builder.onLoad({ filter: /.*/, namespace: 'properties-test' }, () => ({ contents: obsidianStub, loader: 'js' }));
+    builder.onLoad({ filter: /.*/, namespace: 'properties-test' }, args => ({ contents: args.path === 'ui' ? 'export const isImeComposing = e => !!(e?.isComposing || e?.nativeEvent?.isComposing || e?.keyCode === 229);' : obsidianStub, loader: 'js' }));
   } }],
 });
 const api = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
@@ -439,4 +444,25 @@ test('complete packages, restore and recovery forks retain all properties and or
     assert.deepEqual(await (await DocumentStore.open(io, 'recovered.inknote')).readSurface(recovery.pages[0].id), [rawInk]);
     assert.equal(({} as Record<string, unknown>).inert, undefined);
   }
+});
+
+test('opening the same property path while reading or already open keeps one modal', async () => {
+  const { file, host } = await textFixture({ key: 'old' });
+  const onOpen = api.NotePropertiesModal.prototype.onOpen, focus = api.NotePropertiesModal.prototype.focus;
+  api.NotePropertiesModal.prototype.onOpen = () => {};
+  let focused = 0, reads = 0, release!: () => void;
+  api.NotePropertiesModal.prototype.focus = () => { focused++; };
+  const read = host.read.bind(host), gate = new Promise<void>(resolve => { release = resolve; });
+  host.read = async path => { reads++; await gate; return read(path); };
+  try {
+    const count = api.Modal.instances.length;
+    const opening = host.open(file.path);
+    await host.open(file.path);
+    assert.equal(reads, 1); assert.equal(api.Modal.instances.length, count);
+    release(); await opening;
+    assert.equal(api.Modal.instances.length, count + 1);
+    await host.open(file.path);
+    assert.equal(focused, 1); assert.equal(reads, 1); assert.equal(api.Modal.instances.length, count + 1);
+    host.dispose();
+  } finally { api.NotePropertiesModal.prototype.onOpen = onOpen; api.NotePropertiesModal.prototype.focus = focus; host.dispose(); }
 });

@@ -1,10 +1,12 @@
 import { App, FileView, FuzzySuggestModal, MarkdownView, Scope, TFile, WorkspaceLeaf } from 'obsidian';
 import { findParagraph, Paragraph, paragraphEdit, paragraphs, TextReference } from './mixed';
 import { uid } from './model';
+import { isImeComposing } from './ui';
 
 export interface SourceParagraph { path: string; blockId: string; text: string; source: string }
 export interface MixedHost {
   pick(): Promise<SourceParagraph | undefined>;
+  pickFromPath(path: string): Promise<SourceParagraph | undefined>;
   read(reference: TextReference): Promise<SourceParagraph>;
   edit(reference: TextReference): Promise<void>;
   commit(reference: TextReference, expected: SourceParagraph, text: string): Promise<SourceParagraph>;
@@ -27,7 +29,7 @@ export class MixedNotes implements MixedHost {
   bindDraftKeys(element: HTMLElement, submit: () => void) {
     const scope = new Scope(this.app.scope);
     for (const key of ['Enter', 'S']) scope.register(['Mod'], key, event => {
-      if (event.isComposing || !element.contains(element.ownerDocument.activeElement)) return;
+      if (isImeComposing(event) || !element.contains(element.ownerDocument.activeElement)) return;
       event.stopPropagation(); submit(); return false;
     });
     let active = false;
@@ -67,9 +69,16 @@ export class MixedNotes implements MixedHost {
   }
   async pick(): Promise<SourceParagraph | undefined> {
     const origin = this.origin(), view = origin.view, target = view instanceof FileView ? view.file : null;
-    const assertTarget = () => { if (origin.view !== view || !view.containerEl.isConnected || view instanceof FileView && view.file !== target) throw Error('目标笔记已关闭或切换，请重新插入段落。'); };
     const file = await this.choose('选择文字笔记（Markdown 文件）', this.app.vault.getMarkdownFiles().sort((a, b) => b.stat.mtime - a.stat.mtime), file => file.path);
     if (!file) return;
+    if (origin.view !== view || !view.containerEl.isConnected || view instanceof FileView && view.file !== target) throw Error('目标笔记已关闭或切换，请重新插入段落。');
+    return this.pickFromPath(file.path);
+  }
+  async pickFromPath(path: string): Promise<SourceParagraph | undefined> {
+    const origin = this.origin(), view = origin.view, target = view instanceof FileView ? view.file : null;
+    const assertTarget = () => { if (origin.view !== view || !view.containerEl.isConnected || view instanceof FileView && view.file !== target) throw Error('目标笔记已关闭或切换，请重新插入段落。'); };
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== 'md') throw Error('找不到文字笔记，请重新选择。');
     assertTarget();
     const original = await this.source(file), choices = paragraphs(original);
     if (!choices.length) throw Error('这份笔记没有可插入的普通段落或标题。列表、表格、代码和嵌入请在原笔记中编辑。');

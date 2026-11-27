@@ -44,3 +44,26 @@ export function folderNotes(entries: readonly NoteEntry[], folder: string, recur
   const prefix = folder === '/' ? '' : folder + '/';
   return entries.filter(entry => entry.path.startsWith(prefix) && (recursive || !entry.path.slice(prefix.length).includes('/')));
 }
+
+export interface InkSubpath { pageNumber?: number; pageId?: string; region?: string }
+export function formatInkSubpath(target: { pageNumber?: number; region?: string }): string {
+  const parts: string[] = [];
+  if (Number.isInteger(target.pageNumber) && target.pageNumber! >= 1) parts.push(`page=${target.pageNumber}`);
+  if (target.region) parts.push(`region=${encodeURIComponent(target.region)}`);
+  return parts.length ? '#' + parts.join('&') : '';
+}
+export function parseInkSubpath(subpath: string): InkSubpath {
+  const text = subpath.replace(/^#?\^?/, '');
+  const params = new URLSearchParams(text.includes('=') ? text : `page=${encodeURIComponent(text)}`);
+  const page = params.get('page'), region = params.get('region');
+  const result: InkSubpath = {};
+  if (page && /^\d+$/.test(page)) { if (Number.isSafeInteger(Number(page)) && Number(page) >= 1) result.pageNumber = Number(page); }
+  else if (page) result.pageId = page;
+  if (region) result.region = region;
+  return result;
+}
+export function parseEmbedSize(alt: string | null | undefined, fallbackMaxWidth?: number): { width?: number; height?: number } {
+  const match = /^\s*(\d{2,4})(?:x(\d{2,4}))?\s*$/i.exec(alt?.split('|').at(-1) ?? '');
+  const clamp = (value: string) => Math.max(80, Math.min(2400, Number(value)));
+  return match ? { width: clamp(match[1]), ...(match[2] ? { height: clamp(match[2]) } : {}) } : fallbackMaxWidth === undefined ? {} : { width: fallbackMaxWidth };
+}

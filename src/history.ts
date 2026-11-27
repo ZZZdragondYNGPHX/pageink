@@ -28,6 +28,23 @@ export class History {
     this.undoStack.push({ parts, beforeLayout, afterLayout }); this.redoStack = []; this.rev++; this.trim();
   }
   layout(beforeLayout: Layout, afterLayout: Layout) { this.undoStack.push({ parts: [], beforeLayout, afterLayout }); this.redoStack = []; this.rev++; this.trim(); }
+  remapElements(transform: (element: Element) => Element): void {
+    const remap = (elements: readonly Element[]) => {
+      let updated: Element[] | undefined;
+      for (let i = 0; i < elements.length; i++) {
+        const element = transform(elements[i]);
+        if (element !== elements[i]) { updated ??= elements.slice(); updated[i] = element; }
+      }
+      return updated ?? elements;
+    };
+    for (const step of [...this.undoStack, ...this.redoStack]) for (const part of step.parts) {
+      part.before = remap(part.before); part.after = remap(part.after);
+    }
+    for (const [surface, elements] of this.heads) {
+      const updated = remap(elements);
+      if (updated !== elements) this.heads.set(surface, updated);
+    }
+  }
   private trim() {
     if (this.undoStack.length > this.limit) this.undoStack.shift();
     const retained = new Set([...this.undoStack, ...this.redoStack].flatMap(step => step.parts.map(c => c.surface)));

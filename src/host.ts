@@ -21,6 +21,7 @@ export interface WorkspaceChromeState {
 
 /** Workspace operations exposed to host commands and menus. */
 export interface WorkspaceActions {
+  rebuildScenes?(): Promise<void>;
   exportPdf(): void;
   exportPackage(): void;
   openExport(): void;
@@ -39,6 +40,19 @@ export interface WorkspaceActions {
 
 /** Everything the workspace needs from Obsidian. Keeps UI code free of host APIs and testable. */
 export interface WorkspaceHost {
+  isPreview?: boolean;
+  openInPane?(destination?: 'tab' | 'split'): Promise<void>;
+  hoverLink?(event: MouseEvent, targetEl: HTMLElement, linktext: string): void;
+  backlinks?(): readonly BacklinkEntry[];
+  onBacklinksChange?(listener: () => void): () => void;
+  openBacklink?(entry: BacklinkEntry, newTab?: boolean): Promise<void>;
+  hasAdjacentMarkdown?(): boolean;
+  sendToMarkdown?(target: { page?: string; region?: string; embed?: boolean; createSplitIfMissing?: boolean }): Promise<string | undefined>;
+  buildDragLink?(target: { page?: string; pageNumber?: number; region?: string; title?: string; embed?: boolean }): string;
+  resolveDrop?(dataTransfer: DataTransfer): Promise<DroppedItem[]>;
+  pickFromMarkdown?(path: string): Promise<import('./mixed-host').SourceParagraph | undefined>;
+  pickFromInk?(path: string): Promise<import('./cards-host').InkCardSource | undefined>;
+  annotateVaultPdf?(path: string): Promise<void>;
   prefs: PreferenceStore;
   elements: ElementsLibraryStore;
   text: MixedHost;
@@ -66,3 +80,13 @@ export interface WorkspaceHost {
   /** Restores keyboard focus to Obsidian's native sidebar toggle button when present. */
   focusSidebarAction?(): void;
 }
+
+export interface BacklinkEntry {
+  sourcePath: string; sourceName: string; line?: number; page?: string; pageNumber?: number;
+  regionId?: string; regionTitle?: string; snippet?: string;
+}
+export type DroppedItem =
+  | { kind: 'image'; file: Blob; name: string }
+  | { kind: 'markdown'; path: string; text?: string }
+  | { kind: 'inknote'; path: string }
+  | { kind: 'pdf'; path: string };
