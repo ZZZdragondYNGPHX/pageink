@@ -24,6 +24,8 @@ All six notices are included in the embedded asset set and installation ZIP.
 
 PDF export uses the standalone browser bundle from `pdfkit@0.17.2` and `svg-to-pdfkit@0.1.8`. `scripts/pdf-browser.mjs` replaces three filesystem module lookups with errors for string-path reads. The patch validates exact occurrence counts during the build. Fonts and images are supplied as memory bytes; the worker receives embedded fonts through transferable messages.
 
+`scripts/pdf-browser.mjs` also replaces PDF.js's unused Node builtin module lookups with throwing stubs, requiring exactly three filesystem lookups and seven builtin lookups in total.
+
 The worker bundles `buffer@6.0.3` through `buffer/`. File imports use the host file picker; vault access uses `FileIO` and the Obsidian vault API.
 
 ## Distribution

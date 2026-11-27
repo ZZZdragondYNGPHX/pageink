@@ -151,7 +151,7 @@ The editing kernel is Excalidraw 0.18.1 (MIT). Input, history and rendering patc
 | cross-spawn | 7.0.6 | MIT | [cross-spawn-7.0.6-LICENSE](dist/licenses/cross-spawn-7.0.6-LICENSE) |
 | crypto-js | 4.2.0 | MIT | [crypto-js-4.2.0-LICENSE](dist/licenses/crypto-js-4.2.0-LICENSE) |
 | csstype | 3.2.3 | MIT | [csstype-3.2.3-LICENSE](dist/licenses/csstype-3.2.3-LICENSE) |
-| cytoscape | 3.34.4 | MIT | [cytoscape-3.34.4-LICENSE](dist/licenses/cytoscape-3.34.4-LICENSE), [cytoscape-3.34.4-license-update.mjs](dist/licenses/cytoscape-3.34.4-license-update.mjs) |
+| cytoscape | 3.34.4 | MIT | [cytoscape-3.34.4-LICENSE](dist/licenses/cytoscape-3.34.4-LICENSE) |
 | cytoscape-cose-bilkent | 4.1.0 | MIT | [cytoscape-cose-bilkent-4.1.0-LICENSE](dist/licenses/cytoscape-cose-bilkent-4.1.0-LICENSE) |
 | cytoscape-fcose | 2.2.0 | MIT | [cytoscape-fcose-2.2.0-LICENSE](dist/licenses/cytoscape-fcose-2.2.0-LICENSE) |
 | cose-base | 2.2.0 | MIT | [cose-base-2.2.0-LICENSE](dist/licenses/cose-base-2.2.0-LICENSE) |

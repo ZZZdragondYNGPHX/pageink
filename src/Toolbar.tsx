@@ -93,7 +93,7 @@ export function ToolShelf({ tool, onTool, prefs, store, onRevealAllTapes }: {
     : tool === 'capture' ? (prefs.capture.shape === 'rect' ? '矩形' : '自由')
     : tool === 'text' ? `${prefs.text.size}` : tool === 'pen' ? `${prefs.pen.width}` : tool === 'highlighter' ? `${prefs.highlighter.width}` : `${prefs.shape.width}`;
   const showTriggerLabel = tool === 'eraser' || tool === 'capture';
-  return <div className="ink-tool-shelf">
+  return <>
     <ToolButtons tool={tool} onTool={(next, anchor) => {
       if (tool === next && configurable) pop.toggle('options', anchor);
       else { pop.close(); onTool(next); }
@@ -131,7 +131,7 @@ export function ToolShelf({ tool, onTool, prefs, store, onRevealAllTapes }: {
       <div className="ink-popover-title">{definition.label}</div>
       <div className="ink-options" role="group" aria-label="工具选项"><ToolOptions tool={tool} prefs={prefs} store={store} onRevealAllTapes={onRevealAllTapes}/></div>
     </Popover>}
-  </div>;
+  </>;
 }
 
 function Widths({ values, value, color, onChange, scale = 1, label }: { values: readonly number[]; value: number; color: string; onChange: (width: number) => void; scale?: number; label: string }) {

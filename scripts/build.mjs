@@ -30,6 +30,6 @@ for (const dir of ['cmaps', 'standard_fonts', 'wasm']) await cp(`node_modules/pd
 await cp('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'dist/assets/pdf.worker.min.mjs');
 await import('./licenses.mjs');
 const embedded = await embeddedAssets();
-await esbuild.build({ ...common, plugins: [embedded.plugin, kernelPatch], entryPoints: ['src/main.tsx'], outfile: 'dist/main.js', format: 'cjs', external: ['obsidian', 'electron'], minify: true, sourcemap: 'external' });
+await esbuild.build({ ...common, plugins: [embedded.plugin, pdfBrowserOnly, kernelPatch], entryPoints: ['src/main.tsx'], outfile: 'dist/main.js', format: 'cjs', external: ['obsidian', 'electron'], minify: true, sourcemap: 'external' });
 await writeFile('dist/main.js', await readFile('dist/main.js', 'utf8') + await licenseBanner());
 await writeFile('dist/embedded-assets.json', JSON.stringify(embedded.hashes, null, 2));

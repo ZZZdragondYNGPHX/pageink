@@ -129,7 +129,7 @@ export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoA
       if (!el) return;
       const dx = (next.x - latestBox.current.x) * zoomRef.current;
       const dy = (next.y - latestBox.current.y) * zoomRef.current;
-      el.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+      el.setCssStyles({ transform: `translate3d(${dx}px, ${dy}px, 0)` });
     };
     syncRef.current = sync;
     return () => { if (syncRef.current === sync) syncRef.current = null; };
@@ -145,7 +145,7 @@ export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoA
       };
     }
     if (liveRef) liveRef.current = box;
-    if (boxRef.current) boxRef.current.style.transform = '';
+    boxRef.current?.setCssStyles({ transform: '' });
   }, [box, liveRef]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -167,14 +167,14 @@ export function ZoomBoxOverlay({ views, box, liveRef, syncRef, onLiveMove, autoA
     d.next = { ...d.origin, x: d.origin.x + dx / z, y: d.origin.y + dy / z };
     if (liveRef) liveRef.current = d.next;
     onLiveMove?.();
-    if (boxRef.current) boxRef.current.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+    boxRef.current?.setCssStyles({ transform: `translate3d(${dx}px, ${dy}px, 0)` });
   };
   const endDrag = (event: React.PointerEvent<HTMLDivElement>, cancelled: boolean) => {
     const d = drag.current;
     if (!d || d.id !== event.pointerId) return;
     event.stopPropagation();
     drag.current = null;
-    if (boxRef.current) boxRef.current.style.transform = '';
+    boxRef.current?.setCssStyles({ transform: '' });
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     if (cancelled) {
       if (liveRef) liveRef.current = d.origin;

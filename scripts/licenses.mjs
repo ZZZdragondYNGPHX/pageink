@@ -6,7 +6,7 @@ const rows=[],missing=[];
 for(const [path,entry] of Object.entries(lock.packages)){
   if(!path || entry.dev) continue;
   let pkg; try{pkg=JSON.parse(await readFile(`${path}/package.json`,'utf8'));}catch{continue;}
-  const files=(await readdir(path)).filter(name=>/^(licen[sc]e|copying|notice)(\.|$|-)/i.test(name));
+  const files=(await readdir(path)).filter(name=>/^(licen[sc]e|copying|notice)(\.|$|-)/i.test(name) && !/\.(?:[cm]?[jt]sx?|sh|py)$/i.test(name));
   const key=`${pkg.name.replaceAll('/','_').replaceAll('@','')}-${pkg.version}`;
   const copies=[];
   for(const file of files){try{const data=await readFile(`${path}/${file}`); const out=`${key}-${file}`;await writeFile(`dist/licenses/${out}`,data);copies.push(out);}catch{}}

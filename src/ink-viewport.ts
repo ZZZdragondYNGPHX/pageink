@@ -64,7 +64,7 @@ export function discardInkViewport(canvas: HTMLCanvasElement) {
 
 function holdInkViewport(canvas: HTMLCanvasElement, view: InkRasterView) {
   if (!canvas.ownerDocument || !canvas.parentElement || snapshots.has(canvas)) return;
-  const snapshot = canvas.ownerDocument.createElement('canvas');
+  const snapshot = createEl('canvas');
   snapshot.width = canvas.width; snapshot.height = canvas.height;
   snapshot.getContext('2d')!.drawImage(canvas, 0, 0);
   snapshot.className = 'excalidraw__canvas ink-viewport-snapshot';
